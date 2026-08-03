@@ -58,10 +58,9 @@ function applyCamStatus(s){
 
 function renderCam(){
   const c = state.cam;
-  // REC value (tile) + rail button
-  const lbl = $('cam-rec-label'), btn = $('cam-rec');
-  if(lbl){ lbl.textContent = c.recording ? 'REC' : 'IDLE'; lbl.className = 'm-val' + (c.recording ? ' rec' : ''); }
-  if(btn){ btn.classList.toggle('recording', c.recording); const t=btn.querySelector('.cam-rec-txt'); if(t) t.textContent = c.recording ? 'STOP' : 'REC'; }
+  // Recording state lives in the REC button now (ON/OFF + red pulse), not the top bar.
+  const btn = $('cam-rec');
+  if(btn){ btn.classList.toggle('recording', c.recording); const t=btn.querySelector('.cam-rec-txt'); if(t) t.textContent = c.recording ? 'ON' : 'OFF'; }
   // camera battery
   const b = $('cam-battery'); if(b) b.textContent = (c.battery!=null ? c.battery+'%' : '--');
   // SD (color-coded, keep the tile value class)
