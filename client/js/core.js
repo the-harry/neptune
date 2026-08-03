@@ -60,7 +60,8 @@ const state = {
   pc:null, sigWs:null, videoRetryTimer:null,   // WebRTC peer + go2rtc signaling socket
   // ---- WOLFANG camera control plane ----
   cam:{ battery:null, recording:false, recordRaw:'', mode:'', sd:'', warning:'',
-        remaining:null, isStreaming:'', degraded:false, menu:[] },
+        remaining:null, isStreaming:'', degraded:false, menu:[],
+        videoRes:'', awb:'', imageRes:'', ev:'' },   // live camera settings
   camWs:null, surfaced:false,   // surfaced = config/file ops unlocked (§7.4 gate)
   source:'keyboard', /* keyboard | gamepad */
   gamepadIndex:null,

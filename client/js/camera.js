@@ -48,23 +48,30 @@ function applyCamStatus(s){
   if('warning' in s) c.warning = s.warning || '';
   if('remaining' in s) c.remaining = s.remaining;
   if('is_streaming' in s) c.isStreaming = s.is_streaming || '';
+  if('video_res' in s) c.videoRes = s.video_res || '';
+  if('awb' in s) c.awb = s.awb || '';
+  if('image_res' in s) c.imageRes = s.image_res || '';
+  if('ev' in s) c.ev = s.ev || '';
   if('degraded' in s) c.degraded = !!s.degraded;
   renderCam();
 }
 
 function renderCam(){
   const c = state.cam;
-  // REC pill
-  const dot = $('cam-rec-dot'), lbl = $('cam-rec-label'), btn = $('cam-rec');
-  if(dot && lbl){
-    if(c.recording){ dot.className='hud-dot dot-bad'; dot.style.animation='pulse 1s infinite'; lbl.textContent='REC'; lbl.className='txt-bad'; }
-    else { dot.className='hud-dot'; dot.style.animation=''; lbl.textContent='IDLE'; lbl.className=''; }
-  }
-  if(btn){ btn.classList.toggle('recording', c.recording); btn.querySelector('.cam-rec-txt').textContent = c.recording ? 'STOP' : 'REC'; }
-  // battery
+  // REC value (tile) + rail button
+  const lbl = $('cam-rec-label'), btn = $('cam-rec');
+  if(lbl){ lbl.textContent = c.recording ? 'REC' : 'IDLE'; lbl.className = 'm-val' + (c.recording ? ' rec' : ''); }
+  if(btn){ btn.classList.toggle('recording', c.recording); const t=btn.querySelector('.cam-rec-txt'); if(t) t.textContent = c.recording ? 'STOP' : 'REC'; }
+  // camera battery
   const b = $('cam-battery'); if(b) b.textContent = (c.battery!=null ? c.battery+'%' : '--');
-  // SD
-  const sd = $('cam-sd'); if(sd){ sd.textContent = 'SD:' + (c.sd||'--'); sd.className = 'font-telemetry-sm text-telemetry-sm ' + (c.sd==='READY'?'text-tertiary':'text-error'); }
+  // SD (color-coded, keep the tile value class)
+  const sd = $('cam-sd'); if(sd){ sd.textContent = c.sd || '--'; sd.style.color = c.sd==='READY' ? 'var(--tertiary)' : (c.sd ? 'var(--error)' : ''); }
+  // live camera settings (mode-dependent: still res in CAMERA, video res otherwise)
+  const q = $('cam-quality'); if(q) q.textContent = (c.mode==='CAMERA' ? c.imageRes : c.videoRes) || '--';
+  const wb = $('cam-awb'); if(wb) wb.textContent = c.awb || '--';
+  const ev = $('cam-ev'); if(ev) ev.textContent = c.ev || '--';
+  const rem = $('cam-remaining'); if(rem) rem.textContent = (c.remaining!=null ? c.remaining : '--');
+  const md = $('cam-mode'); if(md) md.textContent = c.mode || '--';
   // WARNING banner — the primary fault channel (§4.4)
   const warn = $('cam-warning');
   if(warn){

@@ -28,6 +28,10 @@ class Status(BaseModel):
     warning: str = ""                      # Camera.Preview.MJPEG.WarningMSG — primary fault channel
     remaining: Optional[int] = None        # Camera.Capture.Remaining
     is_streaming: str = ""                 # Camera.Menu.IsStreaming
+    video_res: str = ""                    # Camera.Menu.VideoRes  (quality)
+    awb: str = ""                          # Camera.Menu.AWB       (white balance / "light mode")
+    image_res: str = ""                    # Camera.Menu.ImageRes  (still quality)
+    ev: str = ""                           # Camera.Menu.EV        (exposure)
     degraded: bool = False                 # circuit breaker open
 
 

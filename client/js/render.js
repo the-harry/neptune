@@ -77,40 +77,19 @@ function renderLightButton(which, on, level){
   }
   gauge.style.height = Math.round(level*100)+'%';
 }
-function renderArmed(armed){
-  const pill=$('armed-pill'), dot=$('armed-dot'), label=$('armed-label');
-  if(armed){
-    pill.style.backgroundColor='color-mix(in srgb,var(--tertiary) 20%,transparent)';
-    pill.style.borderColor='color-mix(in srgb,var(--tertiary) 50%,transparent)';
-    dot.style.backgroundColor='var(--tertiary)'; dot.style.boxShadow='0 0 8px #4dffa6';
-    dot.style.animation=''; label.textContent='ARMED'; label.style.color='var(--tertiary)';
-  } else {
-    pill.style.backgroundColor='color-mix(in srgb,var(--secondary) 18%,transparent)';
-    pill.style.borderColor='color-mix(in srgb,var(--secondary) 50%,transparent)';
-    dot.style.backgroundColor='var(--secondary)'; dot.style.boxShadow='0 0 8px var(--secondary)';
-    dot.style.animation='none'; label.textContent='DISARMED'; label.style.color='var(--secondary)';
-  }
-}
-function renderMagnet(on){
-  // Magnet has no rail button — reflected in the top-bar chip.
-  // Toggle it via gamepad/keyboard (A / M) or remap it in CONFIG.
-  const dot=document.querySelector('#chip-magnet .hud-dot'), txt=$('chip-magnet-text');
-  if(!dot||!txt) return;
-  dot.className='hud-dot '+(on?'dot-ok':'');
-  txt.textContent='MAGNET: '+(on?'ON':'OFF');
-  txt.className=on?'txt-ok':'';
-}
+// Armed/magnet no longer have HUD elements (kept as no-ops so callers stay simple;
+// arm/disarm + magnet still work as gamepad/key actions and gate the thrusters).
+function renderArmed(armed){ /* no armed indicator by request */ }
+function renderMagnet(on){ /* no magnet indicator by request */ }
+
+// LEAK: icon-only — green water-drop (normal) / red crossed drop (leak) + edge pulse.
+const DROP_OK   = '<svg viewBox="0 0 24 24"><path fill="var(--tertiary)" d="M12 3s6 6.5 6 10a6 6 0 0 1-12 0c0-3.5 6-10 6-10z"/></svg>';
+const DROP_LEAK = '<svg viewBox="0 0 24 24"><path fill="var(--error)" d="M12 3s6 6.5 6 10a6 6 0 0 1-12 0c0-3.5 6-10 6-10z"/><path stroke="var(--error)" stroke-width="2.4" stroke-linecap="round" d="M4 4l16 16"/><path stroke="#0c0118" stroke-width="1.1" stroke-linecap="round" d="M4 4l16 16"/></svg>';
 function renderLeak(leak){
-  const chip=$('leak-chip'), txt=$('leak-text'), pulse=$('leak-pulse');
-  if(leak){
-    chip.style.opacity='1'; chip.style.color='var(--error)';
-    txt.textContent='Leak Detected'; txt.style.color='var(--error)';
-    pulse.classList.add('on');
-  } else {
-    chip.style.opacity='0.5'; chip.style.color='';
-    txt.textContent='Leak Normal'; txt.style.color='';
-    pulse.classList.remove('on');
-  }
+  const icon=$('leak-icon'), pulse=$('leak-pulse');
+  if(icon) icon.innerHTML = leak ? DROP_LEAK : DROP_OK;
+  if(icon) icon.style.filter = leak ? 'drop-shadow(0 0 6px var(--error))' : '';
+  if(pulse) pulse.classList.toggle('on', !!leak);
 }
 
 let _prev={};
@@ -149,13 +128,11 @@ function renderUI(v){
 
 /* ---- Status chips (top-bar VIDEO indicator) ---- */
 function setChip(id, cls, text){
-  const chip=$(id), dot=chip.querySelector('.hud-dot'), t=$(id+'-text');
-  dot.className='hud-dot '+cls;
+  const chip=$(id); if(!chip) return;
+  const dot=chip.querySelector('.hud-dot'), t=$(id+'-text');
+  if(dot) dot.className='hud-dot '+cls;
   if(t) t.textContent=text;
 }
-function updateBadges(){
-  // VIDEO — small dot + label in the top bar, beside the latency marker.
-  if(state.video==='live') setChip('chip-video','dot-ok','VIDEO');
-  else if(state.video==='nofeed') setChip('chip-video','dot-bad','NO FEED');
-  else setChip('chip-video','dot-warn','VIDEO');
-}
+// Video status is conveyed by the feed's own NO-FEED / RECONFIGURING overlay
+// (the top-bar VIDEO chip was redundant and removed).
+function updateBadges(){ /* no-op */ }

@@ -113,6 +113,10 @@ class CameraService:
             warning=preview.get("Camera.Preview.MJPEG.WarningMSG", ""),
             remaining=_to_int(rem.get("Camera.Capture.Remaining")),
             is_streaming=self.menu_cache.get("Camera.Menu.IsStreaming", ""),
+            video_res=self.menu_cache.get("Camera.Menu.VideoRes", ""),
+            awb=self.menu_cache.get("Camera.Menu.AWB", ""),
+            image_res=self.menu_cache.get("Camera.Menu.ImageRes", ""),
+            ev=self.menu_cache.get("Camera.Menu.EV", ""),
             degraded=False,
         )
 
