@@ -104,7 +104,7 @@ function renderUI(v){
   if(v.ramPct!=null) setText($('ram-pct'), Math.round(v.ramPct)+'%', stale);
   if(v.diskGb!=null) setText($('disk-gb'), v.diskGb.toFixed(1)+' GB', stale);
   setText($('ballast-pct'), Math.round((v.ballastLevel||0)*100)+'%', stale);
-  setText($('heading-val'), Math.round(v.heading||0)+'° '+headingCardinal(v.heading||0), stale);
+  setText($('heading-val'), Math.round(v.heading||0)+'°', stale);   // compass bearing (degrees)
   // Gauges / bars keep last position; only dim on stale.
   const dim = stale ? '0.45' : '1';
   $('ballast-fill').style.height = Math.round((v.ballastLevel||0)*100)+'%';
@@ -115,8 +115,15 @@ function renderUI(v){
   const mark=$('ballast-target-mark');
   mark.style.top = (tgt*100)+'%';
   mark.style.opacity = (Math.abs(tgt-(v.ballastLevel||0))<0.02) ? '0' : '1';
-  setThrust($('thrust-left'),  stale?0:(v.left||0));
-  setThrust($('thrust-right'), stale?0:(v.right||0));
+  // SONAR: plot the movement input as a vector (steer = x, throttle = y-up).
+  // Scale 62 keeps full diagonal (~88) inside the outer ring (92).
+  const R=62, sx=(state.input.steer||0)*R, sy=-(state.input.throttle||0)*R;
+  const vec=$('sonar-vec'), dot=$('sonar-dot');
+  if(vec){ vec.setAttribute('x2', sx.toFixed(1)); vec.setAttribute('y2', sy.toFixed(1)); }
+  if(dot){ dot.setAttribute('cx', sx.toFixed(1)); dot.setAttribute('cy', sy.toFixed(1)); }
+  const sthr=$('sonar-thr'), sstr=$('sonar-str');
+  if(sthr) sthr.textContent = Math.round((state.input.throttle||0)*100)+'%';
+  if(sstr) sstr.textContent = Math.round((state.input.steer||0)*100)+'%';
   // Lamps / toggles (only re-render on change to keep innerHTML swaps cheap)
   if(_prev.green!==v.green || _prev.greenLevel!==Math.round(v.greenLevel*100)){ renderLightButton('green', v.green, v.greenLevel); }
   if(_prev.white!==v.white || _prev.whiteLevel!==Math.round(v.whiteLevel*100)){ renderLightButton('white', v.white, v.whiteLevel); }

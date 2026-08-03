@@ -1,0 +1,14 @@
+{
+  "name": "Neptune",
+  "short_name": "Neptune",
+  "description": "NEPTUNE ROV control",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "start_url": "./",
+  "scope": "./",
+  "background_color": "#0c0118",
+  "theme_color": "#0c0118",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

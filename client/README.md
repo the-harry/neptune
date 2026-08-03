@@ -46,6 +46,21 @@ Open **`js/config.js`**. Everything is grouped and commented — networking,
 input, on-screen controls, and the simulation model. Values are read live, so
 just edit and reload. Nothing else hard-codes these numbers.
 
+## App / fullscreen (feels like an app, no URL bar)
+
+- The page **goes fullscreen on your first tap/key** (browsers block auto-fullscreen
+  on load). `Esc` exits. It also ships a **web app manifest** (`display:fullscreen`),
+  so when served over http you can **Install** it (Chrome ⋮ → *Install Neptune*) and
+  launch it chromeless from the app list.
+- For a **truly URL-less kiosk boot** on the ROG Ally, launch Chrome/Edge in app mode:
+  ```
+  chrome --kiosk --app="http://<pi>/?host=<pi>:8000"
+  #   or from disk:
+  chrome --kiosk --app="file:///path/to/client/index.html?host=<pi>:8000"
+  ```
+  (`--app` = no tabs/URL bar; `--kiosk` = fullscreen locked. Add `--start-fullscreen`
+  if you prefer a normal window that starts maximized.)
+
 ## Serving from FastAPI (the Pi)
 
 The backend in [`../api`](../api) already serves this folder (it mounts

@@ -34,9 +34,25 @@ function frame(ts){
   requestAnimationFrame(frame);
 }
 
+/* Go fullscreen on the FIRST user gesture (browsers block auto-fullscreen on
+   load). After that first tap/key/touch the URL bar is hidden and it feels like
+   an app. For a truly URL-less boot, launch Chrome in kiosk/app mode (see README). */
+function enableAppFullscreen(){
+  let done=false;
+  const go=()=>{
+    if(done) return; done=true;
+    const el=document.documentElement;
+    const req=el.requestFullscreen||el.webkitRequestFullscreen;
+    if(req){ try{ req.call(el,{navigationUI:'hide'}); }catch(e){ try{ req.call(el); }catch(_){} } }
+    ['pointerdown','keydown','touchstart'].forEach(ev=>window.removeEventListener(ev,go));
+  };
+  ['pointerdown','keydown','touchstart'].forEach(ev=>window.addEventListener(ev,go,{passive:true}));
+}
+
 /* ---- BOOTSTRAP ---- */
 function boot(){
   resolveHost();
+  enableAppFullscreen();
   LOG.state('boot — host="'+ (state.host||'(none, disk mode)') +'"  http="'+(state.httpBase||'(relative)')+'"  ws="'+(state.wsBase||'(none)')+'"');
   loadBindings();
   // Initial light lamp render (icons + glow)

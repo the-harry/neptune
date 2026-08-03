@@ -1,7 +1,16 @@
 <!DOCTYPE html><html class="dark" lang="en"><head>
 <meta charset="utf-8">
-<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
-<title>NEPTUNE COMMAND</title>
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport">
+<title>Neptune</title>
+<!-- app-like: installable PWA (fullscreen, no URL bar) + status-bar theming -->
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="theme-color" content="#0c0118">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Neptune">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body class="bg-surface-dim text-on-surface font-body-standard overflow-hidden select-none">
@@ -26,7 +35,7 @@
 <span id="leak-icon" title="Leak sensor"></span>
 <div class="metric"><span class="m-label">Pressure</span><span id="pressure-val" class="m-val glow-cyan">14.7 PSI</span></div>
 <div class="metric"><span class="m-label">Ballast</span><span id="ballast-pct" class="m-val">40%</span></div>
-<div class="metric"><span class="m-label">Heading</span><span id="heading-val" class="m-val">284&deg; NW</span></div>
+<div class="metric"><span class="m-label">HDG</span><span id="heading-val" class="m-val">284&deg;</span></div>
 <div class="m-sep"></div>
 <div class="metric"><span class="m-label">Rec</span><span id="cam-rec-label" class="m-val">IDLE</span></div>
 <div class="metric"><span class="m-label">Cam Batt</span><span id="cam-battery" class="m-val">--</span></div>
@@ -102,21 +111,25 @@
 </button>
 </aside>
 
-<!-- BOTTOM LEFT — minimal L/R thruster indicators only (keeps the feed clear) -->
-<div class="fixed bottom-edge-margin left-edge-margin z-40 flex flex-col gap-2">
-<div class="flex items-center gap-2">
-<span class="font-label-caps text-[10px] text-on-surface-variant" style="width:14px">L</span>
-<div class="h-1.5 bg-surface-variant/40 rounded-full relative overflow-hidden" style="width:120px">
-<div class="absolute inset-y-0 left-1/2" style="width:1px;background:rgba(255,255,255,.25)"></div>
-<div id="thrust-left" class="absolute inset-y-0 left-1/2 bg-primary" style="width:0%"></div>
+<!-- BOTTOM LEFT — SONAR: movement input as an X/Y vector (throttle=fwd/rev, steer=turn),
+     N64-stick-tester style: crosshair, sweep, and a live dot+line for direction+magnitude. -->
+<div class="fixed bottom-edge-margin left-edge-margin z-40 flex items-end gap-3">
+<div class="sonar">
+<svg viewBox="-100 -100 200 200">
+<circle class="sonar-ring" r="92"></circle>
+<circle class="sonar-ring2" r="46"></circle>
+<line class="sonar-cross" x1="-92" y1="0" x2="92" y2="0"></line>
+<line class="sonar-cross" x1="0" y1="-92" x2="0" y2="92"></line>
+<line id="sonar-vec" class="sonar-vec" x1="0" y1="0" x2="0" y2="0"></line>
+<circle id="sonar-dot" class="sonar-dot" cx="0" cy="0" r="7"></circle>
+<circle class="sonar-center" r="2.5"></circle>
+<text class="sonar-tick" x="0" y="-77" text-anchor="middle">FWD</text>
+<text class="sonar-tick" x="0" y="85" text-anchor="middle">REV</text>
+</svg>
 </div>
-</div>
-<div class="flex items-center gap-2">
-<span class="font-label-caps text-[10px] text-on-surface-variant" style="width:14px">R</span>
-<div class="h-1.5 bg-surface-variant/40 rounded-full relative overflow-hidden" style="width:120px">
-<div class="absolute inset-y-0 left-1/2" style="width:1px;background:rgba(255,255,255,.25)"></div>
-<div id="thrust-right" class="absolute inset-y-0 left-1/2 bg-primary" style="width:0%"></div>
-</div>
+<div class="sonar-readout">
+<div class="metric" style="align-items:flex-start"><span class="m-label">Throttle</span><span id="sonar-thr" class="m-val">0%</span></div>
+<div class="metric" style="align-items:flex-start"><span class="m-label">Steer</span><span id="sonar-str" class="m-val">0%</span></div>
 </div>
 </div>
 
