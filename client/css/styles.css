@@ -28,6 +28,8 @@
   --on-secondary:#4a0038; --surface-container-high:#241338; --tertiary-fixed:#8fffc4;
   --surface-container:#1a0a30; --outline-variant:#453860;
   --water:#5ec8ff; --water-edge:#9adcff;   /* ballast = water (light blue) */
+  --hazard:#ff8c1a;                        /* emergency SURFACE = orange (danger) */
+  --photo:#1f9dff;                         /* PIC / capture = neon electric blue */
   /* Font substitutes (system stacks — named families first if ever installed) */
   --font-sans:'Plus Jakarta Sans',ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
   --font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;
@@ -312,6 +314,16 @@ img{display:block}
 .cfg-file-meta{flex:1;min-width:0}
 .cfg-file-name{font-family:var(--font-mono);font-size:11px;color:var(--on-surface);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cfg-file-sub{font-family:var(--font-sans);font-size:10px;color:var(--on-surface-variant)}
+
+/* ---- PIC (capture) button: neon electric blue ---- */
+.btn-photo{border-color:var(--photo);color:var(--photo);
+  background:color-mix(in srgb,var(--photo) 12%,transparent);box-shadow:0 0 12px rgba(31,157,255,.3)}
+
+/* ---- EMERGENCY SURFACE button: orange + hazard stripes (danger) ---- */
+.btn-hazard{border-color:var(--hazard);color:var(--hazard);
+  background:repeating-linear-gradient(45deg,color-mix(in srgb,var(--hazard) 16%,transparent) 0 7px,transparent 7px 14px),
+            color-mix(in srgb,var(--hazard) 7%,transparent);
+  box-shadow:0 0 14px rgba(255,140,26,.28)}
 
 /* ---- SONAR movement indicator (bottom-left) ---- */
 .sonar{width:118px;height:118px;flex:0 0 auto}

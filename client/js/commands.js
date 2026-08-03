@@ -19,7 +19,7 @@ function eStop(){
 }
 function surface(){
   cmd('surface');
-  state.ballastTargetCmd=0;                       // command tanks empty (and keep them empty after)
+  state.ballastTargetRaw=0; state.ballastTargetCmd=0;   // command tanks empty (and keep them empty after)
   state.surfaceUntil=Date.now()+CONFIG.sim.surfaceDrainMs;  // sim: force-drain regardless of chase deadband
   vibrate(20);
 }

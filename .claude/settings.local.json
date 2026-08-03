@@ -13,7 +13,9 @@
       "Bash(timeout 120 /private/tmp/claude-501/-Users-anjanapathmanabhan-workspace-sub/46328b40-f294-4d80-8cbf-49a546685f10/scratchpad/venv/bin/python /private/tmp/claude-501/-Users-anjanapathmanabhan-workspace-sub/46328b40-f294-4d80-8cbf-49a546685f10/scratchpad/test_combined.py)",
       "Bash(python3 -m py_compile api/*.py api/camera/*.py)",
       "Bash(python3 -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['camera/service.py','camera/cgi.py','camera/mock.py','main.py']]; print\\('  parse OK'\\)\")",
-      "Bash(bash -n install.sh)"
+      "Bash(bash -n install.sh)",
+      "Bash(cat js/config.js js/core.js js/video.js js/net.js js/commands.js js/input.js js/controls.js js/render.js js/camera.js js/main.js)",
+      "Bash(node --check /tmp/fe.js)"
     ]
   }
 }

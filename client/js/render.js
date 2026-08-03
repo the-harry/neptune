@@ -109,12 +109,12 @@ function renderUI(v){
   const dim = stale ? '0.45' : '1';
   $('ballast-fill').style.height = Math.round((v.ballastLevel||0)*100)+'%';
   $('ballast-fill').style.opacity = dim;
-  // Commanded-target marker (where the arrows/drag set it); inverted fill grows
-  // from the top, so the marker sits at top = target%. Hidden when it matches actual.
-  const tgt=clamp(state.ballastTargetCmd,0,1);
+  // Target marker = where the operator SET it (the goal). The fill (actual level)
+  // chases it smoothly via the slewed command. Inverted fill grows from the top.
+  const tgt=clamp(state.ballastTargetRaw,0,1);
   const mark=$('ballast-target-mark');
   mark.style.top = (tgt*100)+'%';
-  mark.style.opacity = (Math.abs(tgt-(v.ballastLevel||0))<0.02) ? '0' : '1';
+  mark.style.opacity = (Math.abs(tgt-(v.ballastLevel||0))<0.01) ? '0' : '1';
   // SONAR: plot the movement input as a vector (steer = x, throttle = y-up).
   // Scale 62 keeps full diagonal (~88) inside the outer ring (92).
   const R=62, sx=(state.input.steer||0)*R, sy=-(state.input.throttle||0)*R;

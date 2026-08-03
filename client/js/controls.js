@@ -85,7 +85,7 @@ function bindOnScreen(){
   // Ballast: INVERTED (water syringe) — top=surface(0), drag DOWN = more water. The
   // "dive" arrow (btn-ballast-fill) increases; "surface" (btn-ballast-empty) decreases.
   bindVerticalControl({ track:$('ballast-track'), axis:'y-inv', upBtn:$('btn-ballast-fill'), downBtn:$('btn-ballast-empty'),
-    get:()=>state.ballastTargetCmd, set:v=>{ state.ballastTargetCmd=clamp(v,0,1); }, step:CONFIG.ballastStep, rampPerS:CONFIG.ballastRampPerS });
+    get:()=>state.ballastTargetRaw, set:v=>{ state.ballastTargetRaw=clamp(v,0,1); }, step:CONFIG.ballastStep, rampPerS:CONFIG.ballastRampPerS });
   bindSurfaceHold();       // top-bar SURFACE emergency (hold to fire)
   $('btn-config').addEventListener('click', openMapper);   // CONFIG (rail) opens the config / input-map menu
 }

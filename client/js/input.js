@@ -123,14 +123,23 @@ function computeInput(dt){
   }
 
   // --- ballast ---
-  // Gamepad/key triggers = momentary direct fill/empty (they also drag the
-  // commanded target along so it "holds" wherever you release). Otherwise the
-  // send-loop chases state.ballastTargetCmd (set by the arrows/drag) by emitting
-  // fill/empty/hold — same API command, just automated toward a level.
+  // Slew the COMMANDED target toward what the operator set (raw), capped at
+  // CONFIG.ballastSlewPerS. This is the key hardware-safety step: a fast drag or a
+  // big jump is applied gradually so the syringe stepper can keep up, and the
+  // fill/empty commands the send-loop emits stay smooth.
+  {
+    const d = clamp(state.ballastTargetRaw - state.ballastTargetCmd,
+                    -CONFIG.ballastSlewPerS*dt, CONFIG.ballastSlewPerS*dt);
+    state.ballastTargetCmd = clamp(state.ballastTargetCmd + d, 0, 1);
+  }
+
+  // Gamepad/key triggers = momentary direct fill/empty (they pin both raw + cmd to
+  // the current level so it holds wherever you release). Otherwise the send-loop
+  // chases the slewed ballastTargetCmd by emitting fill/empty/hold.
   let ballast='hold';
   const cur=state.ballastLevel;
-  if(actionHeld('ballast_fill')){ ballast='fill'; state.ballastTargetCmd=cur; }
-  else if(actionHeld('ballast_empty')){ ballast='empty'; state.ballastTargetCmd=cur; }
+  if(actionHeld('ballast_fill')){ ballast='fill'; state.ballastTargetRaw=state.ballastTargetCmd=cur; }
+  else if(actionHeld('ballast_empty')){ ballast='empty'; state.ballastTargetRaw=state.ballastTargetCmd=cur; }
   else {
     const db=CONFIG.ballastDeadband;
     if(cur < state.ballastTargetCmd-db) ballast='fill';

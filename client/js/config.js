@@ -43,11 +43,13 @@ const CONFIG = {
   ledStep:          0.10,      // brightness change per arrow TAP (0..1)
   ledRampPerS:      0.80,      // brightness change per second while an arrow is HELD
   lightLevelRateS:  0.70,      // brightness change per second from D-pad / [ ] keys
-  lightOnDefault:   0.80,      // level a light jumps to when toggled on from ~zero
+  lightOnDefault:   0.33,      // level a light jumps to when toggled on from ~zero (33%)
   lightOnThreshold: 0.02,      // level at/below which a light counts as "off"
-  ballastStep:      0.10,      // ballast target change per arrow TAP (0..1)
-  ballastRampPerS:  0.60,      // ballast target change per second while an arrow is HELD
-  ballastDeadband:  0.02,      // chase tolerance: |target-actual| under this → send "hold"
+  ballastStep:      0.01,      // ballast change per arrow TAP = 1% (fine, hardware-safe)
+  ballastRampPerS:  0.12,      // ballast change per second while an arrow is HELD (slow for the stepper)
+  ballastSlewPerS:  0.10,      // MAX rate the *commanded* target moves toward what you set,
+                               //   so drags/jumps are applied smoothly (the stepper can't teleport)
+  ballastDeadband:  0.01,      // chase tolerance: |target-actual| under this → send "hold"
   arrowHoldDelayMs: 250,       // press longer than this on an arrow → ramp instead of single step
   surfaceHoldMs:    900,       // press-and-hold duration to fire the SURFACE emergency
 
@@ -58,7 +60,7 @@ const CONFIG = {
     maxDepthM:      9.0,       // depth at 100% ballast fill
     basePressurePsi:14.7,      // surface pressure (≈1 atm); depth adds to this
     psiPerMeter:    1.42,      // pressure gain per metre of depth
-    ballastRatePerS:0.25,      // how fast the sim tank fills/empties (fraction/sec)
+    ballastRatePerS:0.12,      // how fast the sim tank fills/empties (fraction/sec) — slow, like a syringe stepper
     headingRatePerS:40,        // heading change per unit of steer input (deg/sec)
     surfaceDrainMs: 4000,      // after SURFACE, force-drain the tank for this long
     depthLerp:      0.8,       // depth easing toward target (per second, 0..1-ish)

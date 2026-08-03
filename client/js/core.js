@@ -71,9 +71,11 @@ const state = {
   learn:{ active:false, action:null, padBaseline:{} },
   mapperOpen:false,
   input:{ throttle:0, steer:0, pan:0, tilt:0, ballast:'hold' },
-  ballastTargetCmd:0,         // starts at SURFACE (empty). This is also the shutdown state.
+  ballastTargetRaw:0,         // what the operator set (arrows/drag) — may jump
+  ballastTargetCmd:0,         // slews toward Raw at CONFIG.ballastSlewPerS → smooth API commands.
+                              //   starts at SURFACE (empty); also the shutdown state.
   lastLight:'green',
-  lights:{ green:{on:true, level:0.8}, white:{on:false, level:0.2} },
+  lights:{ green:{on:false, level:0}, white:{on:false, level:0} },   // start OFF; toggling on jumps to lightOnDefault
   levelDirty:{ green:false, white:false },
   magnet:false, armed:true,
   ballastLevel:0, ballastTarget:0,
