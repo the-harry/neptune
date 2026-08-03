@@ -1,0 +1,14 @@
+[Unit]
+Description=go2rtc — NEPTUNE video plane (RTSP->WebRTC, zero transcode)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=neptune
+ExecStart=/usr/local/bin/go2rtc -config /opt/neptune/deploy/go2rtc.yaml
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

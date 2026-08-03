@@ -1,0 +1,14 @@
+# --- core (laptop + Pi) ---
+fastapi>=0.110
+uvicorn[standard]>=0.29     # includes the websockets + httptools extras
+pydantic>=2.6
+psutil>=5.9                 # CPU temp / RAM / disk metrics
+httpx>=0.27                 # WOLFANG CGI client, file offload, CLI, thumbnails
+
+# --- bench only (dev laptop) ---
+# Enables the synthetic MJPEG test pattern when there's no real camera.
+Pillow>=10.0
+
+# --- Pi only (NOT pip-installable — install via apt) ---
+# sudo apt install -y python3-picamera2
+# picamera2 provides the real CSI camera MJPEG feed.

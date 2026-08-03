@@ -1,0 +1,24 @@
+# go2rtc — video plane. RTSP in from the WOLFANG camera, WebRTC out to topside.
+# ZERO transcode (spec §6.2): #video=copy passes the H.264 bitstream through
+# untouched; #audio=drop avoids the sync-stall failure mode on these cameras.
+#
+# Replace <PI_TETHER_IP> with the Pi's eth0 (tether) address.
+
+streams:
+  sub:
+    - rtsp://192.72.1.1/liveRTSP/av4#video=copy#audio=drop
+
+webrtc:
+  # WebRTC needs a reachable candidate; over the tether that's the Pi's eth0 IP.
+  candidates:
+    - <PI_TETHER_IP>:8555
+  listen: ":8555"
+
+api:
+  listen: ":1984"       # go2rtc control/API + the WebRTC signaling the SPA uses
+
+rtsp:
+  listen: ":8554"       # not exposed topside; local only
+
+log:
+  level: info

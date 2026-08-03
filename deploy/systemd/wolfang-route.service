@@ -1,0 +1,17 @@
+[Unit]
+Description=Pin the WOLFANG camera route to wlan0 (spec §1)
+# The camera's DHCP must not own the default route (that belongs to eth0/tether).
+# This pins a host route so camera traffic always leaves via wlan0, and fails
+# loudly if wlan0 is missing — a misroute looks exactly like a camera hardware
+# fault and is easy to misdiagnose.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/ip route replace 192.72.1.1/32 dev wlan0
+ExecStartPost=/bin/sh -c 'ip route get 192.72.1.1 | grep -q "dev wlan0" || (echo "CAMERA MISROUTE: 192.72.1.1 not via wlan0" >&2; exit 1)'
+
+[Install]
+WantedBy=multi-user.target

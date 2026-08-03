@@ -1,0 +1,20 @@
+[Unit]
+Description=NEPTUNE control API (ROV + WOLFANG camera control plane)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=neptune
+WorkingDirectory=/opt/neptune/api
+# venv with requirements.txt installed
+ExecStart=/opt/neptune/api/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Environment=NEPTUNE_HW=real
+Environment=NEPTUNE_CAM=none
+Environment=NEPTUNE_CLIENT_DIR=/opt/neptune/client
+Environment=WOLFANG_BASE=http://192.72.1.1
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
