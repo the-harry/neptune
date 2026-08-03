@@ -15,7 +15,9 @@
       "Bash(python3 -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['camera/service.py','camera/cgi.py','camera/mock.py','main.py']]; print\\('  parse OK'\\)\")",
       "Bash(bash -n install.sh)",
       "Bash(cat js/config.js js/core.js js/video.js js/net.js js/commands.js js/input.js js/controls.js js/render.js js/camera.js js/main.js)",
-      "Bash(node --check /tmp/fe.js)"
+      "Bash(node --check /tmp/fe.js)",
+      "Bash(python3 -m py_compile nav/*.py)",
+      "Bash(cd *)"
     ]
   }
 }

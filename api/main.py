@@ -24,6 +24,8 @@ import metrics as sysmetrics
 from rov_camera import get_camera, mjpeg_stream
 from camera.app import create_camera_service
 from camera.service import build_router as build_camera_router
+from nav.app import create_nav_service
+from nav.service import build_router as build_nav_router
 from config import settings
 from hardware import get_hardware
 from protocol import Alarm, Pong, parse_inbound
@@ -105,6 +107,7 @@ async def lifespan(app: FastAPI):
     app.state.camera = get_camera()
     app.state.loop_task = asyncio.create_task(_control_loop(app))
     await app.state.camera_svc.start()   # WOLFANG control plane (degrades if no camera)
+    await app.state.nav_svc.start()      # navigation: dead reckoning + dive logging
     log.info("NEPTUNE API up — hardware=%s camera=%s + WOLFANG control plane",
              "mock" if app.state.hw.is_mock else "real", app.state.camera.kind)
     try:
@@ -115,6 +118,8 @@ async def lifespan(app: FastAPI):
             await app.state.loop_task
         with contextlib.suppress(Exception):
             await app.state.camera_svc.stop()
+        with contextlib.suppress(Exception):
+            await app.state.nav_svc.stop()
         with contextlib.suppress(Exception):
             app.state.camera.stop()
         with contextlib.suppress(Exception):
@@ -129,6 +134,8 @@ app = FastAPI(title="NEPTUNE Sub API", lifespan=lifespan)
 # client mount below so the API routes win). started/stopped in the lifespan.
 app.state.camera_svc = create_camera_service()
 app.include_router(build_camera_router(app.state.camera_svc))
+app.state.nav_svc = create_nav_service()
+app.include_router(build_nav_router(app.state.nav_svc))
 
 # file:// client reports Origin "null"; "*" lets disk-mode reach the REST/health
 # endpoints. (Browser WebSockets aren't subject to CORS.)

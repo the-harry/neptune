@@ -65,6 +65,7 @@ function boot(){
   buildMapper();
   connectVideo();     // WebRTC feed from go2rtc
   initCamera();       // WOLFANG camera control plane (telemetry, record/capture, config)
+  try{ initMap(); }catch(e){ LOG.warn('map init failed (HUD unaffected):', e && e.message); }  // §7.4 error boundary
   connect();
   startSendLoop();
   startPingLoop();

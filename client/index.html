@@ -15,8 +15,11 @@
 </head>
 <body class="bg-surface-dim text-on-surface font-body-standard overflow-hidden select-none">
 
-<!-- CAMERA FEED BACKGROUND -->
-<div class="fixed inset-0 z-0">
+<!-- MAP: full-screen canvas basemap + dive track, behind the HUD (§6, §7) -->
+<canvas id="map-canvas" class="fixed inset-0" style="z-index:0"></canvas>
+
+<!-- CAMERA FEED — fills the screen in 'video' view, shrinks to a PiP in 'map' view -->
+<div id="video-layer" class="fixed inset-0">
   <div id="video-backdrop"></div>
   <!-- WebRTC feed from go2rtc (WOLFANG camera). srcObject set by video.js. -->
   <video id="video-feed" class="w-full h-full object-cover opacity-90" muted playsinline autoplay style="position:absolute;inset:0;z-index:1;visibility:hidden"></video>
@@ -27,6 +30,14 @@
   </div>
   <div class="absolute inset-0 bg-gradient-to-t from-surface-dim/40 to-transparent" style="z-index:3"></div>
   <div class="scanning-line" style="z-index:3"></div>
+</div>
+
+<!-- MAP controls (pointer-only) + view swap -->
+<div class="map-ctl" style="right:120px;bottom:24px">
+  <button id="map-zoom-in" class="map-btn" title="Zoom in">+</button>
+  <button id="map-zoom-out" class="map-btn" title="Zoom out">&minus;</button>
+  <button id="map-recenter" class="map-btn" title="Reset zoom / recenter">&#8982;</button>
+  <button id="view-swap" class="map-btn map-swap" title="Swap map / camera background"><span id="view-swap-label">CAM</span></button>
 </div>
 
 <!-- TOP APP BAR -->
@@ -111,7 +122,7 @@
 
 <!-- BOTTOM LEFT — SONAR: movement input as an X/Y vector (throttle=fwd/rev, steer=turn),
      N64-stick-tester style: crosshair, sweep, and a live dot+line for direction+magnitude. -->
-<div class="fixed bottom-edge-margin left-edge-margin z-40 flex items-end gap-3">
+<div id="sonar-wrap" class="fixed bottom-edge-margin left-edge-margin z-40 flex items-end gap-3">
 <div class="sonar">
 <svg viewBox="-100 -100 200 200">
 <circle class="sonar-ring" r="92"></circle>
@@ -152,5 +163,6 @@
 <script src="js/controls.js"></script>
 <script src="js/render.js"></script>
 <script src="js/camera.js"></script>
+<script src="js/map.js"></script>
 <script src="js/main.js"></script>
 </body></html>

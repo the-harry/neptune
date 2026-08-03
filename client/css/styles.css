@@ -325,6 +325,26 @@ img{display:block}
             color-mix(in srgb,var(--hazard) 7%,transparent);
   box-shadow:0 0 14px rgba(255,140,26,.28)}
 
+/* ---- MAP + view modes (spec §6.6, §7) ---- */
+#map-canvas{background:#0c0118;display:block}
+/* view = MAP (default): the camera shrinks to a PiP */
+body.view-map #video-layer{position:fixed;inset:auto;top:72px;right:120px;width:280px;height:158px;
+  border:1px solid rgba(180,107,255,.4);border-radius:.5rem;overflow:hidden;
+  box-shadow:0 0 18px rgba(0,0,0,.55);z-index:41;cursor:pointer}
+body.view-map #video-layer #no-feed .nf-badge{font-size:13px;letter-spacing:.2em;padding:5px 12px}
+/* view = VIDEO: the camera fills the screen, map sits behind it */
+body.view-video #video-layer{position:fixed;inset:0;width:auto;height:auto;border:0;border-radius:0;box-shadow:none;z-index:0}
+/* map controls (pointer only) */
+.map-ctl{position:fixed;z-index:45;display:flex;flex-direction:column;gap:6px}
+.map-btn{width:34px;height:34px;border-radius:.4rem;border:1px solid rgba(180,107,255,.35);
+  background:rgba(18,4,38,.7);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+  color:var(--primary);font-family:var(--font-sans);font-size:16px;font-weight:700;cursor:pointer;line-height:1}
+.map-btn:hover{border-color:var(--primary)}
+.map-swap{height:auto;padding:6px 0;font-size:11px;letter-spacing:.08em}
+/* §7.3: the direction overlay must not swallow map gestures; fades when idle (momentary) */
+#sonar-wrap{pointer-events:none;transition:opacity .5s ease}
+#sonar-wrap.idle{opacity:.14}
+
 /* ---- SONAR movement indicator (bottom-left) ---- */
 .sonar{width:118px;height:118px;flex:0 0 auto}
 .sonar svg{width:100%;height:100%;overflow:visible}

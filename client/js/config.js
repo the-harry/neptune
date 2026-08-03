@@ -27,6 +27,18 @@ const CONFIG = {
   },
   staleTimeoutMs: 1000,        // telemetry older than this → readouts greyed/dashed as stale
 
+  /* ---- MAP / NAVIGATION (dive track + position over a basemap) ----------- */
+  map: {
+    navWs:          '/ws/nav',   // backend nav telemetry (x/y/heading/depth); client integrates if absent
+    redrawHz:       10,          // map redraw cap (§7.5 — decoupled from telemetry, never starves video)
+    metersPerPixel: 0.6,         // initial zoom (0.6 m/px). +/- buttons + wheel adjust.
+    subMaxSpeedMs:  1.0,         // client-side integrator speed at full throttle (disk/SIM fallback)
+    maxDepthColorM: 6.0,         // depth at which the track colour saturates (shallow→deep)
+    maxTrackPoints: 4000,        // decimate older points beyond this (§7.5)
+    gridMeters:     10,          // grid spacing in metres
+    sonarFadeMs:    1400         // direction overlay stays this long after the last input, then fades
+  },
+
   /* ---- CAMERA (WOLFANG control plane + go2rtc WebRTC video) --------------- */
   camera: {
     telemetryWs:  '/ws/telemetry',        // camera status pushed here (~15s)
