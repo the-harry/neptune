@@ -71,12 +71,12 @@ const state = {
   learn:{ active:false, action:null, padBaseline:{} },
   mapperOpen:false,
   input:{ throttle:0, steer:0, pan:0, tilt:0, ballast:'hold' },
-  ballastTargetCmd:0.4,       // commanded ballast fill level (arrows/drag set this; send-loop chases it)
+  ballastTargetCmd:0,         // starts at SURFACE (empty). This is also the shutdown state.
   lastLight:'green',
   lights:{ green:{on:true, level:0.8}, white:{on:false, level:0.2} },
   levelDirty:{ green:false, white:false },
   magnet:false, armed:true,
-  ballastLevel:0.4, ballastTarget:0.4,
+  ballastLevel:0, ballastTarget:0,
   depth:1.28, pressure:14.7, heading:284, batteryV:24.8,
   cpuC:null, ramPct:null, diskGb:null,   // Pi system metrics (from telemetry)
   left:0, right:0,

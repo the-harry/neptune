@@ -75,16 +75,17 @@ function renderLightButton(which, on, level){
     gauge.style.backgroundColor = 'color-mix(in srgb,var(--on-surface-variant) 40%,transparent)';
     gauge.style.boxShadow='none';
   }
-  gauge.style.height = Math.round(level*100)+'%';
+  gauge.style.height = Math.round(level*100)+'%';   // vertical fill (bottom→top)
 }
 // Armed/magnet no longer have HUD elements (kept as no-ops so callers stay simple;
 // arm/disarm + magnet still work as gamepad/key actions and gate the thrusters).
 function renderArmed(armed){ /* no armed indicator by request */ }
 function renderMagnet(on){ /* no magnet indicator by request */ }
 
-// LEAK: icon-only — green water-drop (normal) / red crossed drop (leak) + edge pulse.
-const DROP_OK   = '<svg viewBox="0 0 24 24"><path fill="var(--tertiary)" d="M12 3s6 6.5 6 10a6 6 0 0 1-12 0c0-3.5 6-10 6-10z"/></svg>';
-const DROP_LEAK = '<svg viewBox="0 0 24 24"><path fill="var(--error)" d="M12 3s6 6.5 6 10a6 6 0 0 1-12 0c0-3.5 6-10 6-10z"/><path stroke="var(--error)" stroke-width="2.4" stroke-linecap="round" d="M4 4l16 16"/><path stroke="#0c0118" stroke-width="1.1" stroke-linecap="round" d="M4 4l16 16"/></svg>';
+// LEAK: icon-only. OK = GREEN drop with a cross through it ("no water"); LEAK =
+// RED plain drop ("water present"). Plus the full-screen edge pulse on leak.
+const DROP_OK   = '<svg viewBox="0 0 24 24"><path fill="var(--tertiary)" d="M12 3s6 6.5 6 10a6 6 0 0 1-12 0c0-3.5 6-10 6-10z"/><path stroke="var(--tertiary)" stroke-width="2.4" stroke-linecap="round" d="M4 4l16 16"/><path stroke="#0c0118" stroke-width="1.1" stroke-linecap="round" d="M4 4l16 16"/></svg>';
+const DROP_LEAK = '<svg viewBox="0 0 24 24"><path fill="var(--error)" d="M12 3s6 6.5 6 10a6 6 0 0 1-12 0c0-3.5 6-10 6-10z"/></svg>';
 function renderLeak(leak){
   const icon=$('leak-icon'), pulse=$('leak-pulse');
   if(icon) icon.innerHTML = leak ? DROP_LEAK : DROP_OK;
@@ -108,10 +109,11 @@ function renderUI(v){
   const dim = stale ? '0.45' : '1';
   $('ballast-fill').style.height = Math.round((v.ballastLevel||0)*100)+'%';
   $('ballast-fill').style.opacity = dim;
-  // Commanded-target marker (where the arrows/drag set it); hidden when it matches actual.
+  // Commanded-target marker (where the arrows/drag set it); inverted fill grows
+  // from the top, so the marker sits at top = target%. Hidden when it matches actual.
   const tgt=clamp(state.ballastTargetCmd,0,1);
   const mark=$('ballast-target-mark');
-  mark.style.bottom = (tgt*100)+'%';
+  mark.style.top = (tgt*100)+'%';
   mark.style.opacity = (Math.abs(tgt-(v.ballastLevel||0))<0.02) ? '0' : '1';
   setThrust($('thrust-left'),  stale?0:(v.left||0));
   setThrust($('thrust-right'), stale?0:(v.right||0));

@@ -21,7 +21,7 @@
 </div>
 
 <!-- TOP APP BAR -->
-<header class="fixed top-0 left-0 w-full h-16 flex justify-between items-center px-edge-margin z-50 bg-surface/30 backdrop-blur-lg border-b border-white/10">
+<header class="fixed top-0 left-0 h-16 flex justify-between items-center px-edge-margin z-50 bg-surface/30 backdrop-blur-lg border-b border-white/10" style="right:110px">
 <!-- LEAK: icon-only — green drop (normal) / red crossed drop (leak). Set by renderLeak. -->
 <span id="leak-icon" title="Leak sensor"></span>
 <div class="metric"><span class="m-label">Pressure</span><span id="pressure-val" class="m-val glow-cyan">14.7 PSI</span></div>
@@ -46,63 +46,57 @@
 <!-- Camera fault channel (WarningMSG / degraded) — hidden unless there's a fault -->
 <div id="cam-warning" class="fixed left-1/2 -translate-x-1/2 z-50" style="top:64px"></div>
 
-<!-- RIGHT CONTROL RAIL — stacked, gauges flex so it ALWAYS fits the viewport -->
-<aside class="fixed right-0 top-0 h-full w-[110px] z-50 glass-panel flex flex-col px-3 gap-2 overflow-hidden no-scrollbar border-l border-white/20 glow-shadow-rail" style="padding-top:70px;padding-bottom:12px">
+<!-- RIGHT CONTROL RAIL — stacked; LED + ballast sliders flex to fill the height -->
+<aside class="fixed right-0 top-0 h-full w-[110px] z-50 glass-panel flex flex-col px-3 gap-1.5 overflow-hidden no-scrollbar border-l border-white/20 glow-shadow-rail" style="padding-top:10px;padding-bottom:10px">
 <!-- REC -->
-<button id="cam-rec" class="relative w-full py-2 rounded border-2 border-error bg-error/10 text-error flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="Record toggle (polled confirmation)">
+<button id="cam-rec" class="relative w-full py-1.5 rounded border-2 border-error bg-error/10 text-error flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="Record toggle (polled confirmation)">
 <span class="material-symbols-outlined"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" fill="currentColor"/></svg></span>
 <span class="cam-rec-txt font-label-caps text-[10px]">REC</span>
 </button>
 <!-- STILL (picture) -->
-<button id="cam-capture" class="w-full py-2 rounded border-2 border-primary bg-primary/10 text-primary flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="Capture still">
+<button id="cam-capture" class="w-full py-1.5 rounded border-2 border-primary bg-primary/10 text-primary flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="Capture still">
 <span class="material-symbols-outlined"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>
 <span class="font-label-caps text-[10px]">STILL</span>
 </button>
 <!-- SURFACE emergency — HOLD to activate -->
-<button id="btn-surface" class="relative overflow-hidden w-full py-2 rounded border-2 border-secondary bg-secondary/10 text-secondary flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="HOLD to surface (emergency)" style="touch-action:none">
+<button id="btn-surface" class="relative overflow-hidden w-full py-1.5 rounded border-2 border-secondary bg-secondary/10 text-secondary flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="HOLD to surface (emergency)" style="touch-action:none">
 <span id="surface-fill" class="absolute inset-y-0 left-0 bg-secondary/40" style="width:0%"></span>
 <span class="material-symbols-outlined" style="position:relative"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 20V5M6 11l6-6 6 6"/></svg></span>
 <span class="font-label-caps text-[10px]" style="position:relative">SURFACE</span>
 <span id="surface-hint" class="font-label-caps text-[10px] text-secondary/70" style="position:relative">HOLD</span>
 </button>
-<!-- LIGHTS (two LEDs stacked; gauges flex to fill) -->
-<section class="flex flex-col items-center gap-1 flex-1 min-h-0">
-<span class="font-label-caps text-label-caps text-on-surface-variant">LIGHTS</span>
+<!-- LIGHTS — two vertical sliders (equal height), stacked with the ballast below -->
+<span class="font-label-caps text-label-caps text-on-surface-variant text-center">LIGHTS</span>
 <!-- Green LED -->
 <div class="flex flex-col items-center gap-1 flex-1 min-h-0 w-full">
-<button id="btn-light-green" class="w-10 h-10 rounded-full flex items-center justify-center bg-tertiary/30 border-2 border-tertiary glow-shadow-md active:scale-95 transition-all" title="Toggle green LED">
+<button id="btn-light-green" class="w-9 h-9 rounded-full flex items-center justify-center bg-tertiary/30 border-2 border-tertiary glow-shadow-md active:scale-95 transition-all flex-shrink-0" title="Toggle green LED">
 <span id="icon-light-green" class="material-symbols-outlined text-tertiary"></span>
 </button>
-<button id="led-green-up" class="material-symbols-outlined text-tertiary text-sm active:bg-tertiary/20 p-1 rounded" title="Brighter (click or hold)"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 15l6-6 6 6"/></svg></button>
-<div id="track-green" class="flex-1 min-h-0 w-4 bg-surface-variant rounded-full relative overflow-hidden border border-white/10" title="Drag to set brightness" style="cursor:ns-resize;touch-action:none">
-<div id="gauge-green" class="absolute bottom-0 w-full bg-tertiary glow-shadow-sm" style="height:80%"></div>
+<div id="track-green" class="rail-slider flex-1 min-h-0" title="Drag to set brightness" style="touch-action:none">
+<div id="gauge-green" class="absolute bottom-0 left-0 right-0 bg-tertiary glow-shadow-sm" style="height:80%"></div>
 </div>
-<button id="led-green-down" class="material-symbols-outlined text-tertiary text-sm active:bg-tertiary/20 p-1 rounded" title="Dimmer (click or hold)"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg></button>
 </div>
 <!-- White LED -->
 <div class="flex flex-col items-center gap-1 flex-1 min-h-0 w-full">
-<button id="btn-light-white" class="w-10 h-10 rounded-full flex items-center justify-center bg-surface-variant border-2 border-outline-variant active:scale-95 transition-all" title="Toggle white LED">
+<button id="btn-light-white" class="w-9 h-9 rounded-full flex items-center justify-center bg-surface-variant border-2 border-outline-variant active:scale-95 transition-all flex-shrink-0" title="Toggle white LED">
 <span id="icon-light-white" class="material-symbols-outlined text-on-surface-variant"></span>
 </button>
-<button id="led-white-up" class="material-symbols-outlined text-on-surface-variant text-sm active:bg-surface-variant p-1 rounded" title="Brighter (click or hold)"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 15l6-6 6 6"/></svg></button>
-<div id="track-white" class="flex-1 min-h-0 w-4 bg-surface-variant rounded-full relative overflow-hidden border border-white/10" title="Drag to set brightness" style="cursor:ns-resize;touch-action:none">
-<div id="gauge-white" class="absolute bottom-0 w-full bg-on-surface-variant/40" style="height:20%"></div>
+<div id="track-white" class="rail-slider flex-1 min-h-0" title="Drag to set brightness" style="touch-action:none">
+<div id="gauge-white" class="absolute bottom-0 left-0 right-0 bg-on-surface-variant/40" style="height:20%"></div>
 </div>
-<button id="led-white-down" class="material-symbols-outlined text-on-surface-variant text-sm active:bg-surface-variant p-1 rounded" title="Dimmer (click or hold)"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg></button>
 </div>
-</section>
-<!-- BALLAST (gauge flexes) -->
-<section class="flex flex-col items-center gap-1 flex-1 min-h-0 w-full">
-<span class="font-label-caps text-label-caps text-on-surface-variant">BALLAST</span>
-<button id="btn-ballast-fill" class="material-symbols-outlined text-primary active:bg-primary/20 p-1 rounded" title="More ballast / dive (click or hold)"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 15l6-6 6 6"/></svg></button>
-<div id="ballast-track" class="flex-1 min-h-0 w-6 bg-surface-variant rounded border border-white/10 relative" title="Drag to set ballast target" style="cursor:ns-resize;touch-action:none">
-<div id="ballast-fill" class="absolute bottom-0 left-0 right-0 bg-primary/60 border-t-2 border-primary glow-cyan" style="height:40%"></div>
-<div id="ballast-target-mark" class="absolute left-0 right-0" style="bottom:40%;height:2px;background:var(--secondary);box-shadow:0 0 6px var(--secondary)"></div>
+<!-- BALLAST — water syringe: 0 = surface (empty), drag DOWN = more water (dive). Light blue. -->
+<span class="font-label-caps text-label-caps text-on-surface-variant text-center">BALLAST</span>
+<div class="flex flex-col items-center gap-1 flex-1 min-h-0 w-full">
+<button id="btn-ballast-empty" class="material-symbols-outlined text-primary active:bg-primary/20 rounded flex-shrink-0" title="Surface — less water (click or hold)"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 15l6-6 6 6"/></svg></button>
+<div id="ballast-track" class="rail-slider flex-1 min-h-0" title="Drag down = more water (dive)" style="touch-action:none">
+<div id="ballast-fill" class="absolute top-0 left-0 right-0 border-b-2" style="height:0%;background:var(--water);border-color:var(--water-edge);box-shadow:0 0 8px var(--water)"></div>
+<div id="ballast-target-mark" class="absolute left-0 right-0" style="top:0%;height:2px;background:var(--secondary);box-shadow:0 0 6px var(--secondary)"></div>
 </div>
-<button id="btn-ballast-empty" class="material-symbols-outlined text-primary active:bg-primary/20 p-1 rounded" title="Less ballast / surface (click or hold)"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg></button>
-</section>
+<button id="btn-ballast-fill" class="material-symbols-outlined text-primary active:bg-primary/20 rounded flex-shrink-0" title="Dive — more water (click or hold)"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg></button>
+</div>
 <!-- CONFIG -->
-<button id="btn-config" class="w-full py-2 rounded border border-outline-variant text-on-surface-variant flex flex-col items-center gap-0.5 active:bg-surface-variant transition-colors" title="Open config &amp; input mapping">
+<button id="btn-config" class="w-full py-1.5 rounded border border-outline-variant text-on-surface-variant flex flex-col items-center gap-0.5 active:bg-surface-variant transition-colors" title="Open config &amp; input mapping">
 <span class="material-symbols-outlined"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54A.5.5 0 0 0 13.4 2h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.58.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L1.77 8.48a.5.5 0 0 0 .12.64l2.03 1.58c-.05.31-.09.63-.09.94s.02.63.07.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.58-.24 1.13-.56 1.62-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg></span>
 <span class="font-label-caps text-[10px]">CONFIG</span>
 </button>

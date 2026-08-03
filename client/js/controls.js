@@ -8,16 +8,24 @@
 // Unified vertical control shared by the LEDs and the ballast so they behave
 // identically: DRAG the track to set the value (bottom = 0, top = 1), and the
 // up/down arrows CLICK to step by `step` or HOLD to ramp at `rampPerS`.
-// opts = { track, upBtn, downBtn, get, set, step, rampPerS }
+// opts = { track, upBtn, downBtn, get, set, step, rampPerS, axis }
+//   axis:'y' (default) = vertical (bottom=0, top=1); axis:'x' = horizontal (left=0, right=1)
 function bindVerticalControl(opts){
   const {track, upBtn, downBtn, get, set, step, rampPerS} = opts;
+  const horiz = opts.axis === 'x';
   // Drag on the track → set directly.
   if(track){
     let dragging=false;
-    const apply=(y)=>{ const r=track.getBoundingClientRect(); set(1-((y-r.top)/r.height)); };
-    const yOf=e=> e.touches&&e.touches[0] ? e.touches[0].clientY : e.clientY;
-    const down=(e)=>{ dragging=true; apply(yOf(e)); vibrate(6); e.preventDefault(); };
-    const move=(e)=>{ if(dragging){ apply(yOf(e)); e.preventDefault(); } };
+    const apply=(e)=>{ const r=track.getBoundingClientRect();
+      const t=e.touches&&e.touches[0];
+      const x=t?t.clientX:e.clientX, y=t?t.clientY:e.clientY;
+      let v;
+      if(opts.axis==='x')          v=(x-r.left)/r.width;          // left=0, right=1
+      else if(opts.axis==='y-inv') v=(y-r.top)/r.height;          // top=0, bottom=1 (water: down = more)
+      else                         v=1-((y-r.top)/r.height);      // bottom=0, top=1 (default)
+      set(v); };
+    const down=(e)=>{ dragging=true; apply(e); vibrate(6); e.preventDefault(); };
+    const move=(e)=>{ if(dragging){ apply(e); e.preventDefault(); } };
     const up=()=>{ dragging=false; };
     track.addEventListener('mousedown', down);
     track.addEventListener('touchstart', down, {passive:false});
@@ -67,16 +75,16 @@ function bindSurfaceHold(){
 }
 
 function bindOnScreen(){
-  // LEDs: round button toggles; arrows step/ramp brightness; track drags brightness.
+  // LEDs: round button toggles; vertical slider drags brightness (bottom=off, top=full).
   $('btn-light-green').addEventListener('click', ()=>toggleLight('green'));
   $('btn-light-white').addEventListener('click', ()=>toggleLight('white'));
-  bindVerticalControl({ track:$('track-green'), upBtn:$('led-green-up'), downBtn:$('led-green-down'),
+  bindVerticalControl({ track:$('track-green'),
     get:()=>state.lights.green.level, set:v=>setLightLevel('green',v), step:CONFIG.ledStep, rampPerS:CONFIG.ledRampPerS });
-  bindVerticalControl({ track:$('track-white'), upBtn:$('led-white-up'), downBtn:$('led-white-down'),
+  bindVerticalControl({ track:$('track-white'),
     get:()=>state.lights.white.level, set:v=>setLightLevel('white',v), step:CONFIG.ledStep, rampPerS:CONFIG.ledRampPerS });
-  // Ballast: identical interaction — arrows step/ramp, track drags — sets the
-  // commanded target level; the send-loop chases it with fill/empty/hold.
-  bindVerticalControl({ track:$('ballast-track'), upBtn:$('btn-ballast-fill'), downBtn:$('btn-ballast-empty'),
+  // Ballast: INVERTED (water syringe) — top=surface(0), drag DOWN = more water. The
+  // "dive" arrow (btn-ballast-fill) increases; "surface" (btn-ballast-empty) decreases.
+  bindVerticalControl({ track:$('ballast-track'), axis:'y-inv', upBtn:$('btn-ballast-fill'), downBtn:$('btn-ballast-empty'),
     get:()=>state.ballastTargetCmd, set:v=>{ state.ballastTargetCmd=clamp(v,0,1); }, step:CONFIG.ballastStep, rampPerS:CONFIG.ballastRampPerS });
   bindSurfaceHold();       // top-bar SURFACE emergency (hold to fire)
   $('btn-config').addEventListener('click', openMapper);   // CONFIG (rail) opens the config / input-map menu
