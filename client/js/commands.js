@@ -59,7 +59,7 @@ function toggleLight(which){
   vibrate(10);
 }
 function adjustLight(which, delta){
-  if(typeof commandsBlocked==='function' && commandsBlocked()){ rejectCommand('light_'+which+'_level'); return; }
+  if(typeof commandsBlocked==='function' && commandsBlocked()) return;   // silent (called every frame while held)
   const L=state.lights[which];
   const nv=clamp(L.level+delta, 0, 1);
   if(nv!==L.level){
@@ -70,7 +70,7 @@ function adjustLight(which, delta){
 }
 // Set a light's brightness directly from a pointer position on its gauge track.
 function setLightLevel(which, level){
-  if(typeof commandsBlocked==='function' && commandsBlocked()){ rejectCommand('light_'+which+'_level'); return; }
+  if(typeof commandsBlocked==='function' && commandsBlocked()) return;   // silent (pointer drag)
   const L=state.lights[which];
   level=clamp(level,0,1);
   L.level=level; state.levelDirty[which]=true; state.lastLight=which;

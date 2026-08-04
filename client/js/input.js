@@ -26,26 +26,37 @@ const ACTIONS = {
   magnet_toggle:      { label:'Magnet toggle',      kind:'edge', run:()=>toggleMagnet() },
   light_green_toggle: { label:'Green light toggle', kind:'edge', run:()=>toggleLight('green') },
   light_white_toggle: { label:'White light toggle', kind:'edge', run:()=>toggleLight('white') },
+  cam_record_toggle:  { label:'Camera REC toggle',  kind:'edge', run:()=>{ if(typeof camRecordToggle==='function') camRecordToggle(); } },
+  cam_capture:        { label:'Camera PICTURE',     kind:'edge', run:()=>{ if(typeof camCapture==='function') camCapture(); } },
   sim_leak_test:      { label:'Leak test (sim)',    kind:'edge', run:()=>{ state.simLeak=!state.simLeak; LOG.input('sim leak ->', state.simLeak); } },
   ballast_fill:       { label:'Ballast FILL (hold)',  kind:'hold' },
   ballast_empty:      { label:'Ballast EMPTY (hold)', kind:'hold' },
-  brightness_up:      { label:'Brightness + (hold)',  kind:'hold' },
-  brightness_down:    { label:'Brightness − (hold)', kind:'hold' }
+  // Dedicated, independent brightness — up/down = WHITE, left/right = GREEN (still toggled by LB/RB)
+  light_white_up:     { label:'White brighter (hold)', kind:'hold' },
+  light_white_down:   { label:'White dimmer (hold)',   kind:'hold' },
+  light_green_up:     { label:'Green brighter (hold)', kind:'hold' },
+  light_green_down:   { label:'Green dimmer (hold)',   kind:'hold' }
 };
 const ACTION_ORDER = ['arm_toggle','estop','surface','magnet_toggle','light_green_toggle',
-  'light_white_toggle','ballast_fill','ballast_empty','brightness_up','brightness_down','sim_leak_test'];
+  'light_white_toggle','cam_record_toggle','cam_capture','ballast_fill','ballast_empty',
+  'light_white_up','light_white_down','light_green_up','light_green_down','sim_leak_test'];
 // Defaults reproduce the original mapping (gamepad + documented key).
 const DEFAULT_BINDINGS = {
   arm_toggle:         [{type:'pad',index:3},{type:'key',code:'Space'}],
   estop:              [{type:'pad',index:1},{type:'key',code:'KeyX'},{type:'key',code:'Escape'}],
   surface:            [{type:'pad',index:2},{type:'key',code:'KeyP'}],
   magnet_toggle:      [{type:'pad',index:0},{type:'key',code:'KeyM'}],
-  light_green_toggle: [{type:'pad',index:4},{type:'key',code:'KeyG'}],
-  light_white_toggle: [{type:'pad',index:5},{type:'key',code:'KeyH'}],
+  light_green_toggle: [{type:'pad',index:4},{type:'key',code:'KeyG'}],   // LB
+  light_white_toggle: [{type:'pad',index:5},{type:'key',code:'KeyH'}],   // RB
+  cam_record_toggle:  [{type:'pad',index:8},{type:'key',code:'KeyR'}],   // Select / View → REC
+  cam_capture:        [{type:'pad',index:9},{type:'key',code:'KeyC'}],   // Pause / Menu  → PIC
   ballast_fill:       [{type:'pad',index:7},{type:'key',code:'KeyQ'}],
   ballast_empty:      [{type:'pad',index:6},{type:'key',code:'KeyE'}],
-  brightness_up:      [{type:'pad',index:12},{type:'key',code:'BracketRight'}],
-  brightness_down:    [{type:'pad',index:13},{type:'key',code:'BracketLeft'}],
+  // D-pad: up/down → WHITE, left/right → GREEN (independent of which was last toggled)
+  light_white_up:     [{type:'pad',index:12},{type:'key',code:'BracketRight'}],   // D-pad ↑
+  light_white_down:   [{type:'pad',index:13},{type:'key',code:'BracketLeft'}],    // D-pad ↓
+  light_green_up:     [{type:'pad',index:15},{type:'key',code:'Equal'}],          // D-pad →
+  light_green_down:   [{type:'pad',index:14},{type:'key',code:'Minus'}],          // D-pad ←
   sim_leak_test:      [{type:'key',code:'KeyL'}]
 };
 function loadBindings(){
@@ -90,6 +101,22 @@ function actionHeld(action){
   for(let i=0;i<list.length;i++){ if(inputActive(list[i])) return true; }
   return false;
 }
+/* SURFACE combo: BOTH paddles (F9+F10) held for surfaceComboHoldMs. Mirrors the UI
+   press-and-hold — including driving the SURFACE button's fill so the operator sees
+   the countdown — so the dangerous emergency can never fire on a single tap. */
+function surfaceComboTick(){
+  const keys=CONFIG.surfaceComboKeys||[];
+  const both = keys.length>0 && keys.every(k=>state.keys.has(k));
+  const fill=$('surface-fill');
+  if(both){
+    if(!state.surfaceComboStart) state.surfaceComboStart=performance.now();
+    const pct=Math.min(1, (performance.now()-state.surfaceComboStart)/CONFIG.surfaceComboHoldMs);
+    if(fill) fill.style.width=(pct*100)+'%';
+    if(!state.surfaceComboFired && pct>=1){ state.surfaceComboFired=true; LOG.input('SURFACE combo fired (paddles held)'); surface(); if(fill) fill.style.width='0%'; }
+  } else if(state.surfaceComboStart || state.surfaceComboFired){
+    state.surfaceComboStart=0; state.surfaceComboFired=false; if(fill) fill.style.width='0%';
+  }
+}
 function computeInput(dt){
   const src = state.gamepadIndex!=null ? 'gamepad' : 'keyboard';
   if(src!==state.source){ state.source=src; LOG.input('input source ->', src); }
@@ -118,8 +145,14 @@ function computeInput(dt){
       if(held && !state.actionPrev[action]) ACTIONS[action].run();
       state.actionPrev[action]=held;
     }
-    if(actionHeld('brightness_up'))   adjustLight(state.lastLight, +CONFIG.lightLevelRateS*dt);
-    if(actionHeld('brightness_down')) adjustLight(state.lastLight, -CONFIG.lightLevelRateS*dt);
+    // dedicated brightness holds — white and green move independently
+    const r=CONFIG.lightLevelRateS*dt;
+    if(actionHeld('light_white_up'))   adjustLight('white', +r);
+    if(actionHeld('light_white_down')) adjustLight('white', -r);
+    if(actionHeld('light_green_up'))   adjustLight('green', +r);
+    if(actionHeld('light_green_down')) adjustLight('green', -r);
+    // SURFACE via BOTH paddles (F9+F10) held for surfaceComboHoldMs — same deliberate hold as the UI
+    surfaceComboTick();
   }
 
   // --- ballast ---
@@ -163,7 +196,7 @@ function computeInput(dt){
 
 /* ---- keyboard: maintain held-set + feed the mapper. Discretes are
    resolved from bindings in computeInput (no per-key switch here). ---- */
-const MOVE_KEYS=new Set(['KeyW','KeyS','KeyA','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','KeyQ','KeyE','BracketLeft','BracketRight','Space']);
+const MOVE_KEYS=new Set(['KeyW','KeyS','KeyA','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','KeyQ','KeyE','BracketLeft','BracketRight','Equal','Minus','Space']);
 function typingInField(e){
   const t=e.target;
   return t && (t.tagName==='INPUT' || t.tagName==='TEXTAREA' || t.isContentEditable);
@@ -175,7 +208,8 @@ window.addEventListener('keydown', (e)=>{
     if(e.code==='Escape') cancelLearn(); else captureBinding({type:'key',code:e.code});
     return;
   }
-  if(MOVE_KEYS.has(e.code)) e.preventDefault();
+  // swallow the default for movement/brightness keys and the surface paddles (F9/F10)
+  if(MOVE_KEYS.has(e.code) || (CONFIG.surfaceComboKeys||[]).indexOf(e.code)>=0) e.preventDefault();
   state.keys.add(e.code);
 });
 window.addEventListener('keyup', (e)=>{ state.keys.delete(e.code); });

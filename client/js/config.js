@@ -99,7 +99,11 @@ const CONFIG = {
                                //   so drags/jumps are applied smoothly (the stepper can't teleport)
   ballastDeadband:  0.01,      // chase tolerance: |target-actual| under this → send "hold"
   arrowHoldDelayMs: 250,       // press longer than this on an arrow → ramp instead of single step
-  surfaceHoldMs:    900,       // press-and-hold duration to fire the SURFACE emergency
+  surfaceHoldMs:    900,       // press-and-hold duration to fire the SURFACE emergency (UI button)
+  // Gamepad SURFACE: hold BOTH paddles (ROG Ally M1/M2 → F9/F10) together for this long.
+  // Same deliberate hold as the UI button, so the dangerous emergency can't fire on a single tap.
+  surfaceComboKeys:   ['F9','F10'],
+  surfaceComboHoldMs: 3000,
 
   /* ---- SIMULATION (used only when NO real telemetry is arriving) ---------
      These shape the fake telemetry so every gauge animates offline. They have

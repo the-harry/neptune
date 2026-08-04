@@ -100,6 +100,7 @@ const state = {
   realTel:null, realTelAt:0,
   mode:'sim', /* sim | real | stale */
   surfaceUntil:0,
+  surfaceComboStart:0, surfaceComboFired:false,   // gamepad SURFACE combo hold (both paddles)
   lastFrame:0
 };
 
