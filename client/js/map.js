@@ -45,11 +45,19 @@ function initMap(){
   // otherwise expands the map to fullscreen (§3).
   if(MAP.radar) MAP.radar.addEventListener('click', (e)=>{
     if(MAP.expanded || e.target.closest('.map-btn,.map-empty-btn')) return;
+    // In BLIND NAV the ring covers the whole viewport, so a stray tap would otherwise
+    // expand the map - which engages ALL-STOP. Never zero the throttle by accident
+    // while the operator is driving on this view.
+    if(MAP.blind) return;
     if(!MAP.hasArea){ openAreaManager(); return; }
     if(!MAP.hasOrigin){ openOriginModal(); return; }
     expandMap();
   });
-  const cl=$('map-close'); if(cl) cl.addEventListener('click', (e)=>{ e.stopPropagation(); collapseMap(); });
+  const cl=$('map-close'); if(cl) cl.addEventListener('click', (e)=>{ e.stopPropagation();
+    // In blind nav the X is the way back to the (dead) camera view. Opt out so it
+    // does not re-engage a second later and fight the operator.
+    if(!MAP.expanded && MAP.blind){ MAP.blindOptOut = true; exitBlindNav(); return; }
+    collapseMap(); });
   document.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && MAP.expanded && !typingInField(e)) collapseMap(); });
   $('video-layer').addEventListener('click', ()=>{
     if(MAP.expanded){ collapseMap(); return; }                 // tap PiP video → back to camera
@@ -65,7 +73,7 @@ function initMap(){
   if(zi) zi.addEventListener('click', (e)=>{ e.stopPropagation(); MAP.scale=Math.max(0.1,MAP.scale/1.3); });
   if(zo) zo.addEventListener('click', (e)=>{ e.stopPropagation(); MAP.scale=Math.min(20,MAP.scale*1.3); });
   if(rc) rc.addEventListener('click', (e)=>{ e.stopPropagation(); MAP.scale=CONFIG.map.metersPerPixel; });
-  MAP.canvas.addEventListener('wheel', (e)=>{ if(!MAP.expanded) return; e.preventDefault(); MAP.scale=Math.max(0.05,Math.min(40,MAP.scale*(e.deltaY>0?1.1:0.9))); }, {passive:false});
+  MAP.canvas.addEventListener('wheel', (e)=>{ if(!MAP.expanded && !MAP.blind) return; e.preventDefault(); MAP.scale=Math.max(0.05,Math.min(40,MAP.scale*(e.deltaY>0?1.1:0.9))); }, {passive:false});
   // drag-to-pan + tap (expanded only, canvas-scoped so it never touches piloting input, §5).
   // Pan is computed absolutely from the drag-start centre + total screen delta (no feedback loop),
   // so it's smooth like a real slippy map.

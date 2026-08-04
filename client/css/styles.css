@@ -374,13 +374,25 @@ body.map-expanded .all-stop-banner.on{display:block}
    MAP.expanded stays false precisely so all of that behaviour comes for free. */
 body.map-blind #map-panel{position:fixed;inset:0;width:100vw;height:100vh;z-index:2;cursor:default;
   animation:mapExpandIn .28s ease}
-body.map-blind #radar{overflow:visible;border:0;box-shadow:none;background:transparent;cursor:default}
+/* Make the RING ITSELF the full-viewport box in blind nav. The dial then centres with
+   plain absolute positioning inside it, instead of position:fixed inside a fixed,
+   clipped ancestor - which is what left it hanging off to one side. */
+body.map-blind #radar{position:fixed;inset:0;width:auto;height:auto;border-radius:0;
+  overflow:visible;border:0;box-shadow:none;background:transparent;cursor:default}
 /* The dial is the instrument you actually fly on - keep it, centred and big, and
    square (its viewBox is square, so a full-bleed box would distort the rings). */
-body.map-blind #radar-dial{position:fixed;left:50%;top:50%;inset:auto;transform:translate(-50%,-50%);
-  width:min(64vh,64vw);height:min(64vh,64vw);z-index:4;opacity:.92}
+/* Square on purpose: the SVG viewBox is square, so a full-bleed box would stretch the
+   rings into ellipses and make the heading needle lie about bearing. */
+body.map-blind #radar-dial{position:absolute;inset:auto;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:min(56vh,56vw);height:min(56vh,56vw);z-index:4;opacity:.9}
 /* Throttle/steer readout and the scale stay - they matter more here than anywhere. */
 body.map-blind #radar-wrap{z-index:42}
+/* Do NOT hide #radar with opacity/visibility here: #map-panel is a CHILD of it, so
+   that blanks the entire map. The ring is already made invisible above via
+   border:0 + background:transparent, which is enough. */
+/* Zoom controls belong here too: without them blind nav is stuck at whatever scale
+   the radar happened to be on, and a driving view you cannot zoom is not much use. */
+body.map-blind #map-ctl{display:flex}
 body.map-blind #radar-empty{display:none}
 /* Video shrinks to a corner tile. It stays on screen ON PURPOSE: it is how the
    operator notices the feed coming back, and tapping it returns to camera view. */
