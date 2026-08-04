@@ -17,44 +17,43 @@ function _hostForPhone(){
   return 'https://' + h + '/origin.html';
 }
 
-/* ---- ORIGIN (§4) --------------------------------------------------------- */
+/* ---- ORIGIN (§2/§4) — friendly: use my location, search an address, or drop it
+   on the map. No coordinates to type. --------------------------------------- */
 function openOriginModal(){
   const m=_mkModal('origin-modal');
   const o = (typeof MAP!=='undefined' && MAP.origin) ? MAP.origin : null;
-  const cur = o ? `SET — ${o.lat.toFixed(6)}, ${o.lon.toFixed(6)}  (±${Math.round(o.accuracy)} m, ${o.source})`
-                : 'NOT SET';
+  const cur = o ? `Set — ±${Math.round(o.accuracy)} m (${o.source})` : 'Not set yet';
   m.innerHTML =
     '<div class="nav-card">'+
-      '<div class="nav-head"><span class="font-headline-sm text-headline-sm text-primary font-bold">ORIGIN</span>'+
+      '<div class="nav-head"><span class="font-headline-sm text-headline-sm text-primary font-bold">WHERE ARE YOU LAUNCHING?</span>'+
         '<button class="mp-btn nav-x">CLOSE</button></div>'+
       '<div class="nav-body">'+
         `<div class="nav-cur ${o?'ok':'warn'}">${cur}</div>`+
-        '<div class="nav-sec">Phone GNSS (most accurate)</div>'+
-        '<div class="nav-hint">Open this on the operator&rsquo;s phone (needs HTTPS — trust the self-signed cert):</div>'+
-        `<div class="nav-url">${_hostForPhone()}</div>`+
-        '<div class="nav-sec">Tap the map</div>'+
-        '<div class="nav-hint">Expand the map, then tap your launch point. Requires a basemap loaded.</div>'+
-        '<div class="nav-sec">Manual entry</div>'+
-        '<div class="nav-row"><input id="o-lat" class="nav-in" placeholder="lat" inputmode="decimal">'+
-          '<input id="o-lon" class="nav-in" placeholder="lon" inputmode="decimal">'+
-          '<input id="o-acc" class="nav-in" placeholder="±m" inputmode="decimal" style="max-width:70px" value="10"></div>'+
-        '<div class="nav-hint">heading0 is captured from the sub&rsquo;s IMU now (currently '+
-          Math.round((typeof MAP!=='undefined'?MAP.hdg:state.heading)||0)+'&deg;). Arm is refused above the accuracy threshold.</div>'+
-        '<button id="o-set" class="mp-btn nav-primary">SET ORIGIN</button>'+
+        '<button id="o-here" class="mp-btn nav-primary nav-big">📍 &nbsp;USE MY LOCATION</button>'+
+        '<div class="nav-hint">Uses the handheld&rsquo;s location. It&rsquo;s a rough WiFi fix — refine it below if needed.</div>'+
+        '<div class="nav-sec">Search an address or place</div>'+
+        '<input id="o-search" class="nav-in" placeholder="e.g. Gas Street Basin, Birmingham" autocomplete="off">'+
+        '<div id="o-search-res" class="o-res"></div>'+
+        '<div class="nav-sec">Or point it on the map</div>'+
+        '<button id="o-onmap" class="mp-btn nav-big">🗺 &nbsp;DROP IT ON THE MAP</button>'+
+        '<div class="nav-hint">Opens the map — pan to your launch spot and tap it.</div>'+
         '<div id="o-msg" class="nav-msg"></div>'+
-        '<div class="nav-sec">Adjust stored track (translate / rotate)</div>'+
-        '<div class="nav-row"><input id="o-dx" class="nav-in" placeholder="dx m" value="0">'+
-          '<input id="o-dy" class="nav-in" placeholder="dy m" value="0">'+
-          '<input id="o-rot" class="nav-in" placeholder="rot&deg;" value="0"></div>'+
-        '<button id="o-adjust" class="mp-btn">APPLY ADJUSTMENT</button>'+
+        '<details class="nav-adv"><summary>Advanced — nudge the recorded track</summary>'+
+          '<div class="nav-row"><input id="o-dx" class="nav-in" placeholder="left/right m" value="0">'+
+            '<input id="o-dy" class="nav-in" placeholder="fwd/back m" value="0">'+
+            '<input id="o-rot" class="nav-in" placeholder="rotate&deg;" value="0"></div>'+
+          '<button id="o-adjust" class="mp-btn">APPLY ADJUSTMENT</button></details>'+
       '</div>'+
     '</div>';
   m.querySelector('.nav-x').onclick=()=>m.classList.remove('show');
-  $('o-set').onclick=async()=>{
-    const lat=parseFloat($('o-lat').value), lon=parseFloat($('o-lon').value), acc=parseFloat($('o-acc').value||'10');
-    if(isNaN(lat)||isNaN(lon)){ $('o-msg').textContent='enter valid lat/lon'; return; }
-    await setOrigin({lat, lon, accuracy:acc, source:'manual'});
-  };
+  // 1) use my location
+  $('o-here').onclick=()=>{ $('o-msg').textContent='locating…'; requestDeviceLocation();
+    setTimeout(()=>{ if(typeof MAP!=='undefined'&&MAP.hasOrigin) m.classList.remove('show'); }, 1200); };
+  // 2) search an address → pick a result → set origin there
+  const si=$('o-search'); if(si) si.addEventListener('input', (e)=>originSearch(e.target.value));
+  // 3) drop it on the map
+  $('o-onmap').onclick=()=>{ m.classList.remove('show'); if(typeof armOriginTap==='function') armOriginTap(); };
+  // advanced: track nudge (unchanged)
   $('o-adjust').onclick=async()=>{
     const body={dx_m:parseFloat($('o-dx').value||'0'), dy_m:parseFloat($('o-dy').value||'0'), rotation_deg:parseFloat($('o-rot').value||'0')};
     try{ const r=await _navFetch('/api/nav/dive/current/adjust',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -62,6 +61,32 @@ function openOriginModal(){
     catch(e){ $('o-msg').textContent='no active dive / backend'; }
   };
   m.classList.add('show');
+}
+/* address search inside the origin modal: click a hit → set the origin there */
+let _oSearchTimer=null;
+function originSearch(q){
+  const res=$('o-search-res'); if(!res) return;
+  if(!q || q.length<3){ res.innerHTML=''; return; }
+  clearTimeout(_oSearchTimer);
+  _oSearchTimer=setTimeout(async()=>{
+    res.innerHTML='<div class="msr-empty">searching…</div>';
+    try{
+      const r=await _navFetch('/api/geocode/search?q='+encodeURIComponent(q)); const j=await r.json();
+      if(!j.results||!j.results.length){ res.innerHTML='<div class="msr-empty">no matches (needs internet)</div>'; return; }
+      res.innerHTML='';
+      j.results.forEach(it=>{ const d=document.createElement('div'); d.className='msr-row'; d.textContent=it.name;
+        d.onclick=async()=>{
+          const msg=$('o-msg'); if(msg) msg.textContent='setting origin…';
+          if(typeof MAP!=='undefined'){ MAP.viewLat=it.lat; MAP.viewLon=it.lon; MAP.follow=false; }
+          const ok=await setOrigin({ lat:it.lat, lon:it.lon, accuracy:40, source:'map_tap', t:Date.now() });
+          if(ok!==false){ if(typeof MAP!=='undefined'){ MAP.x=0; MAP.y=0; MAP.follow=true; }
+            $('origin-modal').classList.remove('show');
+            if(typeof offerRefine==='function') offerRefine(40);   // nudge to tap-refine the exact bank
+          }
+        };
+        res.appendChild(d); });
+    }catch(e){ res.innerHTML='<div class="msr-empty">search unavailable (offline)</div>'; }
+  }, 350);
 }
 async function setOrigin(o){
   // heading0 comes from the SUB's IMU (the handheld has no magnetometer, §2), captured atomically here.

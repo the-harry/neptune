@@ -465,6 +465,14 @@ body.map-expanded #area-select.on{display:flex}
 .nav-in:disabled{opacity:.4}
 .nav-primary{border-color:var(--primary);color:var(--primary)}
 .nav-msg{font-family:var(--font-sans);font-size:11px;color:var(--on-surface-variant);margin-top:6px;min-height:14px}
+/* friendly origin controls */
+.nav-big{width:100%;font-size:15px!important;font-weight:800;letter-spacing:.03em;padding:13px 16px!important;margin-top:4px}
+.o-res{display:flex;flex-direction:column;background:rgba(0,0,0,.28);border-radius:.4rem;overflow:hidden;margin-top:4px}
+.o-res:empty{display:none}
+.nav-adv{margin-top:14px}
+.nav-adv summary{font-family:var(--font-sans);font-size:11px;color:var(--on-surface-variant);cursor:pointer;letter-spacing:.04em;list-style:revert}
+.nav-adv summary:hover{color:var(--primary)}
+.nav-adv[open] summary{margin-bottom:8px;color:var(--primary)}
 .a-list{display:flex;flex-direction:column;gap:2px}
 .a-row{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.06)}
 .a-name{flex:1;font-family:var(--font-mono);font-size:12px;color:var(--on-surface)}
