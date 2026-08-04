@@ -428,6 +428,8 @@ body.map-expanded #area-select.on{display:flex}
 #origin-prompt .op-btn:hover{background:color-mix(in srgb,var(--primary) 16%,transparent)}
 /* Secondary action (e.g. KEEP) - visually quieter so the primary reads first, but a
    real, tappable choice: declining must never be harder than accepting. */
+/* ORIGIN tile when automatic refresh is one tap away - a hint, never an alarm. */
+#origin-tile.needs-perm #origin-val{text-decoration:underline dotted;text-underline-offset:3px}
 #origin-prompt .op-btn2{margin-left:6px;color:var(--on-surface-variant);border-color:var(--outline-variant)}
 #origin-prompt .op-btn2:hover{background:color-mix(in srgb,var(--on-surface-variant) 14%,transparent)}
 

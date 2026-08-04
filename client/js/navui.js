@@ -163,8 +163,26 @@ async function autoRequestOrigin(){
      - move the frame silently when the operator has actually travelled. Beyond
        originMoveM the origin is a different place, and adopting it shifts every
        coordinate - that gets a confirm, not a silent swap. */
-function refreshOriginOnOpen(stored){
+async function refreshOriginOnOpen(stored){
   if(!('geolocation' in navigator)) return;
+  // ONLY when the permission is already granted, so opening the dashboard can never
+  // put a prompt in the operator's face. Asking unprompted on every open is exactly
+  // what made this intolerable: Chrome does not persist the grant on this handheld,
+  // so every launch produced the dialog again.
+  //
+  // The manual path stays available and is the one that fixes this permanently: tap
+  // the ORIGIN tile -> the request happens on a real user gesture -> choosing
+  // "Allow while visiting the site" persists it -> from then on this runs silently on
+  // every open, which is the automatic behaviour we actually want.
+  try{
+    if(!navigator.permissions) return;
+    const st = await navigator.permissions.query({name:'geolocation'});
+    if(st.state !== 'granted'){
+      LOG.map('location not granted yet - tap the ORIGIN tile once to enable automatic refresh');
+      markOriginNeedsPermission();
+      return;
+    }
+  }catch(e){ return; }
   navigator.geolocation.getCurrentPosition(
     p=>{
       const lat=p.coords.latitude, lon=p.coords.longitude, acc=p.coords.accuracy;
@@ -202,6 +220,17 @@ function refreshOriginOnOpen(stored){
     {enableHighAccuracy:false, timeout:12000, maximumAge:30000}
   );
 }
+/* The origin CAN refresh itself on every open, but only once the browser permission is
+   granted - and Chrome will only persist that from a real user gesture. Rather than
+   nag with an unsolicited dialog, mark the ORIGIN tile so one tap sets it up. */
+function markOriginNeedsPermission(){
+  const el=$('origin-val'), tile=$('origin-tile');
+  if(!el || !tile) return;
+  tile.title = 'Tap to update the origin from your current position. '
+             + 'Choose "Allow while visiting the site" and it will refresh automatically from then on.';
+  tile.classList.add('needs-perm');
+}
+
 function requestDeviceLocation(){
   if(!('geolocation' in navigator)){ showOriginFallback({message:'no geolocation on this device'}); return; }
   if(!window.isSecureContext){ showOriginFallback({message:'insecure context — open Neptune over HTTPS'}); return; }
