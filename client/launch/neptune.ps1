@@ -37,7 +37,17 @@ $ErrorActionPreference = "Stop"
 $root      = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $icon      = Join-Path $root "icon.ico"
 $hostFile  = Join-Path $PSScriptRoot "neptune-host.txt"
-$userdata  = Join-Path $env:LOCALAPPDATA "Neptune\browser"
+
+# Profile directories are PER BROWSER.
+#
+# A single shared dir looks tidy and is a trap: this launcher used to prefer Brave,
+# then Edge, now Chrome, and each one inherited the previous browser's profile. The
+# result was a directory full of brave_shields / edge_wallet / edge_rewards preference
+# namespaces being handed to Chrome, which then would not honour its own geolocation
+# content setting - the map kept prompting on every launch while a clean profile
+# worked first time. Chromium forks are not profile-compatible; give each its own.
+$userdataBase = Join-Path $env:LOCALAPPDATA "Neptune"
+$userdata     = Join-Path $userdataBase "browser"   # replaced once the browser is chosen
 
 # Tether default: the deterministic point-to-point address install.sh pins on the Pi's eth0.
 # (See client/launch/README.md - the Ally holds 192.168.42.2/24 on its Ethernet adapter.)
@@ -70,7 +80,11 @@ function PauseBriefly([int]$seconds = 20) {
 # operator's own browser windows.
 # ---------------------------------------------------------------------------
 function Get-NeptuneBrowsers {
-  $pattern = "*" + ($userdata -replace '\\', '\') + "*"
+  # Match on the BASE directory so this still finds every Neptune browser regardless
+  # of which per-browser profile it is using (and cleans up ones left by a previous
+  # browser choice). Still scoped to our own tree, so the operator's own windows are
+  # never touched.
+  $pattern = "*" + ($userdataBase -replace '\\', '\') + "\browser*"
   Get-CimInstance Win32_Process -Filter "Name='chrome.exe' OR Name='msedge.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -and $_.CommandLine -like "*--user-data-dir=*" -and $_.CommandLine -like $pattern }
 }
@@ -302,6 +316,15 @@ try {
   $exe = $null
   foreach ($c in $candidatesExe) { if ($c -and (Test-Path $c)) { $exe = $c; break } }
 
+  # Per-browser profile (see the note at the top of this script). Chromium forks are
+  # not profile-compatible, and reusing one across them silently breaks content
+  # settings such as geolocation.
+  if ($exe) {
+    $brand    = [System.IO.Path]::GetFileNameWithoutExtension($exe)   # chrome | msedge
+    $userdata = Join-Path $userdataBase ("browser-" + $brand)
+    Info "profile: $userdata"
+  }
+
   # An orphaned window from a previous run owns the Chromium process-singleton for
   # this profile. A new launch would hand its command line to that orphan and exit
   # immediately - which used to look like "the browser closed" and tore the server
@@ -312,54 +335,10 @@ try {
   $url = "http://localhost:$Port/?host=$PiHost"
   New-Item -ItemType Directory -Path $userdata -Force | Out-Null
 
-  # ---- pre-grant geolocation for our own origin, in our own profile ----------
-  # The map origin needs navigator.geolocation. Windows itself can locate the
-  # handheld (Wi-Fi positioning, ~65 m), but Chrome still asks per-origin, and on a
-  # fullscreen handheld that prompt is easy to miss and awkward to dismiss - so the
-  # map just silently never got a fix.
-  #
-  # This only ever touches the DEDICATED Neptune profile and only whitelists
-  # localhost, which is the page we are serving ourselves. Chrome rewrites
-  # Preferences on exit, so it must be seeded before launch. Best-effort: if
-  # anything here fails, Chrome simply falls back to asking.
-  function Grant-Geolocation([string]$profileDir, [string]$origin) {
-    try {
-      $defDir = Join-Path $profileDir "Default"
-      New-Item -ItemType Directory -Path $defDir -Force | Out-Null
-      $prefPath = Join-Path $defDir "Preferences"
-
-      function ToHash($o) {
-        if ($o -is [System.Management.Automation.PSCustomObject]) {
-          $h = @{}
-          foreach ($p in $o.PSObject.Properties) { $h[$p.Name] = ToHash $p.Value }
-          return $h
-        }
-        return $o
-      }
-
-      $prefs = @{}
-      if (Test-Path $prefPath) {
-        $raw = Get-Content $prefPath -Raw -ErrorAction Stop
-        if ($raw.Trim()) { $prefs = ToHash ($raw | ConvertFrom-Json) }
-      }
-      if (-not $prefs.ContainsKey('profile'))                     { $prefs['profile'] = @{} }
-      if (-not $prefs['profile'].ContainsKey('content_settings')) { $prefs['profile']['content_settings'] = @{} }
-      $cs = $prefs['profile']['content_settings']
-      if (-not $cs.ContainsKey('exceptions')) { $cs['exceptions'] = @{} }
-      if (-not $cs['exceptions'].ContainsKey('geolocation')) { $cs['exceptions']['geolocation'] = @{} }
-      # 1 = allow. Chrome keys exceptions as "<origin>,<embedder>"; * = any embedder.
-      $cs['exceptions']['geolocation']["$origin,*"] = @{ setting = 1 }
-
-      ($prefs | ConvertTo-Json -Depth 100 -Compress) | Set-Content -Path $prefPath -Encoding UTF8 -NoNewline
-      return $true
-    } catch { return $false }
-  }
-  if (Grant-Geolocation $userdata "http://localhost:$Port") {
-    Info "geolocation seeded in the profile for http://localhost:$Port"
-  } else {
-    Info "could not seed the profile - falling back to policy only"
-  }
-
+  # Geolocation is granted by Chrome POLICY (set once by tether-setup.ps1), not by
+  # editing the profile. An earlier version rewrote Chrome's Preferences JSON here;
+  # that is fragile - Chrome validates and rewrites that file itself - and it proved
+  # unnecessary once the policy was in place.
   # Belt and braces: Chrome's OWN POLICY, which is authoritative and applied before
   # the first page load. The Preferences seed above is best-effort - Chrome rewrites
   # that file and can discard entries it does not like - whereas GeolocationAllowedForUrls
@@ -370,23 +349,22 @@ try {
   # whitelists exactly one origin: the page we serve ourselves on loopback.
   # User-scope (HKCU), so no admin needed. Remove with:
   #   Remove-Item -Recurse HKCU:\SOFTWARE\Policies\Google\Chrome\GeolocationAllowedForUrls
-  function Grant-GeolocationPolicy([string]$origin) {
-    try {
-      $key = "HKCU:\SOFTWARE\Policies\Google\Chrome\GeolocationAllowedForUrls"
-      if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
-      # The policy is a list: values named "1", "2", ... Clear stale entries first so
-      # a port change does not leave an orphan whitelisted.
-      Get-Item $key | Select-Object -ExpandProperty Property | ForEach-Object {
-        Remove-ItemProperty -Path $key -Name $_ -ErrorAction SilentlyContinue
-      }
-      New-ItemProperty -Path $key -Name "1" -Value $origin -PropertyType String -Force | Out-Null
-      return $true
-    } catch { return $false }
-  }
-  if (Grant-GeolocationPolicy "http://localhost:$Port") {
-    OK "geolocation auto-granted for http://localhost:$Port (no prompt)"
+  # Report whether the one-time policy is actually in place, so a missing map fix is
+  # self-explanatory instead of silent. Setting it needs elevation, so it lives in
+  # tether-setup.ps1 rather than here.
+  $geoPolicy = "HKLM:\SOFTWARE\Policies\Google\Chrome\GeolocationAllowedForUrls"
+  $geoOk = $false
+  try {
+    if (Test-Path $geoPolicy) {
+      $vals = (Get-Item $geoPolicy).Property | ForEach-Object { (Get-ItemProperty $geoPolicy).$_ }
+      $geoOk = @($vals | Where-Object { $_ -like "*localhost*" }).Count -gt 0
+    }
+  } catch {}
+  if ($geoOk) {
+    OK "location auto-granted by policy (map origin needs no prompt)"
   } else {
-    Nope "could not set the geolocation policy - Chrome will ask when the map needs it"
+    Nope "no geolocation policy - the map will prompt, and may be missed on a handheld"
+    Info "fix once, as Administrator:  $(Join-Path $PSScriptRoot 'tether-setup.ps1')"
   }
 
   $common = @("--user-data-dir=$userdata", "--no-first-run", "--no-default-browser-check",
