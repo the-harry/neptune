@@ -41,12 +41,28 @@ esac
 # ---- 1. system packages -----------------------------------------------------
 log "installing system packages…"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
 # avahi-daemon publishes <hostname>.local so topside has a name to fall back on when
 # the fixed tether address has not come up yet. It is NOT the primary path (mDNS from
 # Windows over a link-local adapter is unreliable) - the static IP below is.
-apt-get install -y -qq git python3 python3-venv python3-pip nginx curl ca-certificates \
-                       iproute2 avahi-daemon iw wireless-tools
+PKGS="git python3 python3-venv python3-pip nginx curl ca-certificates iproute2 avahi-daemon iw wireless-tools"
+
+# The Pi has NO INTERNET on the tether (wlan0 is never-default, eth0 has no gateway),
+# and "re-run any time to update" has to keep working there. So apt is best-effort:
+# if everything is already installed we carry on, and we only hard-fail when a package
+# is genuinely missing and unobtainable.
+missing=""
+for p in $PKGS; do
+  dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q "ok installed" || missing="$missing $p"
+done
+if [ -n "$missing" ]; then
+  log "need:$missing"
+  apt-get update -qq || warn "apt-get update failed (no internet on the tether?) — trying the install anyway"
+  if ! apt-get install -y -qq $missing; then
+    die "could not install:$missing — give the Pi internet (plug eth0 into your router) and re-run"
+  fi
+else
+  log "all system packages already present — skipping apt (works offline on the tether)"
+fi
 
 # ---- 2. service user --------------------------------------------------------
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
@@ -158,8 +174,15 @@ fi
 if [ -d "$INSTALL_DIR/.git" ]; then
   log "existing install found — updating from $BRANCH…"
   git -C "$INSTALL_DIR" remote set-url origin "$REPO_URL"
-  git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH"
-  git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"
+  # Best-effort: on the tether there is no route to GitHub. Re-applying the config to
+  # the code already on disk is still useful, so a failed fetch warns instead of
+  # aborting the run. New CODE obviously needs internet; config does not.
+  if git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH" 2>/dev/null; then
+    git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"
+  else
+    warn "could not reach $REPO_URL — keeping the code already installed"
+    warn "  (no internet on the tether; plug eth0 into your router to pull new code)"
+  fi
 else
   log "cloning $REPO_URL ($BRANCH) → $INSTALL_DIR…"
   mkdir -p "$INSTALL_DIR"
@@ -182,10 +205,17 @@ VENV="$INSTALL_DIR/api/.venv"
 # --system-site-packages so the apt-installed python3-picamera2 (which is NOT
 # pip-installable) is importable from inside the venv, as the README instructs.
 python3 -m venv --system-site-packages "$VENV"
-"$VENV/bin/pip" install --quiet --upgrade pip
 # Pillow is bench-only (synthetic camera) and unused on the Pi; skip it here.
 grep -viE '^\s*Pillow' "$INSTALL_DIR/api/requirements.txt" > /tmp/neptune-reqs.txt
-"$VENV/bin/pip" install --quiet -r /tmp/neptune-reqs.txt
+# Skip pip entirely when the venv already satisfies the requirements, so a re-run on
+# the (internet-less) tether still works. sysinfo.py deliberately has no dependencies.
+if "$VENV/bin/python" -c "import fastapi, uvicorn, pydantic, httpx" >/dev/null 2>&1; then
+  log "python dependencies already satisfied — skipping pip (works offline on the tether)"
+else
+  "$VENV/bin/pip" install --quiet --upgrade pip || warn "pip self-upgrade failed (continuing)"
+  "$VENV/bin/pip" install --quiet -r /tmp/neptune-reqs.txt \
+    || die "could not install python dependencies — give the Pi internet and re-run"
+fi
 rm -f /tmp/neptune-reqs.txt
 
 # ---- 6. go2rtc binary (video plane) ----------------------------------------
