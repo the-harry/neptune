@@ -2,7 +2,7 @@
 # =============================================================================
 # NEPTUNE — Raspberry Pi one-shot installer / updater
 #
-#   curl -fsSL https://raw.githubusercontent.com/<you>/<repo>/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/the-harry/neptune/master/install.sh | sudo bash
 #
 # Fresh install OR update (auto-detected). Clones the repo, serves the dashboard
 # SPA over HTTPS (self-signed cert, §1), installs the control API + go2rtc video
@@ -10,13 +10,14 @@
 # everything on boot. Idempotent: re-run to update.
 #
 # Override anything via env, e.g.:
-#   curl -fsSL .../install.sh | sudo NEPTUNE_REPO=https://github.com/me/sub.git bash
+#   curl -fsSL .../install.sh | sudo NEPTUNE_BRANCH=dev bash
+#   curl -fsSL .../install.sh | sudo NEPTUNE_REPO=https://github.com/you/fork.git bash
 # =============================================================================
 set -euo pipefail
 
 # ---- configuration (env-overridable) ----------------------------------------
-REPO_URL="${NEPTUNE_REPO:-https://github.com/REPLACE_ME/sub.git}"   # <-- set to your repo
-BRANCH="${NEPTUNE_BRANCH:-main}"
+REPO_URL="${NEPTUNE_REPO:-https://github.com/the-harry/neptune.git}"
+BRANCH="${NEPTUNE_BRANCH:-master}"
 INSTALL_DIR="${NEPTUNE_DIR:-/opt/neptune}"
 SERVICE_USER="${NEPTUNE_USER:-neptune}"
 TETHER_IFACE="${NEPTUNE_TETHER_IFACE:-eth0}"      # tether / default route
@@ -30,8 +31,9 @@ die()  { printf '\033[1;31m[neptune] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "must run as root (pipe to 'sudo bash')."
 command -v apt-get >/dev/null 2>&1 || die "expects Debian/Raspberry Pi OS (apt-get not found)."
-[ "$REPO_URL" = "https://github.com/REPLACE_ME/sub.git" ] && \
-  die "set your repo: re-run with  ... | sudo NEPTUNE_REPO=https://github.com/you/sub.git bash"
+case "$REPO_URL" in
+  ""|*REPLACE_ME*) die "set your repo: re-run with  ... | sudo NEPTUNE_REPO=https://github.com/you/fork.git bash" ;;
+esac
 
 # ---- 1. system packages -----------------------------------------------------
 log "installing system packages…"

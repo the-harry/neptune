@@ -17,7 +17,9 @@
       "Bash(cat js/config.js js/core.js js/video.js js/net.js js/commands.js js/input.js js/controls.js js/render.js js/camera.js js/main.js)",
       "Bash(node --check /tmp/fe.js)",
       "Bash(python3 -m py_compile nav/*.py)",
-      "Bash(cd *)"
+      "Bash(cd *)",
+      "Bash(sed -n '/^case \"\\\\$REPO_URL\"/,/esac/p' install.sh)",
+      "Bash(grep -nE \"^#{1,3} \" README.md)"
     ]
   }
 }
