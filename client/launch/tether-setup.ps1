@@ -1,7 +1,7 @@
 <#
   NEPTUNE - one-time tether setup for the ROG Ally. RUN AS ADMINISTRATOR, once.
 
-  Four things, all of which need elevation:
+  Five things, all of which need elevation:
 
    1. Give the Ethernet adapter the fixed tether address 192.168.42.2/24.
       A direct Ally<->Pi cable has NO DHCP SERVER, so Windows falls back to an
@@ -52,21 +52,27 @@ if (-not $isAdmin) {
 
 Write-Host "`n========  NEPTUNE tether setup  ========" -ForegroundColor Magenta
 
+# The tether NIC is a USB dongle and it can be absent - unplugged, or dropped off the
+# bus by the fault we are chasing. That must NOT abort the whole script: steps 4 and 5
+# (Windows location + the Chrome policy) have nothing to do with the adapter, and
+# bailing here is why they silently never ran.
 $nic = Get-NetAdapter -Name $Adapter -ErrorAction SilentlyContinue
-if (-not $nic) {
-  Nope "no adapter named '$Adapter'. Available:"
+if ($nic) {
+  Info "adapter: $($nic.Name) - $($nic.InterfaceDescription) [$($nic.Status)]"
+} else {
+  Nope "no adapter named '$Adapter' - skipping the tether steps (1-3), continuing with the rest"
   Get-NetAdapter | ForEach-Object { Write-Host "        $($_.Name)  [$($_.Status)]  $($_.InterfaceDescription)" }
-  Write-Host "`nRe-run with:  tether-setup.ps1 -Adapter `"<name>`"" -ForegroundColor DarkGray
-  return
+  Write-Host "        (re-run with -Adapter `"<name>`" once it is plugged in)" -ForegroundColor DarkGray
 }
-Info "adapter: $($nic.Name) - $($nic.InterfaceDescription) [$($nic.Status)]"
 
 # ---------------------------------------------------------------------------
 if ($Revert) {
   Write-Host "`n[1/3] Address -> DHCP" -ForegroundColor Cyan
-  netsh interface ip set address name="$Adapter" source=dhcp | Out-Null
-  netsh interface ip set dns     name="$Adapter" source=dhcp | Out-Null
-  OK "back to DHCP"
+  if ($nic) {
+    netsh interface ip set address name="$Adapter" source=dhcp | Out-Null
+    netsh interface ip set dns     name="$Adapter" source=dhcp | Out-Null
+    OK "back to DHCP"
+  } else { Info "skipped - adapter not present" }
 
   Write-Host "`n[2/3] USB selective suspend -> enabled (Windows default)" -ForegroundColor Cyan
   powercfg /setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 1
@@ -88,16 +94,18 @@ if ($Revert) {
 }
 
 # ---------------------------------------------------------------------------
-Write-Host "`n[1/4] Fixed tether address" -ForegroundColor Cyan
-try {
-  netsh interface ip set address name="$Adapter" static $Address $Mask | Out-Null
-  OK "$Adapter = $Address/$Mask  (no gateway - the tether is point-to-point)"
-  Info "Wi-Fi stays the internet path; the tether only reaches the Pi"
-} catch {
-  Nope "could not set the address: $($_.Exception.Message)"
+Write-Host "`n[1/5] Fixed tether address" -ForegroundColor Cyan
+if (-not $nic) { Info "skipped - adapter not present" } else {
+  try {
+    netsh interface ip set address name="$Adapter" static $Address $Mask | Out-Null
+    OK "$Adapter = $Address/$Mask  (no gateway - the tether is point-to-point)"
+    Info "Wi-Fi stays the internet path; the tether only reaches the Pi"
+  } catch {
+    Nope "could not set the address: $($_.Exception.Message)"
+  }
 }
 
-Write-Host "`n[2/4] USB selective suspend" -ForegroundColor Cyan
+Write-Host "`n[2/5] USB selective suspend" -ForegroundColor Cyan
 # Windows suspends the USB NIC and the tether silently drops. On a vehicle control
 # link that is not acceptable, so turn it off on both AC and battery.
 powercfg /setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
@@ -105,27 +113,30 @@ powercfg /setdcvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48
 powercfg /setactive SCHEME_CURRENT
 OK "disabled on AC and battery"
 
-Write-Host "`n[3/4] Adapter power management" -ForegroundColor Cyan
+Write-Host "`n[3/5] Adapter power management" -ForegroundColor Cyan
 # 0x18 = disable "allow the computer to turn off this device to save power"
 # and "allow this device to wake the computer".
 $guid = '{4d36e972-e325-11ce-bfc1-08002be10318}'
 $done = $false
-Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Control\Class\$guid" -ErrorAction SilentlyContinue | ForEach-Object {
+if (-not $nic) { Info "skipped - adapter not present"; $done = $true }
+else { Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Control\Class\$guid" -ErrorAction SilentlyContinue | ForEach-Object {
   $p = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
   if ($p.DriverDesc -eq $nic.InterfaceDescription) {
     Set-ItemProperty -Path $_.PSPath -Name PnPCapabilities -Value 24 -Type DWord
     OK "power-down disabled for '$($p.DriverDesc)' (key $($_.PSChildName))"
     $done = $true
   }
-}
+} }
 if (-not $done) { Nope "could not find the driver key - set it by hand in Device Manager > Power Management" }
 
-try {
-  Disable-NetAdapterPowerManagement -Name $Adapter -ErrorAction Stop
-  OK "Disable-NetAdapterPowerManagement applied"
-} catch { Info "adapter exposes no WMI power settings (registry change above still applies)" }
+if ($nic) {
+  try {
+    Disable-NetAdapterPowerManagement -Name $Adapter -ErrorAction Stop
+    OK "Disable-NetAdapterPowerManagement applied"
+  } catch { Info "adapter exposes no WMI power settings (registry change above still applies)" }
+}
 
-Write-Host "`n[4/4] Location for desktop apps" -ForegroundColor Cyan
+Write-Host "`n[4/5] Location for desktop apps" -ForegroundColor Cyan
 # The map origin comes from the handheld's own position via navigator.geolocation.
 # Windows gates that behind TWO switches, and the second is OFF by default:
 #   Settings > Privacy & security > Location > Location services          (usually on)
@@ -151,9 +162,41 @@ try {
 } catch { Info "geolocation service not available" }
 Info "Chrome will still ask once per profile - tap Allow when the map requests it"
 
+Write-Host "`n[5/5] Auto-grant location to the dashboard (no prompt)" -ForegroundColor Cyan
+# Even with Windows allowing location, Chrome still asks PER ORIGIN. On a fullscreen
+# handheld that prompt is easy to miss and awkward to dismiss, so the map silently
+# never got a fix. Chrome's own policy settles it before the first page load.
+#
+# GeolocationAllowedForUrls whitelists specific origins - deliberately NOT
+# DefaultGeolocationSetting, which would allow every site on the machine. The pattern
+# omits the port, which in Chrome's URL-pattern syntax matches ANY port, so it keeps
+# working if the launcher has to move off 8080.
+#
+# This lives here rather than in neptune.ps1 because HKCU\Software\Policies is
+# ACL-protected: policy writes require elevation even in the user hive.
+$chromePol = "HKLM:\SOFTWARE\Policies\Google\Chrome"
+try {
+  $geoKey = "$chromePol\GeolocationAllowedForUrls"
+  if (-not (Test-Path $geoKey)) { New-Item -Path $geoKey -Force | Out-Null }
+  foreach ($v in (Get-Item $geoKey).Property) { Remove-ItemProperty -Path $geoKey -Name $v -ErrorAction SilentlyContinue }
+  New-ItemProperty -Path $geoKey -Name "1" -Value "http://localhost"  -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $geoKey -Name "2" -Value "http://127.0.0.1"  -PropertyType String -Force | Out-Null
+  OK "Chrome will auto-allow location for http://localhost (any port)"
+  Info "scope is loopback only - the page we serve ourselves, nothing else"
+} catch { Nope "could not set the Chrome geolocation policy: $($_.Exception.Message)" }
+# Edge shares the Chromium policy schema, in case the launcher falls back to it.
+try {
+  $edgeKey = "HKLM:\SOFTWARE\Policies\Microsoft\Edge\GeolocationAllowedForUrls"
+  if (-not (Test-Path $edgeKey)) { New-Item -Path $edgeKey -Force | Out-Null }
+  New-ItemProperty -Path $edgeKey -Name "1" -Value "http://localhost" -PropertyType String -Force | Out-Null
+  Info "same policy applied to Edge (fallback browser)"
+} catch { }
+
 Write-Host "`n---- result ----" -ForegroundColor Magenta
-Get-NetIPAddress -InterfaceAlias $Adapter -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-  Select-Object InterfaceAlias, IPAddress, PrefixLength, PrefixOrigin | Format-Table -AutoSize
+if ($nic) {
+  Get-NetIPAddress -InterfaceAlias $Adapter -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Select-Object InterfaceAlias, IPAddress, PrefixLength, PrefixOrigin | Format-Table -AutoSize
+} else { Write-Host "  (tether adapter not present - plug it in and re-run for steps 1-3)" -ForegroundColor Yellow }
 
 Write-Host "Done. Unplug/replug the tether once so the power change takes effect." -ForegroundColor Magenta
 Write-Host "The Pi should now answer at 192.168.42.1 - check with:  ping 192.168.42.1`n" -ForegroundColor DarkGray

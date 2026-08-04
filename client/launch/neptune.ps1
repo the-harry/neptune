@@ -355,9 +355,38 @@ try {
     } catch { return $false }
   }
   if (Grant-Geolocation $userdata "http://localhost:$Port") {
-    Info "geolocation pre-granted for http://localhost:$Port (map origin)"
+    Info "geolocation seeded in the profile for http://localhost:$Port"
   } else {
-    Info "could not pre-grant geolocation - Chrome will ask when the map needs it"
+    Info "could not seed the profile - falling back to policy only"
+  }
+
+  # Belt and braces: Chrome's OWN POLICY, which is authoritative and applied before
+  # the first page load. The Preferences seed above is best-effort - Chrome rewrites
+  # that file and can discard entries it does not like - whereas GeolocationAllowedForUrls
+  # is read at startup and cannot be overridden by a prompt. With this set the map
+  # never has to ask, so a fix is available the moment the dashboard opens.
+  #
+  # Deliberately NOT DefaultGeolocationSetting (that would allow every site). This
+  # whitelists exactly one origin: the page we serve ourselves on loopback.
+  # User-scope (HKCU), so no admin needed. Remove with:
+  #   Remove-Item -Recurse HKCU:\SOFTWARE\Policies\Google\Chrome\GeolocationAllowedForUrls
+  function Grant-GeolocationPolicy([string]$origin) {
+    try {
+      $key = "HKCU:\SOFTWARE\Policies\Google\Chrome\GeolocationAllowedForUrls"
+      if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+      # The policy is a list: values named "1", "2", ... Clear stale entries first so
+      # a port change does not leave an orphan whitelisted.
+      Get-Item $key | Select-Object -ExpandProperty Property | ForEach-Object {
+        Remove-ItemProperty -Path $key -Name $_ -ErrorAction SilentlyContinue
+      }
+      New-ItemProperty -Path $key -Name "1" -Value $origin -PropertyType String -Force | Out-Null
+      return $true
+    } catch { return $false }
+  }
+  if (Grant-GeolocationPolicy "http://localhost:$Port") {
+    OK "geolocation auto-granted for http://localhost:$Port (no prompt)"
+  } else {
+    Nope "could not set the geolocation policy - Chrome will ask when the map needs it"
   }
 
   $common = @("--user-data-dir=$userdata", "--no-first-run", "--no-default-browser-check",

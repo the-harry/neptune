@@ -28,13 +28,19 @@ Run this **once**, as Administrator (it will prompt):
 client\launch\tether-setup.ps1
 ```
 
-It does three things:
+It does five things:
 
 | | What | Why |
 |---|---|---|
 | 1 | Ethernet adapter → **`192.168.42.2/24`** | matches the Pi's fixed `192.168.42.1`; no DHCP, no mDNS needed |
 | 2 | **USB selective suspend → off** | Windows was power‑suspending the USB tether NIC mid‑session, which drops the link and looks exactly like the Pi dying |
 | 3 | **Adapter power‑down → disabled** | same reason, via the driver's own power management |
+| 4 | **Location → allowed for desktop apps** | Windows keeps this *second* switch off by default. Chrome is a desktop app, so with it off `navigator.geolocation` is denied no matter what the page asks, and the map can never take an origin |
+| 5 | **Chrome auto‑granted location for `http://localhost`** | otherwise Chrome asks per‑origin, and that prompt is easy to miss on a fullscreen handheld. Scoped to loopback only — the page we serve ourselves |
+
+> Step 5 lives here rather than in the launcher because `HKCU\Software\Policies` is
+> ACL‑protected: Chrome policy writes need elevation even in the user hive.
+> Verified on a fresh Chrome profile: no prompt, fix returned at ±58 m.
 
 Undo with `tether-setup.ps1 -Revert`. No gateway is set on the tether, so **Wi‑Fi stays your
 internet path** — the cable only reaches the Pi.
@@ -84,7 +90,8 @@ does, `Neptune.bat -Stop` fixes it without a reboot:
 |---|---|
 | `Neptune.bat` | double‑click launcher (runs the script) |
 | `neptune.ps1` | discovery + shortcut + concurrent static server + fullscreen browser |
-| `tether-setup.ps1` | **run once as admin** — fixed tether IP + USB power fixes |
+| `tether-setup.ps1` | **run once as admin** — fixed tether IP, USB power fixes, location auto-grant |
+| `crash-diagnostics.ps1` | **run as admin** — kernel crash dumps + GPU timeout headroom |
 | `neptune-host.txt` | last known Pi address (discovery overwrites it when it finds a live one) |
 
 **Chrome, then Edge.** Brave is no longer used. If Chrome isn't installed the launcher falls back
