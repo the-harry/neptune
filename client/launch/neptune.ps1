@@ -310,6 +310,54 @@ try {
   $url = "http://localhost:$Port/?host=$PiHost"
   New-Item -ItemType Directory -Path $userdata -Force | Out-Null
 
+  # ---- pre-grant geolocation for our own origin, in our own profile ----------
+  # The map origin needs navigator.geolocation. Windows itself can locate the
+  # handheld (Wi-Fi positioning, ~65 m), but Chrome still asks per-origin, and on a
+  # fullscreen handheld that prompt is easy to miss and awkward to dismiss - so the
+  # map just silently never got a fix.
+  #
+  # This only ever touches the DEDICATED Neptune profile and only whitelists
+  # localhost, which is the page we are serving ourselves. Chrome rewrites
+  # Preferences on exit, so it must be seeded before launch. Best-effort: if
+  # anything here fails, Chrome simply falls back to asking.
+  function Grant-Geolocation([string]$profileDir, [string]$origin) {
+    try {
+      $defDir = Join-Path $profileDir "Default"
+      New-Item -ItemType Directory -Path $defDir -Force | Out-Null
+      $prefPath = Join-Path $defDir "Preferences"
+
+      function ToHash($o) {
+        if ($o -is [System.Management.Automation.PSCustomObject]) {
+          $h = @{}
+          foreach ($p in $o.PSObject.Properties) { $h[$p.Name] = ToHash $p.Value }
+          return $h
+        }
+        return $o
+      }
+
+      $prefs = @{}
+      if (Test-Path $prefPath) {
+        $raw = Get-Content $prefPath -Raw -ErrorAction Stop
+        if ($raw.Trim()) { $prefs = ToHash ($raw | ConvertFrom-Json) }
+      }
+      if (-not $prefs.ContainsKey('profile'))                     { $prefs['profile'] = @{} }
+      if (-not $prefs['profile'].ContainsKey('content_settings')) { $prefs['profile']['content_settings'] = @{} }
+      $cs = $prefs['profile']['content_settings']
+      if (-not $cs.ContainsKey('exceptions')) { $cs['exceptions'] = @{} }
+      if (-not $cs['exceptions'].ContainsKey('geolocation')) { $cs['exceptions']['geolocation'] = @{} }
+      # 1 = allow. Chrome keys exceptions as "<origin>,<embedder>"; * = any embedder.
+      $cs['exceptions']['geolocation']["$origin,*"] = @{ setting = 1 }
+
+      ($prefs | ConvertTo-Json -Depth 100 -Compress) | Set-Content -Path $prefPath -Encoding UTF8 -NoNewline
+      return $true
+    } catch { return $false }
+  }
+  if (Grant-Geolocation $userdata "http://localhost:$Port") {
+    Info "geolocation pre-granted for http://localhost:$Port (map origin)"
+  } else {
+    Info "could not pre-grant geolocation - Chrome will ask when the map needs it"
+  }
+
   $common = @("--user-data-dir=$userdata", "--no-first-run", "--no-default-browser-check",
               "--disable-features=Translate", "--disable-background-networking")
   if ($Kiosk) {
