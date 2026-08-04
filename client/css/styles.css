@@ -366,6 +366,38 @@ body.map-expanded #video-layer #no-feed .nf-badge{font-size:13px;letter-spacing:
   box-shadow:0 0 18px rgba(255,140,26,.35);pointer-events:none;white-space:nowrap}
 body.map-expanded .all-stop-banner.on{display:block}
 
+/* ---- BLIND NAV -----------------------------------------------------------
+   The camera is gone, so the map becomes the PRIMARY view and the sub is driven
+   on instruments. Deliberately not the same as .map-expanded: that one engages
+   all-stop and switches to north-up for planning. This stays heading-up, keeps
+   following the sub, and leaves the throttle live - it is a driving view.
+   MAP.expanded stays false precisely so all of that behaviour comes for free. */
+body.map-blind #map-panel{position:fixed;inset:0;width:100vw;height:100vh;z-index:2;cursor:default;
+  animation:mapExpandIn .28s ease}
+body.map-blind #radar{overflow:visible;border:0;box-shadow:none;background:transparent;cursor:default}
+/* The dial is the instrument you actually fly on - keep it, centred and big, and
+   square (its viewBox is square, so a full-bleed box would distort the rings). */
+body.map-blind #radar-dial{position:fixed;left:50%;top:50%;inset:auto;transform:translate(-50%,-50%);
+  width:min(64vh,64vw);height:min(64vh,64vw);z-index:4;opacity:.92}
+/* Throttle/steer readout and the scale stay - they matter more here than anywhere. */
+body.map-blind #radar-wrap{z-index:42}
+body.map-blind #radar-empty{display:none}
+/* Video shrinks to a corner tile. It stays on screen ON PURPOSE: it is how the
+   operator notices the feed coming back, and tapping it returns to camera view. */
+body.map-blind #video-layer{position:fixed;inset:auto;top:72px;right:120px;width:240px;height:135px;
+  border:1px solid var(--hazard);border-radius:.5rem;overflow:hidden;z-index:41;cursor:pointer;
+  filter:grayscale(.6) brightness(.7)}
+body.map-blind #video-layer #no-feed .nf-badge{font-size:12px;letter-spacing:.18em;padding:4px 10px}
+
+.blind-banner{position:absolute;top:76px;left:50%;transform:translateX(-50%);display:none;z-index:6;
+  font-family:var(--font-sans);font-size:13px;font-weight:800;letter-spacing:.12em;padding:7px 16px;border-radius:.4rem;
+  color:var(--hazard);border:1.5px solid var(--hazard);background:color-mix(in srgb,var(--hazard) 14%,rgba(12,1,24,.88));
+  box-shadow:0 0 18px rgba(255,140,26,.35);pointer-events:none;white-space:nowrap}
+body.map-blind .blind-banner{display:block}
+/* If the operator expands the map on top of blind nav, the expanded rules win and
+   the blind banner would be misleading (all-stop is engaged there). Hide it. */
+body.map-expanded .blind-banner{display:none}
+
 /* full empty state — expanded view only (the radar uses the compact .radar-empty) */
 .map-empty{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;
   gap:10px;background:rgba(12,1,24,.6);text-align:center;padding:12px;z-index:5}

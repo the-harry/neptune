@@ -86,6 +86,11 @@ STATUS.tick = function(){
   else                          STATUS.vehicle = state.armed ? 'armed' : 'idle';
 
   STATUS.applyGates();
+  // BLIND NAV: with no feed, hand the screen to the map so the sub can still be
+  // driven. Lives here because this is where video state is already resolved; the
+  // mode itself is debounced in map.js so a brief hiccup does not flip the view.
+  try{ if(typeof updateBlindNav==='function') updateBlindNav(); }
+  catch(e){ LOG.warn('blind-nav update failed:', e && e.message); }
 
   const sig = [STATUS.internet, STATUS.link, STATUS.video, STATUS.cam, STATUS.nav, STATUS.vehicle].join('|');
   if(sig !== STATUS._last){

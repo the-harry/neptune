@@ -53,6 +53,21 @@ checks backend availability for a dependency it doesn't have.
   The Pi's own health is polled separately (`/api/system`), so CPU/RAM/disk and both
   network interfaces stay visible even while the vehicle link is down. Reconnection is
   automatic and silent everywhere (no retry buttons).
+- **Blind nav (`map.js`):** when the camera feed drops for more than
+  `CONFIG.map.blindAfterMs` (4 s), the map takes over the full screen as the *driving*
+  view so the sub can still be flown on instruments instead of a black rectangle. A
+  `BLIND NAV · NO CAMERA` banner says so plainly — the operator must never think they
+  are looking at water.
+
+  It is deliberately **not** the expanded map: expanding engages an all-stop and switches
+  to north-up, because that is a *planning* view. Blind nav keeps `MAP.expanded === false`,
+  so everything keyed on it stays in its piloting form — heading-up, following the sub,
+  throttle live, no all-stop. Only the layout changes.
+
+  Debounced both ways so a brief WebRTC hiccup cannot flip the view mid-manoeuvre. The
+  video shrinks to a corner tile rather than disappearing: it is how you notice the feed
+  return, and tapping it goes back to camera view (and stays there until the feed is
+  genuinely restored).
 - **Commands never queue (§4):** a `Command` fails fast and visibly when the
   backend is down — rejected, logged (`cmd_rejected`), never buffered or replayed
   (a late `throttle 100%` is a hazard). Only inert data (telemetry/log records)

@@ -59,6 +59,13 @@ const CONFIG = {
     // since nothing can re-acquire it in the field without internet.
     originStaleH:   8,
     autoOrigin:     true,        // §2 — auto-request the handheld's location on load when no origin is set
+    // BLIND NAV — when the camera feed is gone, promote the map to the primary view so
+    // the sub can still be driven on instruments instead of a black rectangle. This is
+    // NOT the expanded map: that engages all-stop (a planning view), whereas this is a
+    // DRIVING view — heading-up, following the sub, throttle live.
+    blindNav:       true,
+    blindAfterMs:   4000,        // how long the feed must be down before switching (debounce)
+    blindBackMs:    1500,        // how long it must be back before switching away again
     // --- satellite basemap (§3) — raster XYZ tiles drawn straight to the radar canvas (zero-dep) ---
     tileProvider:   'esri',      // 'esri' (World Imagery) — see tileProviders below
     tileProviders: {

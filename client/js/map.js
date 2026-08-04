@@ -27,6 +27,7 @@ const MAP = {
   originTap:false,                           // one-shot: next map tap sets the origin (§2)
   drag:null, selReadout:null,                // pan drag state; area-selection readout callback (§4)
   replay:false,                              // viewing a saved dive — freeze live integration (§1)
+  blind:false, blindOptOut:false, blindSince:0, videoOkSince:0,   // BLIND NAV (map as the driving view)
 };
 const C = { grid:'rgba(180,107,255,0.13)', origin:'#ff8c1a', sub:'#b46bff',
            shallow:'#4dffa6', deep:'#1f9dff' };
@@ -50,7 +51,13 @@ function initMap(){
   });
   const cl=$('map-close'); if(cl) cl.addEventListener('click', (e)=>{ e.stopPropagation(); collapseMap(); });
   document.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && MAP.expanded && !typingInField(e)) collapseMap(); });
-  $('video-layer').addEventListener('click', ()=>{ if(MAP.expanded) collapseMap(); });   // tap PiP video → back to camera
+  $('video-layer').addEventListener('click', ()=>{
+    if(MAP.expanded){ collapseMap(); return; }                 // tap PiP video → back to camera
+    // In BLIND NAV the video tile is the way back: the operator may want the (dead)
+    // camera view anyway. Opt out until the feed actually returns, so it does not
+    // immediately flip back and fight them.
+    if(MAP.blind){ MAP.blindOptOut = true; exitBlindNav(); }
+  });
   // resize AFTER layout settles (§3 — else a grey half-render). transitionend is a backup to the rAF pass.
   MAP.panel.addEventListener('transitionend', (ev)=>{ if(ev.propertyName==='opacity'){ resizeMap(); if(MAP.ml) MAP.ml.resize(); } });
   // zoom (pointer only, §5)
@@ -100,6 +107,58 @@ function initMap(){
    (enforced every frame in input.js) and ALL STOP — MAP OPEN is shown. Telemetry, video,
    recording and safety indicators keep running at full rate. Any live drive input in
    input.js collapses the map instantly and returns control. */
+/* ============================================================================
+   BLIND NAV — the feed is gone, so drive on the map.
+
+   Explicitly NOT expandMap(): that engages all-stop and goes north-up because it is
+   a planning view. This is a DRIVING view, so MAP.expanded stays false and every
+   behaviour keyed on it stays in its piloting form — heading-up, following the sub,
+   throttle live, no all-stop. Only the layout changes.
+   ============================================================================ */
+function enterBlindNav(){
+  if(MAP.blind || MAP.expanded) return;
+  MAP.blind = true; MAP.blindSince = Date.now(); MAP.follow = true;
+  document.body.classList.add('map-blind');
+  afterResize();
+  vibrate(30);
+  LOG.map('BLIND NAV engaged — no camera, map is the driving view');
+  if(window.REC && REC.enabled) REC.log('blind_nav', {on:true});
+}
+function exitBlindNav(){
+  if(!MAP.blind) return;
+  MAP.blind = false;
+  document.body.classList.remove('map-blind');
+  afterResize();
+  LOG.map('BLIND NAV disengaged');
+  if(window.REC && REC.enabled) REC.log('blind_nav', {on:false});
+}
+/* Driven from STATUS.tick (2 Hz). Debounced both ways so a brief WebRTC hiccup does
+   not throw the operator between views mid-manoeuvre. */
+function updateBlindNav(){
+  if(!CONFIG.map.blindNav) return;
+  const now = Date.now();
+  const videoOk = (typeof STATUS !== 'undefined') && STATUS.video === 'live';
+
+  if(videoOk){
+    MAP.blindDownSince = 0;
+    if(!MAP.videoOkSince) MAP.videoOkSince = now;
+    // feed is genuinely back: drop the opt-out so the next outage engages again
+    if(now - MAP.videoOkSince >= (CONFIG.map.blindBackMs||1500)){
+      MAP.blindOptOut = false;
+      if(MAP.blind) exitBlindNav();
+    }
+    return;
+  }
+  MAP.videoOkSince = 0;
+
+  // The expanded map wins: it is a deliberate operator action and it is all-stopped.
+  if(MAP.expanded){ if(MAP.blind) exitBlindNav(); return; }
+  if(MAP.blindOptOut) return;
+
+  if(!MAP.blindDownSince) MAP.blindDownSince = now;
+  if(now - MAP.blindDownSince >= (CONFIG.map.blindAfterMs||4000)) enterBlindNav();
+}
+
 function expandMap(){
   if(MAP.expanded) return;
   MAP.expanded=true; MAP.follow=false;                          // free pan in the expanded view (§4)
