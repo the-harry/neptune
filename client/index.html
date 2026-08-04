@@ -30,11 +30,11 @@
 
 <!-- TOP APP BAR -->
 <header class="fixed top-0 left-0 h-16 flex justify-between items-center px-edge-margin z-50 bg-surface/30 backdrop-blur-lg border-b border-white/10" style="right:110px">
-<!-- Degradation model (§3): three independent states, one compact indicator -->
-<div id="status-tri" title="Internet · Backend · Vehicle — these fail independently">
-  <span id="st-net" class="st-pip"><span class="st-k">NET</span><span class="st-v">—</span></span>
-  <span id="st-pi"  class="st-pip"><span class="st-k">PI</span><span class="st-v">—</span></span>
-  <span id="st-veh" class="st-pip"><span class="st-k">VEH</span><span class="st-v">—</span></span>
+<!-- Degradation model (§3): three independent states as compact icons (internet · backend · vehicle) -->
+<div id="status-tri">
+  <span id="st-net" class="st-ic" title="Internet"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M2 8.5a15 15 0 0 1 20 0M5 12a10 10 0 0 1 14 0M8 15.5a5 5 0 0 1 8 0"/><circle cx="12" cy="19" r="1.4" fill="currentColor"/></svg></span>
+  <span id="st-pi" class="st-ic" title="Backend link"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="13" width="18" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="7" cy="7.5" r="1.1" fill="currentColor"/><circle cx="7" cy="16.5" r="1.1" fill="currentColor"/></svg></span>
+  <span id="st-veh" class="st-ic" title="Vehicle"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 12c0-2.2 3.6-4 8-4s8 1.8 8 4-3.6 4-8 4-8-1.8-8-4z"/><circle cx="9" cy="12" r="1.1" fill="#0c0118"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 8V5M9 5h6"/></svg></span>
 </div>
 <!-- LEAK: icon-only — green drop (normal) / red crossed drop (leak). Set by renderLeak. -->
 <span id="leak-icon" title="Leak sensor"></span>

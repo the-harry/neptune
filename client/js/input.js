@@ -22,7 +22,8 @@ window.addEventListener('gamepaddisconnected', (e)=>{
 const ACTIONS = {
   arm_toggle:         { label:'Arm / Disarm',       kind:'edge', run:()=>toggleArm() },
   estop:              { label:'E-STOP',             kind:'edge', run:()=>eStop() },
-  surface:            { label:'Surface',            kind:'edge', run:()=>surface() },
+  // NOTE: SURFACE has no single-button binding on purpose (dangerous) — it fires ONLY from the
+  // UI press-and-hold or the two-paddle F9+F10 hold (surfaceComboTick). See CONFIG.surfaceCombo*.
   magnet_toggle:      { label:'Magnet toggle',      kind:'edge', run:()=>toggleMagnet() },
   light_green_toggle: { label:'Green light toggle', kind:'edge', run:()=>toggleLight('green') },
   light_white_toggle: { label:'White light toggle', kind:'edge', run:()=>toggleLight('white') },
@@ -37,14 +38,13 @@ const ACTIONS = {
   light_green_up:     { label:'Green brighter (hold)', kind:'hold' },
   light_green_down:   { label:'Green dimmer (hold)',   kind:'hold' }
 };
-const ACTION_ORDER = ['arm_toggle','estop','surface','magnet_toggle','light_green_toggle',
+const ACTION_ORDER = ['arm_toggle','estop','magnet_toggle','light_green_toggle',
   'light_white_toggle','cam_record_toggle','cam_capture','ballast_fill','ballast_empty',
   'light_white_up','light_white_down','light_green_up','light_green_down','sim_leak_test'];
 // Defaults reproduce the original mapping (gamepad + documented key).
 const DEFAULT_BINDINGS = {
   arm_toggle:         [{type:'pad',index:3},{type:'key',code:'Space'}],
   estop:              [{type:'pad',index:1},{type:'key',code:'KeyX'},{type:'key',code:'Escape'}],
-  surface:            [{type:'pad',index:2},{type:'key',code:'KeyP'}],
   magnet_toggle:      [{type:'pad',index:0},{type:'key',code:'KeyM'}],
   light_green_toggle: [{type:'pad',index:4},{type:'key',code:'KeyG'}],   // LB
   light_white_toggle: [{type:'pad',index:5},{type:'key',code:'KeyH'}],   // RB
@@ -59,16 +59,24 @@ const DEFAULT_BINDINGS = {
   light_green_down:   [{type:'pad',index:14},{type:'key',code:'Minus'}],          // D-pad ←
   sim_leak_test:      [{type:'key',code:'KeyL'}]
 };
+// Bump when the action set / defaults change so stale saved maps (e.g. an old
+// single-key SURFACE binding, or a removed action) are dropped and re-seeded clean.
+const BINDINGS_VERSION = 2;
 function loadBindings(){
   let saved=null;
-  try{ const raw=localStorage.getItem('rov_bindings'); if(raw) saved=JSON.parse(raw); }catch(e){}
+  try{
+    if(localStorage.getItem('rov_bindings_v')===String(BINDINGS_VERSION)){
+      const raw=localStorage.getItem('rov_bindings'); if(raw) saved=JSON.parse(raw);
+    } else { LOG.map('bindings schema changed → re-seeding defaults'); }
+  }catch(e){}
   state.bindings={};
   for(const a in DEFAULT_BINDINGS){ state.bindings[a]=DEFAULT_BINDINGS[a].map(x=>({...x})); }
   if(saved){ for(const a in saved){ if(ACTIONS[a]) state.bindings[a]=saved[a]; } }
+  saveBindings();
   LOG.map('bindings loaded', state.bindings);
 }
 function saveBindings(){
-  try{ localStorage.setItem('rov_bindings', JSON.stringify(state.bindings)); }catch(e){}
+  try{ localStorage.setItem('rov_bindings', JSON.stringify(state.bindings)); localStorage.setItem('rov_bindings_v', String(BINDINGS_VERSION)); }catch(e){}
 }
 function bindingLabel(b){
   if(!b) return '--';

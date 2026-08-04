@@ -333,8 +333,8 @@ img{display:block}
   overflow:hidden;cursor:pointer;background:#0c0118;
   border:1.5px solid color-mix(in srgb,var(--tertiary) 55%,transparent);
   box-shadow:0 0 18px rgba(0,0,0,.6),0 0 14px rgba(77,255,166,.18)}
-#map-canvas{width:100%;height:100%;display:block;background:#0c0118}
-#maplibre-map{position:absolute;inset:0}
+#map-canvas{width:100%;height:100%;display:block;background:#0c0118;touch-action:none}   /* touch-action:none → drag/tap become pointer events */
+#maplibre-map{position:absolute;inset:0;pointer-events:none}   /* empty unless MapLibre is vendored — must not eat the canvas's drag/tap */
 #map-panel{position:absolute;inset:0;opacity:1;transition:opacity .25s ease}   /* fills the circle (collapsed) */
 #radar-dial{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:4}
 .radar-empty{position:absolute;inset:0;display:none;align-items:center;justify-content:center;z-index:3;
@@ -427,18 +427,17 @@ body.map-expanded #area-select.on{display:flex}
   padding:6px 14px;border-radius:.35rem;border:1px solid var(--primary);background:transparent;color:var(--primary);cursor:pointer}
 #origin-prompt .op-btn:hover{background:color-mix(in srgb,var(--primary) 16%,transparent)}
 
-/* ---- degradation indicator (§3): NET · PI · VEH ---- */
-#status-tri{display:flex;gap:6px;align-items:center;margin-right:6px;flex:0 0 auto}
-.st-pip{display:flex;flex-direction:column;align-items:center;line-height:1;gap:1px;padding:3px 6px;border-radius:.35rem;
-  border:1px solid var(--outline-variant);min-width:34px}
-.st-pip .st-k{font-family:var(--font-sans);font-size:8px;font-weight:700;letter-spacing:.08em;color:var(--on-surface-variant)}
-.st-pip .st-v{font-family:var(--font-sans);font-size:10px;font-weight:800;letter-spacing:.03em}
-.st-pip.ok  {border-color:var(--tertiary)} .st-pip.ok .st-v{color:var(--tertiary)}
-.st-pip.warn{border-color:var(--hazard)}   .st-pip.warn .st-v{color:var(--hazard)}
-.st-pip.down{border-color:var(--error);background:color-mix(in srgb,var(--error) 12%,transparent)} .st-pip.down .st-v{color:var(--error)}
-.st-pip.bad {border-color:var(--error);animation:stpulse 1s infinite} .st-pip.bad .st-v{color:var(--error)}
-.st-pip.idle .st-v{color:var(--on-surface-variant)} .st-pip.sim{border-color:var(--primary)} .st-pip.sim .st-v{color:var(--primary)}
-@keyframes stpulse{50%{background:color-mix(in srgb,var(--error) 28%,transparent)}}
+/* ---- degradation indicator (§3): compact icons — internet · backend · vehicle ---- */
+#status-tri{display:flex;gap:7px;align-items:center;margin-right:8px;flex:0 0 auto}
+.st-ic{display:inline-flex;width:19px;height:19px}
+.st-ic svg{width:100%;height:100%}
+.st-ic.ok  {color:var(--tertiary)}
+.st-ic.warn{color:var(--hazard);opacity:.85}
+.st-ic.down{color:var(--error)}
+.st-ic.bad {color:var(--error);animation:stpulse 1s infinite}
+.st-ic.idle{color:var(--on-surface-variant)}
+.st-ic.sim {color:var(--primary)}
+@keyframes stpulse{50%{opacity:.35}}
 
 /* ---- backend-down: grey the vehicle controls + live-data ONLY (§3/§4) ---- */
 body.backend-down aside{opacity:.4;pointer-events:none;filter:grayscale(.5)}

@@ -35,12 +35,11 @@ STATUS.tick = function(){
 };
 
 STATUS.render = function(){
-  const set=(id, on, txt, cls)=>{ const el=$(id); if(!el) return;
-    el.className='st-pip '+cls; const v=el.querySelector('.st-v'); if(v) v.textContent=txt; };
-  set('st-net',  STATUS.internet, STATUS.internet?'ONLINE':'OFFLINE', STATUS.internet?'ok':'warn');
-  set('st-pi',   STATUS.backend,  STATUS.backend?'UP':'DOWN', STATUS.backend?'ok':'down');
+  const set=(id, cls, title)=>{ const el=$(id); if(!el) return; el.className='st-ic '+cls; el.title=title; };
+  set('st-net', STATUS.internet?'ok':'warn', 'Internet: '+(STATUS.internet?'online':'offline'));
+  set('st-pi',  STATUS.backend?'ok':'down',  'Backend: '+(STATUS.backend?'up':'down'));
   const vcls = STATUS.vehicle==='fault'?'bad' : (STATUS.vehicle==='armed'?'ok' : (STATUS.vehicle==='sim'?'sim':'idle'));
-  set('st-veh', true, STATUS.vehicle.toUpperCase(), vcls);
+  set('st-veh', vcls, 'Vehicle: '+STATUS.vehicle);
 };
 
 function initStatus(){ setInterval(STATUS.tick, 500); STATUS.tick(); }

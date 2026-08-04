@@ -59,16 +59,23 @@ function initMap(){
   if(zo) zo.addEventListener('click', (e)=>{ e.stopPropagation(); MAP.scale=Math.min(20,MAP.scale*1.3); });
   if(rc) rc.addEventListener('click', (e)=>{ e.stopPropagation(); MAP.scale=CONFIG.map.metersPerPixel; });
   MAP.canvas.addEventListener('wheel', (e)=>{ if(!MAP.expanded) return; e.preventDefault(); MAP.scale=Math.max(0.05,Math.min(40,MAP.scale*(e.deltaY>0?1.1:0.9))); }, {passive:false});
-  // pan + tap (expanded only, canvas-scoped so it never touches piloting input, §5)
+  // drag-to-pan + tap (expanded only, canvas-scoped so it never touches piloting input, §5).
+  // Pan is computed absolutely from the drag-start centre + total screen delta (no feedback loop),
+  // so it's smooth like a real slippy map.
   MAP.canvas.addEventListener('pointerdown', (e)=>{ if(!MAP.expanded) return;
-    MAP.drag={ x:e.clientX, y:e.clientY, moved:0, geo:screenToLatLon(MAP.canvas,e.clientX,e.clientY) };
+    MAP.drag={ x:e.clientX, y:e.clientY, moved:0, lat0:MAP.viewLat, lon0:MAP.viewLon };
     try{ MAP.canvas.setPointerCapture(e.pointerId); }catch(_){}
   });
   MAP.canvas.addEventListener('pointermove', (e)=>{ if(!MAP.expanded||!MAP.drag) return;
     MAP.drag.moved += Math.abs(e.clientX-MAP.drag.x)+Math.abs(e.clientY-MAP.drag.y);
-    const g0=MAP.drag.geo, g1=screenToLatLon(MAP.canvas,e.clientX,e.clientY);   // keep grabbed point under the cursor
-    if(g0&&g1&&MAP.viewLat!=null){ MAP.follow=false; MAP.viewLat+=(g0.lat-g1.lat); MAP.viewLon+=(g0.lon-g1.lon); }
-    MAP.drag.x=e.clientX; MAP.drag.y=e.clientY;
+    const L=TILES.last; if(!L || MAP.drag.lat0==null) return;
+    const dxd=(e.clientX-MAP.drag.x)*MAP.dpr, dyd=(e.clientY-MAP.drag.y)*MAP.dpr;   // total device-px delta since grab
+    const c=Math.cos(-L.rot), s=Math.sin(-L.rot);                                    // undo heading-up rotation
+    const rx=dxd*c - dyd*s, ry=dxd*s + dyd*c;
+    const mercX0=lonToMercX(MAP.drag.lon0), mercY0=latToMercY(MAP.drag.lat0);
+    MAP.follow=false;
+    MAP.viewLon = mercXToLon(mercX0 - rx/L.k/L.worldTP);    // drag right → view moves left
+    MAP.viewLat = mercYToLat(mercY0 - ry/L.k/L.worldTP);
   });
   const endDrag=(e)=>{ if(!MAP.drag) return; const tap=MAP.drag.moved<6; MAP.drag=null;
     if(tap && MAP.expanded) onMapTap(e.clientX,e.clientY);
@@ -207,6 +214,7 @@ function tryInitMapLibre(){
       window.maplibregl.addProtocol('pmtiles', p.tile);   // Range-request PMTiles (§3)
     }
     MAP.canvas.style.display='none';
+    const mlDiv=$('maplibre-map'); if(mlDiv) mlDiv.style.pointerEvents='auto';   // MapLibre handles its own gestures
     MAP.ml = new window.maplibregl.Map({
       container:'maplibre-map', keyboard:false,           // §5 — never captures piloting keys
       center:[0,0], zoom:15, attributionControl:false, dragRotate:false,
@@ -274,8 +282,15 @@ function resizeMap(){
   MAP.canvas.width=Math.max(1,Math.floor(r.width*MAP.dpr)); MAP.canvas.height=Math.max(1,Math.floor(r.height*MAP.dpr));
   MAP.canvas.style.width=r.width+'px'; MAP.canvas.style.height=r.height+'px';
 }
-function _depthColor(d){ const f=Math.max(0,Math.min(1,d/CONFIG.map.maxDepthColorM)); const a=[77,255,166],b=[31,157,255];
-  return `rgb(${a[0]+(b[0]-a[0])*f|0},${a[1]+(b[1]-a[1])*f|0},${a[2]+(b[2]-a[2])*f|0})`; }
+/* Trajectory colour encodes DEPTH as a hue sweep: fully emerged → neon yellow,
+   fully submerged → dark neon blue, every depth in between a proportional blend —
+   so you read how deep it was, not just that it was deep. */
+function _depthColor(d){
+  const f=Math.max(0,Math.min(1, d/CONFIG.map.maxDepthColorM));
+  const h=52+(230-52)*f;            // 52° neon yellow → 230° blue
+  const l=58-(58-30)*f;            // bright at the surface → dark when deep
+  return `hsl(${h.toFixed(0)},100%,${l.toFixed(0)}%)`;
+}
 
 /* meters that render ≈px pixels at the current zoom, snapped to 1/2/5×10ⁿ (nice scale bar) */
 function niceMeters(px, ppmCss){
