@@ -143,53 +143,63 @@ async function autoRequestOrigin(){
       } }
   }catch(e){}
 
-  if(!stored){ requestDeviceLocation(); return; }   // nothing saved — ask, as before
+  if(!stored){ requestDeviceLocation(); return; }   // nothing saved - ask, as before
 
-  // A stored origin is used immediately so the map works offline and instantly. But it
-  // must not be trusted forever: carry it to a new launch site and the dashboard would
-  // plot the sub relative to a point miles away, with no warning. So re-check in the
-  // background — WITHOUT ever triggering a permission prompt.
-  await recheckOriginQuietly(stored);
+  // A stored origin renders immediately so the map works offline and instantly, but it
+  // is only a starting assumption: carried to a new launch site it would plot the sub
+  // relative to somewhere miles away. So ALWAYS try for a current fix on open.
+  refreshOriginOnOpen(stored);
 }
 
-/* Background origin re-check. Only runs when geolocation is ALREADY granted, so it can
-   never produce the every-launch prompt that made this unusable before. Silent when the
-   handheld has not really moved; asks only when it plainly has. */
-async function recheckOriginQuietly(stored){
-  try{
-    if(!('geolocation' in navigator) || !navigator.permissions) return;
-    const st = await navigator.permissions.query({name:'geolocation'});
-    if(st.state !== 'granted') return;              // not granted -> stay quiet, never prompt
-  }catch(e){ return; }
+/* Take a fresh fix on every open and adopt it when it is genuinely better or genuinely
+   elsewhere. Deliberately NOT gated on the permission already being granted - that gate
+   made this dead code, because Chrome reports "prompt" even with an allow stored. The
+   browser asks at most once per profile; a denial is remembered and fails instantly
+   afterwards, so this cannot become a prompt on every launch.
 
+   Two things it must not do:
+     - downgrade precision. A map_tap origin is +/-8 m; a Wi-Fi fix is +/-58 m. Replacing
+       the former with the latter at the same site makes the map worse, so it is kept.
+     - move the frame silently when the operator has actually travelled. Beyond
+       originMoveM the origin is a different place, and adopting it shifts every
+       coordinate - that gets a confirm, not a silent swap. */
+function refreshOriginOnOpen(stored){
+  if(!('geolocation' in navigator)) return;
   navigator.geolocation.getCurrentPosition(
     p=>{
-      const lat=p.coords.latitude, lon=p.coords.longitude;
-      // flat-earth metres between the stored origin and where we are now
+      const lat=p.coords.latitude, lon=p.coords.longitude, acc=p.coords.accuracy;
       const rel = toLocal(lat, lon, stored.lat, stored.lon);
-      const d = Math.hypot(rel.x, rel.y);
+      const d   = Math.hypot(rel.x, rel.y);
       const limit = CONFIG.map.originMoveM || 150;
-      if(d <= limit){
-        LOG.map('origin still valid ('+Math.round(d)+' m from the stored fix)');
-        return;                                     // Wi-Fi scatter, not a move — keep it
+      const adopt = ()=> setOrigin({ lat, lon, accuracy:acc, source:'device', t:Date.now() })
+        .then(ok=>{
+          if(ok===false){ LOG.warn('could not store the refreshed origin'); return; }
+          if(typeof MAP!=='undefined'){ MAP.x=0; MAP.y=0; }
+          hideOriginPrompt();
+          if(acc>(CONFIG.map.originRefineM||30)) offerRefine(acc);
+        });
+
+      if(d > limit){
+        // Different site. Never silent - adopting this moves every coordinate.
+        const km = d>=1000 ? (d/1000).toFixed(1)+' km' : Math.round(d)+' m';
+        LOG.map('handheld is '+Math.round(d)+' m from the stored origin - offering to re-set');
+        showOriginPrompt('ORIGIN IS ' + km + ' AWAY',
+          'That origin was set somewhere else. Use where you are now, or keep it.',
+          { label:'USE MY POSITION', run:adopt },
+          { label:'KEEP', run:hideOriginPrompt });
+        return;
       }
-      LOG.map('handheld is '+Math.round(d)+' m from the stored origin — offering to re-set');
-      const km = d>=1000 ? (d/1000).toFixed(1)+' km' : Math.round(d)+' m';
-      showOriginPrompt('ORIGIN IS ' + km + ' AWAY',
-        'This origin was set at a different place. Re-set it to where you are now, or keep it.',
-        { label:'USE MY POSITION', run:()=>{
-            setOrigin({ lat, lon, accuracy:p.coords.accuracy, source:'device', t:Date.now() })
-              .then(ok=>{
-                if(ok===false){ showOriginFallback({message:'could not store the fix'}); return; }
-                if(typeof MAP!=='undefined'){ MAP.x=0; MAP.y=0; }
-                if(p.coords.accuracy>(CONFIG.map.originRefineM||30)) offerRefine(p.coords.accuracy);
-                else hideOriginPrompt();
-              });
-          } },
-        { label:'KEEP', run:hideOriginPrompt });
+      // Same site: refresh, unless it would make the origin less accurate than it is.
+      const storedAcc = (typeof stored.accuracy==='number') ? stored.accuracy : 1e9;
+      if(acc > storedAcc + 5){
+        LOG.map('keeping the existing origin: +/-'+Math.round(storedAcc)+' m beats the new +/-'+Math.round(acc)+' m');
+        return;
+      }
+      LOG.map('origin refreshed from the current fix (+/-'+Math.round(acc)+' m, '+Math.round(d)+' m from the old one)');
+      adopt();
     },
-    ()=>{ /* no fix (no internet in the field is normal) — keep the stored origin silently */ },
-    {enableHighAccuracy:false, timeout:12000, maximumAge:60000}
+    err=>{ LOG.map('no fix on open ('+(err&&err.message||'?')+') - keeping the stored origin'); },
+    {enableHighAccuracy:false, timeout:12000, maximumAge:30000}
   );
 }
 function requestDeviceLocation(){
