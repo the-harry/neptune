@@ -134,13 +134,63 @@ async function setOrigin(o){
 async function autoRequestOrigin(){
   if(!CONFIG.map.autoOrigin || state._fileSim) return;
   // client-owned origin first (works with the Pi off); mirror it up if the Pi is there.
+  let stored = null;
   try{
     if(typeof STORE!=='undefined'){ const o=await STORE.get('origin', null);
-      if(o && typeof o.lat==='number'){ if(typeof MAP!=='undefined'){ MAP.origin=o; MAP.hasOrigin=true; renderOriginTile&&renderOriginTile(); }
+      if(o && typeof o.lat==='number'){ stored=o;
+        if(typeof MAP!=='undefined'){ MAP.origin=o; MAP.hasOrigin=true; renderOriginTile&&renderOriginTile(); }
         _navFetch('/api/origin?override=true',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)}).catch(()=>{});
-        return; } }
+      } }
   }catch(e){}
-  requestDeviceLocation();
+
+  if(!stored){ requestDeviceLocation(); return; }   // nothing saved — ask, as before
+
+  // A stored origin is used immediately so the map works offline and instantly. But it
+  // must not be trusted forever: carry it to a new launch site and the dashboard would
+  // plot the sub relative to a point miles away, with no warning. So re-check in the
+  // background — WITHOUT ever triggering a permission prompt.
+  await recheckOriginQuietly(stored);
+}
+
+/* Background origin re-check. Only runs when geolocation is ALREADY granted, so it can
+   never produce the every-launch prompt that made this unusable before. Silent when the
+   handheld has not really moved; asks only when it plainly has. */
+async function recheckOriginQuietly(stored){
+  try{
+    if(!('geolocation' in navigator) || !navigator.permissions) return;
+    const st = await navigator.permissions.query({name:'geolocation'});
+    if(st.state !== 'granted') return;              // not granted -> stay quiet, never prompt
+  }catch(e){ return; }
+
+  navigator.geolocation.getCurrentPosition(
+    p=>{
+      const lat=p.coords.latitude, lon=p.coords.longitude;
+      // flat-earth metres between the stored origin and where we are now
+      const rel = toLocal(lat, lon, stored.lat, stored.lon);
+      const d = Math.hypot(rel.x, rel.y);
+      const limit = CONFIG.map.originMoveM || 150;
+      if(d <= limit){
+        LOG.map('origin still valid ('+Math.round(d)+' m from the stored fix)');
+        return;                                     // Wi-Fi scatter, not a move — keep it
+      }
+      LOG.map('handheld is '+Math.round(d)+' m from the stored origin — offering to re-set');
+      const km = d>=1000 ? (d/1000).toFixed(1)+' km' : Math.round(d)+' m';
+      showOriginPrompt('ORIGIN IS ' + km + ' AWAY',
+        'This origin was set at a different place. Re-set it to where you are now, or keep it.',
+        { label:'USE MY POSITION', run:()=>{
+            setOrigin({ lat, lon, accuracy:p.coords.accuracy, source:'device', t:Date.now() })
+              .then(ok=>{
+                if(ok===false){ showOriginFallback({message:'could not store the fix'}); return; }
+                if(typeof MAP!=='undefined'){ MAP.x=0; MAP.y=0; }
+                if(p.coords.accuracy>(CONFIG.map.originRefineM||30)) offerRefine(p.coords.accuracy);
+                else hideOriginPrompt();
+              });
+          } },
+        { label:'KEEP', run:hideOriginPrompt });
+    },
+    ()=>{ /* no fix (no internet in the field is normal) — keep the stored origin silently */ },
+    {enableHighAccuracy:false, timeout:12000, maximumAge:60000}
+  );
 }
 function requestDeviceLocation(){
   if(!('geolocation' in navigator)){ showOriginFallback({message:'no geolocation on this device'}); return; }
@@ -200,12 +250,17 @@ function armOriginTap(){
 }
 
 /* ---- origin prompt banner (non-blocking) ---- */
-function showOriginPrompt(title, sub, action){
+/* Optional SECOND action. Some decisions must be declinable: offering to move the
+   origin without a way to say "keep it" would push the operator into changing the
+   local frame just to clear the message. */
+function showOriginPrompt(title, sub, action, action2){
   let el=$('origin-prompt');
   if(!el){ el=document.createElement('div'); el.id='origin-prompt'; document.body.appendChild(el); }
   el.innerHTML = '<div class="op-title">'+title+'</div><div class="op-sub">'+sub+'</div>'+
-                 (action?'<button class="op-btn">'+action.label+'</button>':'');
-  if(action){ const b=el.querySelector('.op-btn'); if(b) b.onclick=action.run; }
+                 (action ?'<button class="op-btn">'+action.label+'</button>':'')+
+                 (action2?'<button class="op-btn op-btn2">'+action2.label+'</button>':'');
+  if(action){  const b=el.querySelector('.op-btn');  if(b) b.onclick=action.run; }
+  if(action2){ const b2=el.querySelector('.op-btn2'); if(b2) b2.onclick=action2.run; }
   el.classList.add('show');
 }
 function hideOriginPrompt(){ const el=$('origin-prompt'); if(el) el.classList.remove('show'); }

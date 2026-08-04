@@ -49,6 +49,15 @@ const CONFIG = {
     headingUp:      true,        // §2 — collapsed radar rotates heading-up (forward=up); false = north-up
     allStopOnExpand:true,        // §3 — expanding the map commands throttle to zero (safe "pause" analogue)
     originRefineM:  30,          // §2 — above this device-fix accuracy (m), offer tap-to-refine
+    // On launch, if a fresh fix lands this far from the STORED origin, the handheld has
+    // clearly been moved to a new site — offer to re-set rather than silently sailing on
+    // a launch point from somewhere else. Below it, the difference is just Wi-Fi scatter
+    // and the stored origin is kept (moving the frame mid-dive would invalidate the track).
+    originMoveM:    150,
+    // Age at which the ORIGIN readout turns amber. Not an expiry - the origin stays
+    // usable - just a prompt to confirm it still refers to where you actually are,
+    // since nothing can re-acquire it in the field without internet.
+    originStaleH:   8,
     autoOrigin:     true,        // §2 — auto-request the handheld's location on load when no origin is set
     // --- satellite basemap (§3) — raster XYZ tiles drawn straight to the radar canvas (zero-dep) ---
     tileProvider:   'esri',      // 'esri' (World Imagery) — see tileProviders below

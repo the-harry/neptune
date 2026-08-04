@@ -188,8 +188,32 @@ async function loadCentreline(name){
 }
 function renderOriginTile(){
   const el=$('origin-val'); if(!el) return;
-  if(MAP.hasOrigin){ el.textContent='SET ±'+Math.round(MAP.origin.accuracy)+'m'; el.style.color='var(--tertiary)'; }
-  else { el.textContent='NOT SET'; el.style.color='var(--secondary)'; }
+  const tile=$('origin-tile');
+  if(!MAP.hasOrigin){
+    el.textContent='NOT SET'; el.style.color='var(--secondary)';
+    if(tile) tile.title='Set the launch origin';
+    return;
+  }
+  // An origin does not expire, but it does STOP BEING TRUE the moment the handheld is
+  // carried to another launch site - and nothing re-acquires it on its own (Wi-Fi
+  // positioning needs internet, which the tether does not have). A stale one silently
+  // plots the sub relative to somewhere else entirely, so say how old it is and turn
+  // amber once it is old enough to have plausibly come from a different place.
+  const ageMs  = MAP.origin.t ? (Date.now() - MAP.origin.t) : 0;
+  const ageH   = ageMs / 3600000;
+  const staleH = CONFIG.map.originStaleH || 8;
+  const acc    = 'SET ±'+Math.round(MAP.origin.accuracy)+'m';
+  if(ageH >= staleH){
+    const age = ageH >= 48 ? Math.round(ageH/24)+'d' : Math.round(ageH)+'h';
+    el.textContent = acc+' · '+age;
+    el.style.color = 'var(--hazard)';
+    if(tile) tile.title='Origin was set '+age+' ago, possibly at another site. '+
+                        'Tap to re-set it to where you are now.';
+  } else {
+    el.textContent = acc;
+    el.style.color = 'var(--tertiary)';
+    if(tile) tile.title='Launch origin (set '+(ageH<1 ? Math.max(1,Math.round(ageMs/60000))+' min' : Math.round(ageH)+'h')+' ago). Tap to adjust.';
+  }
 }
 function updateEmptyState(){
   const empty = !MAP.hasArea || !MAP.hasOrigin;
