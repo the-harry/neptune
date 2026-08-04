@@ -29,7 +29,8 @@ param(
   [switch]$Kiosk,
   [switch]$Setup,
   [switch]$Stop,
-  [switch]$SafeGraphics
+  [switch]$SafeGraphics,
+  [switch]$NoGpu
 )
 
 $ErrorActionPreference = "Stop"
@@ -380,6 +381,31 @@ try {
     )
     Nope "SafeGraphics: hardware video decode DISABLED (software H.264)"
     Info "use this while the GPU driver is unstable; expect slightly higher CPU"
+  }
+
+  # -NoGpu: take the browser OFF the GPU completely - software rasterisation, no
+  # GPU compositing, no GPU process at all.
+  #
+  # Escalation from -SafeGraphics. Measured on this handheld: with -SafeGraphics
+  # (software H.264) and TdrDelay raised to 10s, the GPU still faulted 11 SECONDS
+  # after Chrome started. So the stall is not the video-decode block specifically -
+  # it is the general graphics path, which means compositing and rasterisation have
+  # to go too if the browser is to stay off the failing hardware.
+  #
+  # Cost is real: higher CPU, softer scrolling/animation. On a console whose job is
+  # not to fail, that is the right trade. Drop it once the GPU driver is fixed.
+  if ($NoGpu) {
+    # NOTE: do NOT pass --disable-software-rasterizer here. Software rasterisation is
+    # exactly what we are falling back TO; disabling it would leave nothing to draw with.
+    $common += @(
+      "--disable-gpu",
+      "--disable-gpu-compositing",
+      "--disable-accelerated-2d-canvas",
+      "--disable-accelerated-video-decode",
+      "--use-angle=swiftshader"
+    )
+    Nope "NoGpu: browser running entirely on the CPU (no GPU process)"
+    Info "highest stability, highest CPU - for when the GPU driver is the fault"
   }
   if ($Kiosk) {
     $bargs = @("--kiosk", $url) + $common
