@@ -15,11 +15,13 @@ webrtc:
   #     needs no re-stamping in the field.
   #  2. Whatever else go2rtc discovers on its own interfaces.
   #
-  # This used to read "<PI_TETHER_IP>:8555" - a literal placeholder that install.sh
+  # This line used to hold a literal PI_TETHER_IP placeholder token that install.sh
   # only replaced when eth0 already had an IPv4 address. On a direct tether (no DHCP)
   # it never did, so go2rtc advertised the placeholder and ICE could never complete:
   # a permanent, silent NO FEED. Keeping a real default here means the video plane
   # works even if the substitution never runs.
+  # (The token is spelled without its angle brackets on purpose - install.sh rewrites
+  #  every occurrence of the bracketed form, which would otherwise mangle this note.)
   candidates:
     - 192.168.42.1:8555
 
