@@ -9,7 +9,10 @@ User=neptune
 WorkingDirectory=/opt/neptune/api
 # venv with requirements.txt installed
 ExecStart=/opt/neptune/api/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
-Environment=NEPTUNE_HW=real
+# "auto" tries the real GPIO backend and falls back to the bench simulator if the
+# sensor wiring is not in place. Forcing "real" made the API publish constants as
+# genuine readings with mock=false, which is worse than an honest simulation.
+Environment=NEPTUNE_HW=auto
 Environment=NEPTUNE_CAM=none
 Environment=NEPTUNE_CLIENT_DIR=/opt/neptune/client
 Environment=WOLFANG_BASE=http://192.72.1.1

@@ -204,11 +204,40 @@ class RealHardware(HardwareBase):
 
     def __init__(self) -> None:
         # TODO(hardware): init gpiozero / lgpio / pigpio, I2C (pressure, IMU),
-        # ADC (voltage). Keep handles on self. Raise on failure so get_hardware()
-        # can fall back to the mock in "auto" mode.
+        # ADC (voltage). Keep handles on self.
+        #
+        # Until that wiring exists this backend cannot read anything, and it must
+        # say so LOUDLY rather than return zeros. Reporting mock=False while every
+        # sensor returns a constant is the worst of both worlds: the dashboard
+        # drops the SIM badge and presents "0.0 V / heading 0 / at the surface" as
+        # genuine instrument readings. Raising here lets get_hardware()'s "auto"
+        # mode fall back to the honest bench simulator, which at least flags itself.
+        if not self._gpio_available():
+            raise RuntimeError(
+                "RealHardware: no GPIO/I2C backend wired up yet "
+                "(see the TODO(hardware) markers in api/hardware.py). "
+                "Set NEPTUNE_HW=mock to silence this, or wire the sensors."
+            )
         self._magnet = False
         self._lights = {"green": (False, 0.0), "white": (False, 0.0)}
         log.info("RealHardware active (GPIO)")
+
+    @staticmethod
+    def _gpio_available() -> bool:
+        """True once a real GPIO stack is importable AND the sensor code is wired.
+
+        Flip the `wired` flag when you implement the TODOs below — the import check
+        alone is not enough, because gpiozero installs fine on a Pi that has no
+        sensors attached.
+        """
+        wired = False        # TODO(hardware): set True once the readbacks are real
+        if not wired:
+            return False
+        try:
+            import gpiozero  # noqa: F401
+        except Exception:  # noqa: BLE001
+            return False
+        return True
 
     def set_armed(self, on: bool) -> None:
         # TODO(hardware): enable/disable ESC arming signal.

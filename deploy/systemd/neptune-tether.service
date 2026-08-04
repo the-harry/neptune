@@ -1,0 +1,29 @@
+[Unit]
+Description=Hold the deterministic Neptune tether address on the Pi's eth0
+# There is NO DHCP server on a direct Ally<->Pi tether, so an interface left on
+# DHCP ends up with either nothing or a random 169.254.x.x that topside cannot
+# guess. This pins a fixed address so the dashboard always knows where to look.
+#
+# It is additive: `ip addr replace` does not remove a DHCP lease, so plugging the
+# Pi into a router for updates still works and the tether address stays alongside.
+#
+# NetworkManager owns the persistent profile (install.sh writes it). This unit is
+# the belt-and-braces: it re-asserts the address every 30s so a profile reload,
+# a carrier bounce, or a manual `nmcli` never leaves the Pi unreachable topside.
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'while true; do \
+  ip link set "${NEPTUNE_TETHER_IFACE}" up 2>/dev/null; \
+  ip addr replace "${NEPTUNE_TETHER_CIDR}" dev "${NEPTUNE_TETHER_IFACE}" 2>/dev/null; \
+  sleep 30; \
+done'
+Environment=NEPTUNE_TETHER_IFACE=eth0
+Environment=NEPTUNE_TETHER_CIDR=192.168.42.1/24
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

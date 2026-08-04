@@ -97,6 +97,26 @@ function fileProtocolGuard(){
   return true;
 }
 
+/* EXIT — the ROG Ally has no physical keyboard, so "Alt+F4 to quit" is not an exit
+   at all. Without an on-screen way out, a fullscreen dashboard could only be
+   escaped by power-cycling the handheld. This asks the local launcher to stop its
+   server (/__quit), then closes the window. */
+function bindExit(){
+  const b=$('btn-exit'); if(!b) return;
+  b.addEventListener('click', async ()=>{
+    b.disabled = true;
+    try{ await fetch('/__quit', {method:'GET', cache:'no-store'}); }catch(e){/* server may already be gone */}
+    try{ if(document.exitFullscreen && document.fullscreenElement) await document.exitFullscreen(); }catch(e){}
+    try{ window.close(); }catch(e){}
+    // If the browser refused window.close() (not a script-opened window), say so
+    // rather than leaving the operator staring at an unchanged screen.
+    setTimeout(()=>{
+      b.disabled = false;
+      if(!document.hidden) camToast && camToast('Server stopped — close the window to finish', 'warn');
+    }, 1200);
+  });
+}
+
 /* ---- BOOTSTRAP ---- */
 function boot(forced){
   if(!forced && fileProtocolGuard()) return;
@@ -115,6 +135,7 @@ function boot(forced){
   renderMagnet(state.magnet);
   renderLeak(false);
   bindOnScreen();
+  bindExit();
   buildMapper();
   connectVideo();     // WebRTC feed from go2rtc
   initCamera();       // WOLFANG camera control plane (telemetry, record/capture, config)

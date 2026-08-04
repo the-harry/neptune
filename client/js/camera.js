@@ -19,23 +19,58 @@ function camToast(msg, kind){
 }
 
 /* ---- telemetry (pushed ~15s) + REST status poll (backup) ---------------- */
+let _camWsBackoff = 0, _camWsTimer = null;
 function connectCamTelemetry(){
   if(!state.wsBase){ return; }                 // disk mode with no host → REST poll only
+  if(state.camWs){ try{ state.camWs.onclose=null; state.camWs.close(); }catch(e){} state.camWs=null; }
   let ws;
   try{ ws = new WebSocket(state.wsBase + CONFIG.camera.telemetryWs); }
-  catch(e){ return; }
+  catch(e){ scheduleCamTelemetry(); return; }
   state.camWs = ws;
-  ws.onmessage = (ev)=>{ try{ applyCamStatus(JSON.parse(ev.data)); }catch(e){} };
-  ws.onclose = ()=>{ state.camWs=null; setTimeout(connectCamTelemetry, 3000); };
+  ws.onopen = ()=>{ _camWsBackoff = 0; };
+  ws.onmessage = (ev)=>{
+    try{ applyCamStatus(JSON.parse(ev.data)); state.camOkAt = Date.now(); }catch(e){}
+  };
+  ws.onclose = ()=>{ state.camWs=null; scheduleCamTelemetry(); };
   ws.onerror = ()=>{ try{ ws.close(); }catch(e){} };
 }
+/* Capped backoff with a single pending timer — a flat 3 s retry with no guard
+   stacked reconnects for as long as the Pi was down. */
+function scheduleCamTelemetry(){
+  if(_camWsTimer) return;
+  _camWsBackoff = Math.min(20000, _camWsBackoff ? _camWsBackoff*1.7 : 2000);
+  _camWsTimer = setTimeout(()=>{ _camWsTimer=null; connectCamTelemetry(); }, _camWsBackoff);
+}
+/* Status poll. Guarded so a black-holed Pi cannot pile up requests: at most one
+   in flight, each with a hard abort deadline, and a failure backs off instead of
+   hammering. A successful response stamps camOkAt, which is what marks the camera
+   subsystem up (and therefore what gates ONLY the camera controls). */
+let _camPolling = false, _camBackoff = 0, _camTimer = null;
 function startCamStatusPoll(){
   const tick = async ()=>{
-    try{ const r = await camApi('/api/status'); if(r.ok) applyCamStatus(await r.json()); }
-    catch(e){}
+    if(_camPolling) return;
+    _camPolling = true;
+    const ctl = (typeof AbortController!=='undefined') ? new AbortController() : null;
+    const killer = ctl ? setTimeout(()=>{ try{ ctl.abort(); }catch(e){} }, 4000) : null;
+    try{
+      const r = await camApi('/api/status', ctl ? {signal:ctl.signal} : undefined);
+      if(r.ok){
+        applyCamStatus(await r.json());
+        state.camOkAt = Date.now();       // the camera plane is alive
+        _camBackoff = 0;
+      } else {
+        _camBackoff = Math.min(30000, _camBackoff ? _camBackoff*2 : 2000);
+      }
+    }catch(e){
+      _camBackoff = Math.min(30000, _camBackoff ? _camBackoff*2 : 2000);
+    }finally{
+      if(killer) clearTimeout(killer);
+      _camPolling = false;
+      clearTimeout(_camTimer);
+      _camTimer = setTimeout(tick, Math.max(CONFIG.camera.statusPollMs, _camBackoff));
+    }
   };
   tick();
-  setInterval(tick, CONFIG.camera.statusPollMs);
 }
 
 function applyCamStatus(s){

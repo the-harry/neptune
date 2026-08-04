@@ -1,21 +1,38 @@
-# go2rtc — video plane. RTSP in from the WOLFANG camera, WebRTC out to topside.
-# ZERO transcode (spec §6.2): #video=copy passes the H.264 bitstream through
+# go2rtc - video plane. RTSP in from the WOLFANG camera, WebRTC out to topside.
+# ZERO transcode (spec 6.2): #video=copy passes the H.264 bitstream through
 # untouched; #audio=drop avoids the sync-stall failure mode on these cameras.
-#
-# Replace <PI_TETHER_IP> with the Pi's eth0 (tether) address.
 
 streams:
   sub:
     - rtsp://192.72.1.1/liveRTSP/av4#video=copy#audio=drop
 
 webrtc:
-  # WebRTC needs a reachable candidate; over the tether that's the Pi's eth0 IP.
-  candidates:
-    - <PI_TETHER_IP>:8555
   listen: ":8555"
+  # WebRTC needs a candidate the Ally can actually reach. Two sources, in order:
+  #
+  #  1. The fixed tether address. install.sh pins 192.168.42.1/24 on the Pi's eth0
+  #     and the Ally holds 192.168.42.2/24, so this is stable across reboots and
+  #     needs no re-stamping in the field.
+  #  2. Whatever else go2rtc discovers on its own interfaces.
+  #
+  # This used to read "<PI_TETHER_IP>:8555" - a literal placeholder that install.sh
+  # only replaced when eth0 already had an IPv4 address. On a direct tether (no DHCP)
+  # it never did, so go2rtc advertised the placeholder and ICE could never complete:
+  # a permanent, silent NO FEED. Keeping a real default here means the video plane
+  # works even if the substitution never runs.
+  candidates:
+    - 192.168.42.1:8555
 
 api:
   listen: ":1984"       # go2rtc control/API + the WebRTC signaling the SPA uses
+  # REQUIRED for this architecture. The dashboard is served from the Ally's own
+  # localhost (client/launch/neptune.ps1) and signals to the Pi, so the WebRTC
+  # signaling WebSocket is CROSS-ORIGIN. go2rtc's upgrader enforces same-origin by
+  # default and rejected every attempt with
+  #   "websocket: request origin not allowed by Upgrader.CheckOrigin"
+  # which presented as a permanent NO FEED even with a healthy camera and a
+  # working RTSP pull. The tether is a sealed two-device link, so "*" is safe here.
+  origin: "*"
 
 rtsp:
   listen: ":8554"       # not exposed topside; local only

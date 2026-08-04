@@ -100,10 +100,8 @@ function renderUI(v){
   setText($('battery-v'), (v.batteryV!=null?v.batteryV.toFixed(1):'--')+'V', stale);
   setText($('depth-val'), (v.depth!=null?v.depth.toFixed(1):'--')+' m', stale);
   setText($('pressure-val'), (v.pressure!=null?v.pressure.toFixed(1):'--')+' PSI', stale);
-  // Pi system metrics — only when the server provides them (placeholders in SIM).
-  if(v.cpuC!=null)   setText($('cpu-c'),   Math.round(v.cpuC)+'°C', stale);
-  if(v.ramPct!=null) setText($('ram-pct'), Math.round(v.ramPct)+'%', stale);
-  if(v.diskGb!=null) setText($('disk-gb'), v.diskGb.toFixed(1)+' GB', stale);
+  // Pi system metrics are rendered by renderSystem() from /api/system, which is
+  // independent of the vehicle link — see status.js. Nothing to do here.
   setText($('ballast-pct'), Math.round((v.ballastLevel||0)*100)+'%', stale);
   setText($('heading-val'), Math.round(v.heading||0)+'°', stale);   // compass bearing (degrees)
   // Gauges / bars keep last position; only dim on stale.
@@ -146,3 +144,67 @@ function setChip(id, cls, text){
 // Video status is conveyed by the feed's own NO-FEED / RECONFIGURING overlay
 // (the top-bar VIDEO chip was redundant and removed).
 function updateBadges(){ /* no-op */ }
+
+/* ============================================================================
+   PI SYSTEM HEALTH — real readings from /api/system (api/sysinfo.py).
+
+   Deliberately separate from vehicle telemetry: the Pi's own CPU/RAM/disk and
+   the state of its two network interfaces are meaningful even when the ROV
+   hardware is simulated or the camera is unplugged.
+
+   A missing probe arrives as null and renders as "--". It is never shown as 0 —
+   "CPU 0 deg C" reads as a real measurement and hides the fault, which is exactly
+   how the old psutil-less path made every gauge look plausible and be wrong.
+   ============================================================================ */
+function renderSystem(s){
+  const dash = (el)=>{ if(el){ el.textContent='--'; el.classList.add('is-stale'); } };
+  const put  = (el, txt)=>{ if(el){ el.textContent=txt; el.classList.remove('is-stale'); } };
+
+  const ids = ['cpu-c','cpu-pct','ram-pct','disk-gb','net-eth','net-wlan'];
+  if(!s || s.ok===false){ ids.forEach(id=>dash($(id))); return; }
+
+  const cpu = s.cpu||{}, mem = s.mem||{}, disk = s.disk||{}, net = s.net||{};
+  const tether = net.tether||{}, cam = net.camera||{}, wifi = cam.wifi||{};
+
+  cpu.temp_c!=null ? put($('cpu-c'),   Math.round(cpu.temp_c)+'\u00b0C')     : dash($('cpu-c'));
+  cpu.pct!=null    ? put($('cpu-pct'), Math.round(cpu.pct)+'%')              : dash($('cpu-pct'));
+  mem.pct!=null    ? put($('ram-pct'), Math.round(mem.pct)+'%')              : dash($('ram-pct'));
+  disk.free_gb!=null ? put($('disk-gb'), disk.free_gb.toFixed(1)+' GB')      : dash($('disk-gb'));
+
+  // Tether: link state plus negotiated speed — this is the operator's cable.
+  const eth = $('net-eth');
+  if(eth){
+    if(tether.present===false){ dash(eth); }
+    else if(tether.up){
+      put(eth, tether.speed_mbps ? (tether.speed_mbps+' Mb') : 'UP');
+      eth.style.color = 'var(--tertiary)';
+    } else {
+      put(eth, 'DOWN');
+      eth.style.color = 'var(--error)';
+    }
+  }
+  // Camera Wi-Fi: associated + signal, so a weak AP is visible before video dies.
+  const wl = $('net-wlan');
+  if(wl){
+    if(cam.present===false){ dash(wl); }
+    else if(cam.up && wifi.signal_dbm!=null){
+      put(wl, Math.round(wifi.signal_dbm)+' dBm');
+      wl.style.color = wifi.signal_dbm > -70 ? 'var(--tertiary)' : 'var(--secondary)';
+    } else if(cam.up){
+      put(wl, 'UP'); wl.style.color = 'var(--tertiary)';
+    } else {
+      put(wl, 'DOWN'); wl.style.color = 'var(--error)';
+    }
+  }
+
+  // Undervoltage / throttling is a leading indicator of the Pi 3 dropping its
+  // Ethernet mid-dive, so surface it in the existing camera-warning channel.
+  const d = s.deep||{}, th = d.throttled;
+  if(th && (th.undervoltage_now || th.throttled_now)){
+    const warn = $('cam-warning');
+    if(warn && !warn.classList.contains('show')){
+      warn.textContent = '\u26a0 PI ' + (th.undervoltage_now ? 'UNDER-VOLTAGE' : 'THERMAL THROTTLING');
+      warn.classList.add('show');
+    }
+  }
+}

@@ -1,17 +1,27 @@
 [Unit]
-Description=Pin the WOLFANG camera route to wlan0 (spec §1)
+Description=Pin the WOLFANG camera route to wlan0 (spec 1)
 # The camera's DHCP must not own the default route (that belongs to eth0/tether).
 # This pins a host route so camera traffic always leaves via wlan0, and fails
-# loudly if wlan0 is missing — a misroute looks exactly like a camera hardware
+# loudly if wlan0 is missing - a misroute looks exactly like a camera hardware
 # fault and is easy to misdiagnose.
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/sbin/ip route replace 192.72.1.1/32 dev wlan0
-ExecStartPost=/bin/sh -c 'ip route get 192.72.1.1 | grep -q "dev wlan0" || (echo "CAMERA MISROUTE: 192.72.1.1 not via wlan0" >&2; exit 1)'
+# The camera is often powered on AFTER the Pi, so wlan0 may not be associated when
+# this first runs. As a plain one-shot it then failed permanently and the route was
+# never pinned - a dead camera for the rest of the session. Retry instead, and keep
+# retrying, so the route appears as soon as the camera does.
+Type=simple
+Restart=always
+RestartSec=15
+ExecStart=/bin/sh -c 'ip route replace ${NEPTUNE_CAMERA_IP}/32 dev ${NEPTUNE_CAM_IFACE} \
+  && ip route get ${NEPTUNE_CAMERA_IP} | grep -q "dev ${NEPTUNE_CAM_IFACE}" \
+  && echo "camera route pinned to ${NEPTUNE_CAM_IFACE}" \
+  && exec sleep infinity; \
+  echo "camera not routable via ${NEPTUNE_CAM_IFACE} yet (is it powered on?)" >&2; exit 1'
+Environment=NEPTUNE_CAMERA_IP=192.72.1.1
+Environment=NEPTUNE_CAM_IFACE=wlan0
 
 [Install]
 WantedBy=multi-user.target

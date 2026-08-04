@@ -27,6 +27,15 @@ function connect(){
     LOG.net('OPEN', url);
     setWsStatus('online');
     state.reconnectDelay=CONFIG.reconnect.baseMs;
+    // Vehicle commands NEVER queue (safety rule): anything the operator set while
+    // the link was down must not fire the instant it comes back. The ballast target
+    // is the one control that survives a dropout as state rather than as a message,
+    // so re-anchor it to the vehicle's ACTUAL level and let the operator command a
+    // new one deliberately.
+    const lvl = (state.realTel && typeof state.realTel.ballast_level==='number')
+              ? state.realTel.ballast_level : state.ballastLevel;
+    state.ballastTargetRaw = state.ballastTargetCmd = clamp(lvl||0, 0, 1);
+    LOG.net('ballast target re-anchored to actual', state.ballastTargetRaw.toFixed(2));
     if(window.REC && REC.enabled){ REC.log('ws_connect', {url}); REC.adoptSession(); }   // §1 adopt session on connect
   };
   ws.onmessage = (ev)=>{ handleMessage(ev.data); };

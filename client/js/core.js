@@ -77,6 +77,11 @@ const state = {
         remaining:null, isStreaming:'', degraded:false, menu:[],
         videoRes:'', awb:'', imageRes:'', ev:'' },   // live camera settings
   camWs:null, surfaced:false,   // surfaced = config/file ops unlocked (§7.4 gate)
+  // Per-subsystem liveness stamps (§3). Each subsystem proves itself independently,
+  // so one going quiet greys only its own controls. See status.js.
+  camOkAt:0,                    // last successful camera control-plane response
+  navOkAt:0,                    // last nav telemetry frame
+  sys:null, sysAt:0,            // last /api/system snapshot (real Pi health)
   source:'keyboard', /* keyboard | gamepad */
   gamepadIndex:null,
   keys:new Set(), padPrev:{},

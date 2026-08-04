@@ -1,45 +1,191 @@
 "use strict";
 /* ============================================================================
-   STATUS — the degradation model (architectural rule §3). Three states tracked
-   and shown SEPARATELY because they fail independently:
+   STATUS — the degradation model (architectural rule §3).
 
-     INTERNET  online | offline   → search, live tiles, new downloads
-     BACKEND   up | down          → telemetry, video, ALL vehicle commands
+   Every subsystem fails INDEPENDENTLY and is tracked separately, because on this
+   vehicle they really do fail one at a time:
+
+     INTERNET  online | offline        search, live tiles, new downloads
+     LINK      online | connecting     the ROV control WebSocket — vehicle commands
+               | offline
+     VIDEO     live | connecting       go2rtc WebRTC feed
+               | down
+     CAMERA    ok | degraded | down    the WOLFANG control plane (REC/PIC/settings)
+     NAV       ok | down               the nav WebSocket (dead reckoning feed)
      VEHICLE   armed | idle | fault
 
-   Backend down disables controls + live data ONLY — never the map, search, saved
-   areas, dive logs, or settings. One compact indicator; reconnection is automatic
-   and silent (net.js), so there are no retry buttons anywhere.
-   ============================================================================ */
-const STATUS = { internet:true, backend:false, vehicle:'idle', _last:'' };
+   A subsystem being down greys ONLY the controls that subsystem owns. Losing the
+   ROV link must not take the camera buttons, the map, the radar, saved areas,
+   dive logs, settings or the config panel with it — those are client-owned and
+   keep working with the Pi switched off.
 
-/* Commands are blocked when we INTEND to talk to a real Pi (a host is configured)
-   but the link is down. In pure disk/SIM mode there is no vehicle to endanger, so
-   the simulator's controls stay live. */
-function commandsBlocked(){ return !!state.wsBase && state.wsStatus!=='online'; }
+   Controls declare what they need in markup:  <button data-needs="link">
+   and this module marks exactly those elements. Reconnection is automatic and
+   silent (net.js), so there are no retry buttons anywhere.
+   ============================================================================ */
+const STATUS = {
+  internet: true,
+  link: 'offline',      // online | connecting | offline
+  video: 'down',        // live | connecting | down
+  cam: 'down',          // ok | degraded | down
+  nav: 'down',          // ok | down
+  vehicle: 'idle',
+  _last: '', _lastGate: ''
+};
+
+/* How long a subsystem may go quiet before we call it down. The camera control
+   plane pushes every ~15 s and is polled every 5 s, so it needs a wider window
+   than the 30 Hz control link. */
+const CAM_SILENT_MS = 20000;
+const NAV_SILENT_MS = 5000;
+
+/* VEHICLE COMMANDS ONLY. Blocked when we INTEND to talk to a real Pi (a host is
+   configured) but the control link is not up. In pure disk/SIM mode there is no
+   vehicle to endanger, so the simulator's controls stay live.
+   Anything that is not a vehicle command must NOT consult this. */
+function commandsBlocked(){ return !!state.wsBase && state.wsStatus !== 'online'; }
+
+/* Per-subsystem predicates — used by the UI gating and by each panel. */
+function linkUp(){   return state.wsStatus === 'online'; }
+function videoUp(){  return state.video === 'live'; }
+function camUp(){    return STATUS.cam === 'ok' || STATUS.cam === 'degraded'; }
+function navUp(){    return STATUS.nav === 'ok'; }
 
 STATUS.tick = function(){
+  const now = Date.now();
+
   STATUS.internet = navigator.onLine !== false;
-  STATUS.backend  = state.wsStatus==='online';
-  if(!state.wsBase)             STATUS.vehicle='sim';
-  else if(!STATUS.backend)      STATUS.vehicle='—';
-  else if(state.alarmLeak)      STATUS.vehicle='fault';
-  else                          STATUS.vehicle=state.armed?'armed':'idle';
 
-  // grey controls + live data ONLY when a real backend is expected but down
-  document.body.classList.toggle('backend-down', commandsBlocked());
+  // ---- ROV control link -------------------------------------------------
+  if(!state.wsBase)                     STATUS.link = 'sim';
+  else if(state.wsStatus === 'online')  STATUS.link = 'online';
+  else if(state.wsStatus === 'connecting') STATUS.link = 'connecting';
+  else                                  STATUS.link = 'offline';
 
-  const sig = STATUS.internet+'|'+STATUS.backend+'|'+STATUS.vehicle;
-  if(sig!==STATUS._last){ STATUS._last=sig; STATUS.render();
-    if(window.REC&&REC.enabled) REC.log('status', {internet:STATUS.internet, backend:STATUS.backend, vehicle:STATUS.vehicle}); }
+  // ---- video plane (independent of the control link) ---------------------
+  if(state.video === 'live')            STATUS.video = 'live';
+  else if(state.video === 'connecting' || state.video === 'reconfiguring') STATUS.video = 'connecting';
+  else                                  STATUS.video = 'down';
+
+  // ---- camera control plane (independent of both) ------------------------
+  if(!state.camOkAt || (now - state.camOkAt) > CAM_SILENT_MS) STATUS.cam = 'down';
+  else if(state.cam && state.cam.degraded)                    STATUS.cam = 'degraded';
+  else                                                        STATUS.cam = 'ok';
+
+  // ---- navigation feed ---------------------------------------------------
+  STATUS.nav = (state.navOkAt && (now - state.navOkAt) <= NAV_SILENT_MS) ? 'ok' : 'down';
+
+  // ---- vehicle -----------------------------------------------------------
+  if(!state.wsBase)             STATUS.vehicle = 'sim';
+  else if(STATUS.link !== 'online') STATUS.vehicle = '—';
+  else if(state.alarmLeak)      STATUS.vehicle = 'fault';
+  else                          STATUS.vehicle = state.armed ? 'armed' : 'idle';
+
+  STATUS.applyGates();
+
+  const sig = [STATUS.internet, STATUS.link, STATUS.video, STATUS.cam, STATUS.nav, STATUS.vehicle].join('|');
+  if(sig !== STATUS._last){
+    STATUS._last = sig;
+    STATUS.render();
+    if(window.REC && REC.enabled) REC.log('status', {
+      internet:STATUS.internet, link:STATUS.link, video:STATUS.video,
+      cam:STATUS.cam, nav:STATUS.nav, vehicle:STATUS.vehicle });
+  }
+};
+
+/* Mark ONLY the controls whose own subsystem is down. Everything without a
+   data-needs attribute is client-owned and is never gated. */
+STATUS.applyGates = function(){
+  const down = {
+    link:  commandsBlocked(),
+    cam:   !camUp(),
+    video: !videoUp(),
+    nav:   !navUp()
+  };
+  const gateSig = down.link+'|'+down.cam+'|'+down.video+'|'+down.nav;
+  if(gateSig === STATUS._lastGate) return;      // DOM churn only on an actual change
+  STATUS._lastGate = gateSig;
+
+  const b = document.body.classList;
+  b.toggle('link-down',       down.link);
+  b.toggle('link-connecting', STATUS.link === 'connecting');
+  b.toggle('cam-down',        down.cam);
+  b.toggle('video-down',      down.video);
+  b.toggle('nav-down',        down.nav);
+
+  document.querySelectorAll('[data-needs]').forEach(el=>{
+    const needs = (el.getAttribute('data-needs') || '').split(/\s+/).filter(Boolean);
+    const blocked = needs.some(n => down[n]);
+    el.classList.toggle('gated', blocked);
+    el.setAttribute('aria-disabled', blocked ? 'true' : 'false');
+  });
+
+  // The shared banner names what is actually down, instead of implying everything is.
+  const banner = $('controls-disabled');
+  if(banner){
+    const outs = [];
+    if(down.link)  outs.push('ROV LINK');
+    if(down.cam)   outs.push('CAMERA');
+    banner.textContent = outs.length ? (outs.join(' · ') + ' OFFLINE') : '';
+    banner.classList.toggle('show', outs.length > 0);
+  }
 };
 
 STATUS.render = function(){
-  const set=(id, cls, title)=>{ const el=$(id); if(!el) return; el.className='st-ic '+cls; el.title=title; };
-  set('st-net', STATUS.internet?'ok':'warn', 'Internet: '+(STATUS.internet?'online':'offline'));
-  set('st-pi',  STATUS.backend?'ok':'down',  'Backend: '+(STATUS.backend?'up':'down'));
-  const vcls = STATUS.vehicle==='fault'?'bad' : (STATUS.vehicle==='armed'?'ok' : (STATUS.vehicle==='sim'?'sim':'idle'));
-  set('st-veh', vcls, 'Vehicle: '+STATUS.vehicle);
+  const set = (id, cls, title)=>{ const el = $(id); if(!el) return; el.className = 'st-ic ' + cls; el.title = title; };
+  set('st-net', STATUS.internet ? 'ok' : 'warn', 'Internet: ' + (STATUS.internet ? 'online' : 'offline'));
+
+  const linkCls = STATUS.link === 'online' ? 'ok'
+                : STATUS.link === 'connecting' ? 'warn'
+                : STATUS.link === 'sim' ? 'sim' : 'down';
+  set('st-pi', linkCls, 'ROV link: ' + STATUS.link);
+
+  const vidCls = STATUS.video === 'live' ? 'ok' : (STATUS.video === 'connecting' ? 'warn' : 'down');
+  set('st-video', vidCls, 'Video: ' + STATUS.video);
+
+  const camCls = STATUS.cam === 'ok' ? 'ok' : (STATUS.cam === 'degraded' ? 'warn' : 'down');
+  set('st-cam', camCls, 'Camera control: ' + STATUS.cam);
+
+  const vcls = STATUS.vehicle === 'fault' ? 'bad'
+             : (STATUS.vehicle === 'armed' ? 'ok'
+             : (STATUS.vehicle === 'sim' ? 'sim' : 'idle'));
+  set('st-veh', vcls, 'Vehicle: ' + STATUS.vehicle);
 };
 
-function initStatus(){ setInterval(STATUS.tick, 500); STATUS.tick(); }
+/* ---- REAL Pi health (/api/system) -----------------------------------------
+   Its own poll on its own schedule, deliberately separate from the control
+   WebSocket: the Pi can be perfectly healthy while the ROV link is down, and the
+   operator needs to see that difference. One request in flight at a time, hard
+   abort deadline, capped backoff — a black-holed Pi must not accumulate requests. */
+let _sysPolling = false, _sysBackoff = 0, _sysTimer = null;
+function startSystemPoll(){
+  const tick = async ()=>{
+    if(_sysPolling) return;
+    _sysPolling = true;
+    const ctl = (typeof AbortController!=='undefined') ? new AbortController() : null;
+    const killer = ctl ? setTimeout(()=>{ try{ ctl.abort(); }catch(e){} }, 4000) : null;
+    try{
+      const r = await fetch((state.httpBase||'') + '/api/system', ctl ? {signal:ctl.signal} : undefined);
+      if(!r.ok) throw new Error('http '+r.status);
+      state.sys = await r.json();
+      state.sysAt = Date.now();
+      _sysBackoff = 0;
+      if(typeof renderSystem==='function') renderSystem(state.sys);
+    }catch(e){
+      _sysBackoff = Math.min(30000, _sysBackoff ? _sysBackoff*2 : 2000);
+      if(Date.now()-state.sysAt > 15000){ state.sys=null; if(typeof renderSystem==='function') renderSystem(null); }
+    }finally{
+      if(killer) clearTimeout(killer);
+      _sysPolling = false;
+      clearTimeout(_sysTimer);
+      _sysTimer = setTimeout(tick, Math.max(3000, _sysBackoff));
+    }
+  };
+  tick();
+}
+
+function initStatus(){
+  setInterval(STATUS.tick, 500);
+  STATUS.tick();
+  startSystemPoll();
+}

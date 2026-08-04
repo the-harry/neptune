@@ -1,43 +1,91 @@
 # Neptune — topside launcher (ROG Ally / Windows)
 
-**One thing to run.** Double‑click **`Neptune.bat`** the first time and it walks through every
-step itself, in order, skipping anything already done:
+**One thing to run.** Double‑click **`Neptune.bat`**. It walks through every step itself,
+skipping anything already done:
 
-1. **Pi address** — asks once for the Pi's IP and remembers it (in `neptune-host.txt`).
-2. **Desktop shortcut** — creates a **Neptune** icon on the desktop (trident) so future launches
-   are one click.
-3. **Local server** — starts a tiny static server on `127.0.0.1` (no admin, no Python, no deps).
-4. **Dashboard** — opens **Brave → Chrome → Edge** (first one found) **fullscreen**, pointed at
-   the Pi. **Alt+F4** closes the app and stops the server.
+1. **Find the Pi** — probes `192.168.42.1` (the fixed tether address), then `neptune.local`,
+   then whatever was saved last, and uses the **first one that actually answers `/api/status`**.
+2. **Desktop shortcut** — creates a **Neptune** icon (trident) on the desktop.
+3. **Local server** — a small *concurrent* static server on `127.0.0.1` (no admin, no deps).
+4. **Dashboard** — opens **Chrome → Edge** (first found) **fullscreen**, pointed at the Pi.
 
 The Pi is plain HTTP (sealed tether, no TLS), so there's **no certificate to deal with**.
 
-After the first run, just use the **Neptune** icon on the desktop. Everything re‑checks itself
-each launch, so it's safe to just click and trust it.
+The dashboard is **offline‑first**: if no Pi answers, it still opens and runs, and connects by
+itself the moment the Pi appears. A missing Pi is never a launch failure.
 
-This keeps the Pi **backend‑only** — the Ally serves its own dashboard from `localhost` (a secure
-origin, so geolocation/PWA work) and talks to the Pi's API/video over the tether.
+---
 
-## Set the Pi IP
+## ⚡ First time only: set up the tether
 
-Any one of these (first run will just ask you):
-- put the IP in **`neptune-host.txt`** (one line), or
-- `Neptune.bat -PiHost 192.168.1.88`, or
-- edit `$DefaultHost` at the top of `neptune.ps1`.
+A direct Ally↔Pi Ethernet cable has **no DHCP server**. Left on automatic, Windows falls back to
+a `169.254.x.x` link‑local address and the Pi does the same — so neither can find the other, and
+the dashboard shows "no connection" with the cable plugged in.
+
+Run this **once**, as Administrator (it will prompt):
+
+```powershell
+client\launch\tether-setup.ps1
+```
+
+It does three things:
+
+| | What | Why |
+|---|---|---|
+| 1 | Ethernet adapter → **`192.168.42.2/24`** | matches the Pi's fixed `192.168.42.1`; no DHCP, no mDNS needed |
+| 2 | **USB selective suspend → off** | Windows was power‑suspending the USB tether NIC mid‑session, which drops the link and looks exactly like the Pi dying |
+| 3 | **Adapter power‑down → disabled** | same reason, via the driver's own power management |
+
+Undo with `tether-setup.ps1 -Revert`. No gateway is set on the tether, so **Wi‑Fi stays your
+internet path** — the cable only reaches the Pi.
+
+> The Pi side is handled by `install.sh`, which pins `192.168.42.1/24` on `eth0` *in addition to*
+> DHCP. Plugged into a router it still takes a lease; on the tether it always holds that address.
+
+---
 
 ## Options
 
-- `Neptune.bat -NoKiosk` — fullscreen **app window** instead of locked kiosk (easier to Alt‑Tab
-  out of while setting up).
-- `Neptune.bat -Port 8090` — use a different local port if 8080 is taken.
-- `Neptune.bat -Setup` — do steps 1–3 only (shortcut + cert), don't launch.
+- `Neptune.bat -Stop` — **close a stuck dashboard and free the port.** Use this if anything
+  looks wedged; it is always safe.
+- `Neptune.bat -PiHost 192.168.42.1` — skip discovery, use this address.
+- `Neptune.bat -Port 8090` — different local port (it auto‑advances if one is busy anyway).
+- `Neptune.bat -Setup` — steps 1–2 only, don't launch.
+- `Neptune.bat -Kiosk` — locked kiosk window. **Not recommended on the handheld** (see below).
+
+## Why it is not a kiosk any more
+
+`--kiosk` removes every window control. On a device with **no physical keyboard**, "press Alt+F4
+to exit" is not an exit — once it was up, the only way out was a hard reboot. Two changes:
+
+- the default is now a **fullscreen app window**, which can be closed and Alt‑Tabbed away from;
+- the dashboard has an **EXIT button** (top right) that stops the local server and closes the window.
+
+## Getting unstuck
+
+The launcher is single‑instance and cleans up after itself, so this should not happen. If it ever
+does, `Neptune.bat -Stop` fixes it without a reboot:
+
+- It refuses to start a **second** server (a global mutex), instead of the old behaviour where the
+  second instance threw, hit a blocking `Read-Host`, and waited forever *behind* a fullscreen window.
+- It **kills leftover Neptune browser windows** before launching. A window orphaned by a previous
+  run owns Chromium's process‑singleton for this profile, so a new launch would hand its command
+  line to the orphan and exit instantly — which the old script read as "the browser closed" and
+  used to shut its own web server down ~180 ms after starting.
+- Liveness is decided by **scanning for browser processes using our own profile directory**, never
+  by the PID `Start-Process` returned (that PID legitimately exits immediately in the case above).
+- It only ever touches browsers launched with **our** `--user-data-dir`, so your own browser
+  windows are never closed.
+- On exit it stops the browser **and** the listener, so the port is always free for the next launch.
 
 ## Files
 
 | File | What |
 |---|---|
 | `Neptune.bat` | double‑click launcher (runs the script) |
-| `neptune.ps1` | the whole thing: shortcut + cert + server + fullscreen browser |
-| `neptune-host.txt` | your Pi's IP |
+| `neptune.ps1` | discovery + shortcut + concurrent static server + fullscreen browser |
+| `tether-setup.ps1` | **run once as admin** — fixed tether IP + USB power fixes |
+| `neptune-host.txt` | last known Pi address (discovery overwrites it when it finds a live one) |
 
-No Edge required — it prefers **Brave**, then Chrome, then Edge.
+**Chrome, then Edge.** Brave is no longer used. If Chrome isn't installed the launcher falls back
+to Edge, which is the same Chromium engine and works identically.

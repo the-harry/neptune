@@ -8,8 +8,9 @@ step, no dependencies.
 **This runs on the ROG Ally, not the Pi.** The Pi is backend-only. Double-click
 **[`launch/Neptune.bat`](launch/)** — it makes a desktop shortcut, starts a tiny local
 static server (a secure origin — geolocation and the PWA need one), and opens
-**Brave/Chrome/Edge fullscreen** at `http://localhost/?host=<pi-ip>`. The Pi is plain HTTP
-(sealed tether), so there's no cert to trust. See [`launch/README.md`](launch/README.md).
+**Chrome/Edge fullscreen** at `http://localhost:8080/?host=<pi-ip>`. The Pi is plain HTTP
+(sealed tether), so there's no cert to trust. Run `launch/tether-setup.ps1` once as admin
+first (fixed tether IP). See [`launch/README.md`](launch/README.md).
 
 `?host=<pi-ip>` is remembered (localStorage) and can also be set in the CONFIG panel.
 (Opening from `file://` is blocked — it has no secure context and can't reach the Pi;
@@ -36,11 +37,22 @@ checks backend availability for a dependency it doesn't have.
   directly** (they need *internet*, not the Pi); map imagery is fetched by the
   browser and served from the tile cache offline. The old `MAP AREAS: backend
   unreachable` / `search unavailable` anti-patterns are gone.
-- **Degradation model (`status.js`):** three independent states in one compact
-  indicator — **NET** (internet), **PI** (backend), **VEH** (vehicle). Backend
-  down greys the vehicle controls + live data **only**, with one shared reason
-  (`NO LINK · CONTROLS DISABLED`) — never the map, search, saved areas, logs, or
-  settings. Reconnection is automatic and silent (no retry buttons).
+- **Degradation model (`status.js`):** five states, tracked and shown separately
+  because they genuinely fail one at a time — **NET** (internet), **PI** (ROV control
+  link), **VIDEO** (go2rtc feed), **CAM** (WOLFANG control plane), **VEH** (vehicle).
+
+  Each control declares what it needs in markup (`data-needs="link"`, `"cam"`, …) and
+  **only** the controls owned by a down subsystem are greyed. Losing the ROV link no
+  longer disables the camera buttons, and nothing disables the map, radar, search,
+  saved areas, dive logs, the config panel or the input remapper — those are
+  client-owned and work with the Pi switched off.
+
+  This replaced a single `body.backend-down aside { pointer-events: none }` rule that
+  killed the entire control rail as one blob whenever the Pi was unreachable.
+
+  The Pi's own health is polled separately (`/api/system`), so CPU/RAM/disk and both
+  network interfaces stay visible even while the vehicle link is down. Reconnection is
+  automatic and silent everywhere (no retry buttons).
 - **Commands never queue (§4):** a `Command` fails fast and visibly when the
   backend is down — rejected, logged (`cmd_rejected`), never buffered or replayed
   (a late `throttle 100%` is a hazard). Only inert data (telemetry/log records)

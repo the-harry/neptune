@@ -9,7 +9,10 @@
 
    NEVER cache the vehicle: /api, /ws, /go2rtc, /stream* pass straight to the network so
    telemetry/video/commands always hit the real Pi (or fail fast — never a stale replay). */
-const SHELL = "neptune-shell-v1";
+/* Bump SHELL on every client release. It is the ONLY thing that evicts the old
+   app shell — a stale cache silently pins the dashboard to old JS, which makes a
+   deployed fix look like it did nothing. */
+const SHELL = "neptune-shell-v3";
 const TILES = "neptune-tiles";
 const SHELL_ASSETS = [
   "./", "index.html", "origin.html", "manifest.json", "icon.svg", "css/styles.css",
@@ -36,7 +39,7 @@ function isTile(url) {
 }
 function isVehicle(url) {                       // anything that IS the vehicle → never cache
   return /\/api\//.test(url) || /\/ws\//.test(url) || /\/go2rtc\//.test(url) ||
-         /\/stream/.test(url) || /\/clientlog/.test(url);
+         /\/stream/.test(url) || /\/clientlog/.test(url) || /\/__quit/.test(url);
 }
 
 self.addEventListener("fetch", (e) => {
@@ -64,8 +67,25 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // same-origin shell assets → cache-first, fall back to network
-  e.respondWith(caches.match(req).then((hit) => hit || fetch(req)));
+  // Same-origin shell assets -> NETWORK-FIRST with a cache fallback.
+  //
+  // Cache-first was wrong here: the launcher serves these from localhost, so the
+  // network is the local disk and costs nothing, while a cache hit pinned the app
+  // to whatever JS was current when the PWA was installed. Fixes to video.js or
+  // status.js could then never reach an installed dashboard. Network-first keeps
+  // the offline guarantee (the cache still answers when the server is gone) and
+  // makes updates land on the next launch.
+  e.respondWith(
+    fetch(req)
+      .then((res) => {
+        if (res && res.status === 200 && res.type === "basic") {
+          const copy = res.clone();
+          caches.open(SHELL).then((c) => c.put(req, copy)).catch(() => {});
+        }
+        return res;
+      })
+      .catch(() => caches.match(req).then((hit) => hit || caches.match("index.html")))
+  );
 });
 
 // SAVE OFFLINE (§2): the page asks the SW to warm the tile cache for a set of URLs.

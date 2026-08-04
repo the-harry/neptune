@@ -21,8 +21,11 @@ BRANCH="${NEPTUNE_BRANCH:-master}"
 INSTALL_DIR="${NEPTUNE_DIR:-/opt/neptune}"
 SERVICE_USER="${NEPTUNE_USER:-neptune}"
 TETHER_IFACE="${NEPTUNE_TETHER_IFACE:-eth0}"      # tether / default route
+TETHER_IP="${NEPTUNE_TETHER_IP:-192.168.42.1}"    # FIXED tether address (no DHCP on a direct link)
+TETHER_CIDR="${TETHER_IP}/24"
 CAM_IFACE="${NEPTUNE_CAM_IFACE:-wlan0}"           # camera AP
 CAMERA_IP="${NEPTUNE_CAMERA_IP:-192.72.1.1}"
+PI_HOSTNAME="${NEPTUNE_HOSTNAME:-neptune}"        # so neptune.local resolves
 GO2RTC_VERSION="${GO2RTC_VERSION:-v1.9.4}"
 
 log()  { printf '\033[1;36m[neptune]\033[0m %s\n' "$*"; }
@@ -39,7 +42,11 @@ esac
 log "installing system packages…"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq git python3 python3-venv python3-pip nginx curl ca-certificates iproute2
+# avahi-daemon publishes <hostname>.local so topside has a name to fall back on when
+# the fixed tether address has not come up yet. It is NOT the primary path (mDNS from
+# Windows over a link-local adapter is unreliable) - the static IP below is.
+apt-get install -y -qq git python3 python3-venv python3-pip nginx curl ca-certificates \
+                       iproute2 avahi-daemon iw wireless-tools
 
 # ---- 2. service user --------------------------------------------------------
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
@@ -47,7 +54,58 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
-# ---- 2b. camera WiFi (wlan0 joins the camera AP, never the default route) ---
+# ---- 2a. tether addressing (THE way topside) --------------------------------
+# A direct Ally<->Pi Ethernet run has NO DHCP SERVER. Left on DHCP the Pi ends up
+# with no IPv4 at all (or a random 169.254.x.x), so topside has nothing to aim at
+# and the dashboard shows "no connection" with the cable plugged in.
+#
+# Fix: give eth0 a FIXED address that is additive to DHCP. Plugged into a router
+# it still takes a lease (so this installer can reach the internet); on the tether
+# it always holds ${TETHER_IP}. Topside holds ${TETHER_IP%.*}.2.
+log "pinning the tether address ${TETHER_CIDR} on ${TETHER_IFACE}…"
+if command -v nmcli >/dev/null 2>&1; then
+  # Reuse the existing profile for this device if there is one, so an install run
+  # over Ethernet does not drop its own connection.
+  CON="$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | awk -F: -v d="$TETHER_IFACE" '$2==d{print $1; exit}')"
+  [ -n "$CON" ] || CON="$(nmcli -t -f NAME,TYPE connection show 2>/dev/null | awk -F: '$2=="802-3-ethernet"{print $1; exit}')"
+  if [ -n "$CON" ]; then
+    log "updating NetworkManager profile '$CON'"
+  else
+    CON="neptune-tether"
+    nmcli connection add type ethernet ifname "$TETHER_IFACE" con-name "$CON" >/dev/null 2>&1 || true
+  fi
+  # method=auto keeps DHCP working on a router; ipv4.addresses adds the fixed one
+  # on top; may-fail=yes means the link still comes up when no DHCP answers.
+  #
+  # dhcp-timeout matters more than it looks: on a direct tether there is no DHCP
+  # server at all, and with the default (infinite) timeout NetworkManager parks the
+  # device in "connecting (getting IP configuration)" forever. Cap it so the profile
+  # settles onto the fixed address instead of retrying a lease that will never come.
+  nmcli connection modify "$CON" \
+      ipv4.method auto \
+      ipv4.addresses "$TETHER_CIDR" \
+      ipv4.may-fail yes \
+      ipv4.dhcp-timeout 15 \
+      connection.autoconnect yes >/dev/null 2>&1 \
+    || warn "could not update '$CON' — the fallback unit below still pins the address"
+  nmcli connection up "$CON" >/dev/null 2>&1 || true
+else
+  warn "no nmcli — relying on neptune-tether.service to hold ${TETHER_IP}"
+fi
+# Apply immediately too, so this run can report the right address.
+ip link set "$TETHER_IFACE" up 2>/dev/null || true
+ip addr replace "$TETHER_CIDR" dev "$TETHER_IFACE" 2>/dev/null || true
+
+# ---- 2b. hostname + mDNS (fallback discovery path) --------------------------
+if [ "$(hostname)" != "$PI_HOSTNAME" ]; then
+  log "setting hostname to '${PI_HOSTNAME}' (publishes ${PI_HOSTNAME}.local)…"
+  hostnamectl set-hostname "$PI_HOSTNAME" 2>/dev/null || echo "$PI_HOSTNAME" > /etc/hostname
+  grep -q "127.0.1.1[[:space:]]\+${PI_HOSTNAME}" /etc/hosts 2>/dev/null \
+    || printf '127.0.1.1\t%s\n' "$PI_HOSTNAME" >> /etc/hosts
+fi
+systemctl enable --now avahi-daemon >/dev/null 2>&1 || warn "avahi-daemon not available — ${PI_HOSTNAME}.local will not resolve"
+
+# ---- 2c. camera WiFi (wlan0 joins the camera AP, never the default route) ---
 # Solves the §1 routing constraint at the source: ipv4.never-default keeps the
 # camera hop off the default route so the tether (eth0) stays the way topside.
 CAM_SSID="${NEPTUNE_CAM_SSID:-ActionCam_b981}"
@@ -121,7 +179,9 @@ done
 # ---- 5. python venv + deps --------------------------------------------------
 log "setting up python venv + dependencies…"
 VENV="$INSTALL_DIR/api/.venv"
-python3 -m venv "$VENV"
+# --system-site-packages so the apt-installed python3-picamera2 (which is NOT
+# pip-installable) is importable from inside the venv, as the README instructs.
+python3 -m venv --system-site-packages "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip
 # Pillow is bench-only (synthetic camera) and unused on the Pi; skip it here.
 grep -viE '^\s*Pillow' "$INSTALL_DIR/api/requirements.txt" > /tmp/neptune-reqs.txt
@@ -149,14 +209,17 @@ install_go2rtc() {
 }
 install_go2rtc
 
-# ---- 7. fill the tether IP into go2rtc.yaml ---------------------------------
-TETHER_IP="$(ip -4 -o addr show "$TETHER_IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1 || true)"
-sed -i "s#192.72.1.1#${CAMERA_IP}#g" "$INSTALL_DIR/deploy/go2rtc.yaml"   # camera RTSP host
-if [ -n "$TETHER_IP" ]; then
-  log "tether ($TETHER_IFACE) IP = $TETHER_IP"
-  sed -i "s/<PI_TETHER_IP>/$TETHER_IP/g" "$INSTALL_DIR/deploy/go2rtc.yaml"
-else
-  warn "could not detect $TETHER_IFACE IP — edit $INSTALL_DIR/deploy/go2rtc.yaml (<PI_TETHER_IP>) by hand"
+# ---- 7. stamp addresses into go2rtc.yaml ------------------------------------
+# The WebRTC candidate must be an address the Ally can actually reach. That is the
+# FIXED tether IP now, not whatever eth0 happened to hold at install time - the old
+# behaviour stamped the home-LAN address (or left the literal placeholder when eth0
+# had no IPv4), and ICE then failed forever with no way to re-stamp in the field.
+sed -i "s#192.72.1.1#${CAMERA_IP}#g" "$INSTALL_DIR/deploy/go2rtc.yaml"    # camera RTSP host
+sed -i "s#<PI_TETHER_IP>#${TETHER_IP}#g" "$INSTALL_DIR/deploy/go2rtc.yaml" # legacy placeholder
+sed -i "s#^\( *- \)[0-9.]\+:8555#\1${TETHER_IP}:8555#" "$INSTALL_DIR/deploy/go2rtc.yaml"
+log "go2rtc WebRTC candidate = ${TETHER_IP}:8555"
+if grep -q '<PI_TETHER_IP>' "$INSTALL_DIR/deploy/go2rtc.yaml"; then
+  die "go2rtc.yaml still contains <PI_TETHER_IP> — refusing to start a video plane that cannot work"
 fi
 
 # ---- 8. nginx (backend-only, PLAIN HTTP: reverse proxy only, no SPA, no TLS) -
@@ -174,11 +237,15 @@ nginx -t
 log "installing systemd units…"
 # Copy the repo's units, but rewrite paths/ifaces to the real values here so the
 # units always match this host.
-for unit in neptune-api go2rtc wolfang-route; do
+for unit in neptune-api go2rtc wolfang-route neptune-tether; do
   install -m 0644 "$INSTALL_DIR/deploy/systemd/${unit}.service" "/etc/systemd/system/${unit}.service"
 done
 # patch the route unit for the configured camera iface/IP
 sed -i "s#192.72.1.1#${CAMERA_IP}#g; s#wlan0#${CAM_IFACE}#g" /etc/systemd/system/wolfang-route.service
+# patch the tether unit for the configured iface/address
+sed -i "s#NEPTUNE_TETHER_IFACE=eth0#NEPTUNE_TETHER_IFACE=${TETHER_IFACE}#; \
+        s#NEPTUNE_TETHER_CIDR=192.168.42.1/24#NEPTUNE_TETHER_CIDR=${TETHER_CIDR}#" \
+    /etc/systemd/system/neptune-tether.service
 # ensure paths + user in the api/go2rtc units match this install
 sed -i "s#/opt/neptune#${INSTALL_DIR}#g; s#User=neptune#User=${SERVICE_USER}#g" \
     /etc/systemd/system/neptune-api.service /etc/systemd/system/go2rtc.service
@@ -191,21 +258,40 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 # update (enable --now would NOT restart an already-running service).
 log "enabling on boot + (re)starting services…"
 systemctl daemon-reload
-systemctl enable wolfang-route.service go2rtc.service neptune-api.service nginx >/dev/null 2>&1 || true
-systemctl restart wolfang-route.service || warn "wolfang-route failed (is $CAM_IFACE up?)"
-systemctl restart go2rtc.service        || warn "go2rtc failed to start"
-systemctl restart neptune-api.service   || warn "neptune-api failed to start"
-systemctl restart nginx                 || warn "nginx failed to (re)start"
+systemctl enable neptune-tether.service wolfang-route.service go2rtc.service neptune-api.service nginx >/dev/null 2>&1 || true
+# Each subsystem is started independently and a failure in one never aborts the
+# others - the dashboard is built to show them individually up or down.
+systemctl restart neptune-tether.service || warn "neptune-tether failed (tether address may be unstable)"
+systemctl restart wolfang-route.service  || warn "wolfang-route failed (is $CAM_IFACE up? camera powered on?)"
+systemctl restart go2rtc.service         || warn "go2rtc failed to start (video only)"
+systemctl restart neptune-api.service    || warn "neptune-api failed to start"
+systemctl restart nginx                  || warn "nginx failed to (re)start"
 
 # ---- 12. report -------------------------------------------------------------
 echo
 log "done. service status:"
-for s in wolfang-route go2rtc neptune-api nginx; do
+for s in neptune-tether wolfang-route go2rtc neptune-api nginx; do
   printf '  %-16s %s\n' "$s" "$(systemctl is-active "$s" 2>/dev/null || echo inactive)"
 done
 echo
+log "addresses on ${TETHER_IFACE}:"
+ip -4 -o addr show "$TETHER_IFACE" 2>/dev/null | awk '{printf "  %s\n", $4}' || true
+# Fail loudly if the one thing topside depends on did not stick. A silent miss here
+# is exactly what produced "no connection with the cable plugged in".
+if ip -4 -o addr show "$TETHER_IFACE" 2>/dev/null | grep -q "${TETHER_IP}/"; then
+  log "tether address ${TETHER_IP} is UP on ${TETHER_IFACE}"
+else
+  warn "tether address ${TETHER_IP} is NOT on ${TETHER_IFACE} — topside will not find this Pi."
+  warn "  check: nmcli connection show '${CON:-Wired connection 1}' | grep ipv4"
+  warn "  and:   systemctl status neptune-tether"
+fi
+echo
 log "this Pi is BACKEND-ONLY (plain HTTP) — the dashboard runs topside on the ROG Ally."
-log "control API: http://${TETHER_IP:-<pi>}/api/status   (preflight: POST /api/preflight)"
-log "video      : http://${TETHER_IP:-<pi>}/stream/ (go2rtc stream 'sub')"
-log "topside    : run client/launch/Neptune.bat on the Ally, Pi = ${TETHER_IP:-<pi>}"
+log "control API : http://${TETHER_IP}/api/status    system health: /api/system"
+log "video       : go2rtc stream 'sub' — WebRTC candidate ${TETHER_IP}:8555"
+log "topside     : run client/launch/Neptune.bat on the Ally (it finds ${TETHER_IP} by itself)"
+echo
+log "ON THE ALLY, once: give its Ethernet adapter the matching fixed address —"
+log "  netsh interface ip set address name=\"Ethernet\" static ${TETHER_IP%.*}.2 255.255.255.0"
+log "  (client/launch/tether-setup.ps1 does this for you, as Administrator)"
 log "re-run this installer any time to update."

@@ -39,10 +39,17 @@ first run):
 curl -fsSL https://raw.githubusercontent.com/the-harry/neptune/master/install.sh | sudo bash
 ```
 
-**On the ROG Ally**, double‑click **`client/launch/Neptune.bat`**. It sets everything up in
-order — asks for the Pi IP once, makes a desktop **Neptune** shortcut, starts a tiny local
-static server, and opens **Brave/Chrome/Edge fullscreen** pointed at the Pi.
-After that, just use the desktop icon. Details → [`client/launch/README.md`](client/launch/README.md).
+**On the ROG Ally**, run **`client/launch/tether-setup.ps1` once as Administrator** (fixed tether
+IP + stops Windows power‑suspending the USB Ethernet adapter), then double‑click
+**`client/launch/Neptune.bat`**. It sets everything up in order — finds the Pi by probing
+`192.168.42.1` → `neptune.local` → last known, makes a desktop **Neptune** shortcut, starts a
+small concurrent local static server, and opens **Chrome/Edge fullscreen** pointed at the Pi.
+After that, just use the desktop icon. If anything ever looks stuck: **`Neptune.bat -Stop`**.
+Details → [`client/launch/README.md`](client/launch/README.md).
+
+> **The tether is a fixed point‑to‑point link: Pi `192.168.42.1`, Ally `192.168.42.2`.** A direct
+> cable has no DHCP server, so anything relying on automatic addressing (or on `.local` mDNS,
+> which Windows resolves only intermittently over a link‑local adapter) will not find the Pi.
 
 The Pi is **backend‑only**; the dashboard runs on the Ally from `localhost` (a secure origin, so
 geolocation and the PWA work) and talks to the Pi over the tether. Full Pi walkthrough (imaging,
@@ -115,18 +122,38 @@ Wi‑Fi in ⚙️ settings (use your **router** Wi‑Fi, not the camera's).
    It installs the API + a Python venv, downloads go2rtc, joins `ActionCam_b981` on `wlan0`
    (never‑default), and wires nginx (plain HTTP) + systemd on boot. No TLS/cert — it's a sealed
    two‑device tether.
-4. **Verify the backend:** `http://neptune.local/api/status` (JSON) and `/stream/` for video.
-   `http://neptune.local/` itself just returns a status line — the dashboard runs topside, not
-   here. When you move `eth0` to the **tether**, re‑run the installer once so it re‑stamps the
-   real tether IP into go2rtc. Then run the dashboard on the Ally (see **Quick start** above).
+4. **Verify the backend:** `http://192.168.42.1/api/status` (camera JSON) and
+   **`http://192.168.42.1/api/system`** — real Pi hardware + network health (CPU temp/load, RAM,
+   disk, uptime, per‑interface link state and throughput, service states, undervoltage flags).
+   `http://192.168.42.1/` itself just returns a status line — the dashboard runs topside, not here.
+   The installer pins the tether address, so there is **nothing to re‑stamp** when you move `eth0`
+   from the router to the tether. Then run the dashboard on the Ally (see **Quick start** above).
 
 Overrides (env): `NEPTUNE_REPO`, `NEPTUNE_BRANCH`, `NEPTUNE_TETHER_IFACE` (`eth0`),
-`NEPTUNE_CAM_IFACE` (`wlan0`), `NEPTUNE_CAM_SSID` / `NEPTUNE_CAM_PSK`, `NEPTUNE_CAMERA_IP`.
+`NEPTUNE_TETHER_IP` (`192.168.42.1`), `NEPTUNE_CAM_IFACE` (`wlan0`),
+`NEPTUNE_CAM_SSID` / `NEPTUNE_CAM_PSK`, `NEPTUNE_CAMERA_IP`, `NEPTUNE_HOSTNAME` (`neptune`).
 
 ```bash
-systemctl status neptune-api go2rtc nginx wolfang-route   # health
-journalctl -u neptune-api -f                               # logs
+systemctl status neptune-api go2rtc nginx wolfang-route neptune-tether   # health
+journalctl -u neptune-api -f                                              # logs
+curl -s http://192.168.42.1/api/system | python3 -m json.tool             # real Pi health
 ```
+
+## 🧩 Independent subsystems
+
+Every part is separately monitored and **fails on its own** — the dashboard greys only the controls
+that belong to whatever is down, and keeps everything else live:
+
+| Subsystem | Down means | Still works |
+|---|---|---|
+| **ROV link** (`/ws/control`) | vehicle commands rejected (they *never* queue) | map, radar, saved areas, dive logs, config, camera buttons |
+| **Video** (go2rtc WebRTC) | NO FEED overlay on the video panel only | everything else, including camera REC/PIC |
+| **Camera control** (WOLFANG CGI) | REC/PIC greyed | piloting, video, map |
+| **Nav** (`/ws/nav`) | no live track (needs an origin fix first) | piloting, video, camera |
+| **Internet** | no place search / new tile downloads | saved offline areas |
+
+The Pi's own health (`/api/system`) is polled independently of all of them, so you can still see
+CPU, RAM, disk and both network interfaces when the vehicle link is down.
 
 ## ⚠️ Safety
 

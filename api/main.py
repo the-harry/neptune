@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-import metrics as sysmetrics
+import sysinfo
 from rov_camera import get_camera, mjpeg_stream
 from camera.app import create_camera_service
 from camera.service import build_router as build_camera_router
@@ -76,7 +76,7 @@ async def _control_loop(app: FastAPI) -> None:
     mgr: ConnectionManager = app.state.manager
     bb: BlackBox = app.state.bb
     period = 1.0 / max(1.0, settings.telemetry_hz)
-    metrics_cache = sysmetrics.snapshot()
+    metrics_cache = sysinfo.telemetry_fields()
     last_metrics = time.monotonic()
     last = time.monotonic()
     seq = 0
@@ -91,7 +91,12 @@ async def _control_loop(app: FastAPI) -> None:
         rov.watchdog(now)
 
         if now - last_metrics >= settings.metrics_period_s:
-            metrics_cache = sysmetrics.snapshot()
+            # Pure /proc + /sys reads — microseconds, safe on the loop. The slow
+            # probes (vcgencmd, systemctl, iw) run on their own background task.
+            try:
+                metrics_cache = sysinfo.telemetry_fields()
+            except Exception as exc:  # noqa: BLE001 — health must never stop telemetry
+                log.warning("sysinfo failed: %s", exc)
             last_metrics = now
 
         if mgr.count:
@@ -120,9 +125,23 @@ async def lifespan(app: FastAPI):
     app.state.manager = ConnectionManager()
     app.state.camera = get_camera()
     app.state.loop_task = asyncio.create_task(_control_loop(app))
-    await app.state.camera_svc.start()   # WOLFANG control plane (degrades if no camera)
-    await app.state.nav_svc.start()      # navigation: dead reckoning + dive logging
-    log.info("NEPTUNE API up — hardware=%s camera=%s + WOLFANG control plane",
+    app.state.sys_probe = sysinfo.DeepProbe()
+    await app.state.sys_probe.start()    # slow health probes, off the hot path
+
+    # Subsystems start CONCURRENTLY and independently: a missing camera must not
+    # delay the control plane coming up, and one failing start must not abort the
+    # others. Each failure is logged and that subsystem alone stays degraded.
+    async def _start(name, coro):
+        try:
+            await coro
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s failed to start (%s) — continuing without it", name, exc)
+
+    await asyncio.gather(
+        _start("camera control plane", app.state.camera_svc.start()),
+        _start("navigation", app.state.nav_svc.start()),
+    )
+    log.info("NEPTUNE API up — vehicle-hw=%s camera=%s",
              "mock" if app.state.hw.is_mock else "real", app.state.camera.kind)
     try:
         yield
@@ -130,6 +149,8 @@ async def lifespan(app: FastAPI):
         app.state.loop_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await app.state.loop_task
+        with contextlib.suppress(Exception):
+            await app.state.sys_probe.stop()
         with contextlib.suppress(Exception):
             await app.state.camera_svc.stop()
         with contextlib.suppress(Exception):
@@ -168,6 +189,7 @@ app.add_middleware(
 
 
 @app.get("/healthz")
+@app.get("/api/healthz")
 def healthz() -> JSONResponse:
     return JSONResponse({
         "status": "ok",
@@ -175,6 +197,25 @@ def healthz() -> JSONResponse:
         "camera": app.state.camera.kind,
         "clients": app.state.manager.count,
     })
+
+
+@app.get("/api/system")
+def system() -> JSONResponse:
+    """Real Pi hardware + network health.
+
+    Independent of the vehicle and the camera: this answers even when the ROV
+    hardware is a stub and the camera is unplugged, which is exactly when the
+    operator most needs to know the Pi itself is alive and what the tether is doing.
+    """
+    try:
+        snap = sysinfo.snapshot(getattr(app.state, "sys_probe", None))
+    except Exception as exc:  # noqa: BLE001 — degrade, never 500 the health endpoint
+        log.warning("system snapshot failed: %s", exc)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=200)
+    snap["ok"] = True
+    snap["vehicle_hw"] = "mock" if app.state.hw.is_mock else "real"
+    snap["clients"] = app.state.manager.count
+    return JSONResponse(snap)
 
 
 @app.get("/stream.mjpg")

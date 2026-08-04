@@ -439,13 +439,28 @@ body.map-expanded #area-select.on{display:flex}
 .st-ic.sim {color:var(--primary)}
 @keyframes stpulse{50%{opacity:.35}}
 
-/* ---- backend-down: grey the vehicle controls + live-data ONLY (§3/§4) ---- */
-body.backend-down aside{opacity:.4;pointer-events:none;filter:grayscale(.5)}
-body.backend-down #video-layer{filter:grayscale(.6) brightness(.7)}
-#controls-disabled{display:none;top:76px;right:16px;font-family:var(--font-sans);font-size:11px;font-weight:800;
+/* ---- per-subsystem degradation (§3/§4) ------------------------------------
+   Only the controls owned by a DOWN subsystem are greyed. The rail itself is
+   never blanket-disabled: the map, radar, saved areas, dive logs, config panel
+   and the input remapper are client-owned and keep working with the Pi off.
+   Controls opt in with data-needs="link" / "cam" / "video" / "nav".          */
+[data-needs].gated{opacity:.35;filter:grayscale(.6);pointer-events:none;cursor:not-allowed}
+/* A control that is merely reconnecting pulses instead of looking dead. */
+body.link-connecting [data-needs~="link"].gated{opacity:.5;filter:grayscale(.3);animation:stpulse 1.4s ease-in-out infinite}
+/* Video is dimmed only when the VIDEO plane is down - never because the ROV link dropped. */
+body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
+
+#controls-disabled{display:none;top:76px;right:126px;font-family:var(--font-sans);font-size:11px;font-weight:800;
   letter-spacing:.08em;padding:6px 12px;border-radius:.4rem;color:var(--error);border:1px solid var(--error);
   background:color-mix(in srgb,var(--error) 12%,rgba(12,1,24,.9));pointer-events:none}
-body.backend-down #controls-disabled{display:block}
+#controls-disabled.show{display:block}
+
+/* EXIT - the only way off a fullscreen dashboard on a handheld with no keyboard. */
+#btn-exit{position:fixed;top:8px;right:118px;z-index:60;width:30px;height:30px;border-radius:.4rem;
+  display:flex;align-items:center;justify-content:center;font-family:var(--font-sans);font-size:15px;
+  font-weight:700;line-height:1;color:var(--on-surface-variant);border:1px solid var(--outline-variant);
+  background:rgba(12,1,24,.72);cursor:pointer}
+#btn-exit:active{background:var(--error);color:#fff;border-color:var(--error)}
 
 /* ---- STALE DATA badge (§4.2 — operator was looking at old telemetry) ---- */
 #stale-badge{top:76px;left:calc(50% - 55px);transform:translateX(-50%);display:none;

@@ -99,9 +99,20 @@ class Telemetry(BaseModel):
     battery_v: float
     signal: int
     link_ms: Optional[int] = None
-    cpu_c: float
-    ram_pct: int
-    disk_gb: float
+    # --- Pi system health (REAL readings; see api/sysinfo.py) ------------------
+    # All Optional on purpose: None means "could not read this probe" and renders
+    # as "--" topside. A real 0 (e.g. an idle CPU) stays a 0 and is never faked.
+    cpu_c: Optional[float] = None
+    cpu_pct: Optional[float] = None
+    ram_pct: Optional[float] = None
+    disk_gb: Optional[float] = None
+    uptime_s: Optional[float] = None
+    net_tether_up: Optional[bool] = None
+    net_tether_mbps: Optional[int] = None
+    net_cam_up: Optional[bool] = None
+    net_cam_signal: Optional[float] = None
+    # True only when the VEHICLE hardware is simulated. Pi metrics above are
+    # always real regardless of this flag.
     mock: bool
 
 

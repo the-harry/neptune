@@ -239,16 +239,27 @@ function setMapLibreArea(name){
   }catch(e){ LOG.warn('MapLibre area layers:', e && e.message); }
 }
 
+let _navBackoff = 0, _navTimer = null;
 function connectNavWs(){
   const base = state.wsBase || (location.host ? (location.protocol==='https:'?'wss':'ws')+'://'+location.host : '');
   if(!base) return;
-  let ws; try{ ws=new WebSocket(base + CONFIG.map.navWs); }catch(e){ return; }
+  if(MAP.navWs){ try{ MAP.navWs.onclose=null; MAP.navWs.close(); }catch(e){} MAP.navWs=null; }
+  let ws; try{ ws=new WebSocket(base + CONFIG.map.navWs); }catch(e){ scheduleNavWs(); return; }
   MAP.navWs=ws;
+  ws.onopen=()=>{ _navBackoff=0; };
   ws.onmessage=(ev)=>{ let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
-    if(m.type==='nav'){ MAP.x=m.x_m; MAP.y=m.y_m; MAP.hdg=m.heading_deg; MAP.depth=m.depth_m; MAP.lastNavAt=performance.now(); pushTrack(m.x_m,m.y_m,m.depth_m); }
+    if(m.type==='nav'){ MAP.x=m.x_m; MAP.y=m.y_m; MAP.hdg=m.heading_deg; MAP.depth=m.depth_m;
+      MAP.lastNavAt=performance.now(); state.navOkAt=Date.now(); pushTrack(m.x_m,m.y_m,m.depth_m); }
   };
-  ws.onclose=()=>{ MAP.navWs=null; setTimeout(connectNavWs,3000); };
+  ws.onclose=()=>{ MAP.navWs=null; scheduleNavWs(); };
   ws.onerror=()=>{ try{ ws.close(); }catch(e){} };
+}
+/* Capped backoff behind a single timer. A flat 3 s retry with no re-entry guard
+   stacked one reconnect chain per close, and they never collapsed back. */
+function scheduleNavWs(){
+  if(_navTimer) return;
+  _navBackoff = Math.min(20000, _navBackoff ? _navBackoff*1.7 : 2000);
+  _navTimer = setTimeout(()=>{ _navTimer=null; connectNavWs(); }, _navBackoff);
 }
 function pushTrack(x,y,depth){
   if(MAP.replay || !MAP.hasOrigin) return;                // no track without an origin (§6); frozen during replay

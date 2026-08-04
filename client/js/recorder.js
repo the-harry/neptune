@@ -70,6 +70,17 @@ function _idbTrim(){                                   // enforce the ring cap, 
   const over=REC.count-CONFIG.recorder.maxEvents;
   _idbOldest(over).then(rows=>{ if(rows.length){ _idbDelete(rows.map(r=>r.k)); REC.count-=rows.length; } });
 }
+/* The ring cap is enforced against REC.count, which used to start at 0 on every
+   page load while the store persisted. The cap was therefore never reached and the
+   blackbox grew without bound for the life of the device. Count what is actually
+   on disk at startup so the cap means something. */
+function _idbCount(){
+  return new Promise((resolve)=>{
+    try{ const tx=REC.db.transaction('events','readonly'); const r=tx.objectStore('events').count();
+      r.onsuccess=()=>resolve(r.result||0); r.onerror=()=>resolve(0);
+    }catch(e){ resolve(0); }
+  });
+}
 function _idbAll(){
   return new Promise((resolve)=>{
     const out=[];
@@ -171,25 +182,41 @@ REC.tickStaleness = function(){
 };
 
 /* ---- upload loop (§5): batched, capped, backing off ---- */
-function _bwBudgetOk(bytes){
+/* Remaining upload budget in bytes for the current 1 s window. */
+function _bwBudgetLeft(){
   const now=_mono(), winMs=1000;
   REC.bytesWindow=REC.bytesWindow.filter(x=>now-x.t<winMs);
   const used=REC.bytesWindow.reduce((a,b)=>a+b.n,0);
-  return used+bytes <= CONFIG.recorder.uploadCapBps/8;         // bytes/sec = bps/8
+  return (CONFIG.recorder.uploadCapBps/8) - used;              // bytes/sec = bps/8
 }
 async function _uploadOnce(){
   if(REC.uploading || !REC.enabled) return;
   if(state.wsStatus!=='online' && !navigator.onLine) return;    // no point; keep buffering (backlog flushes on reconnect)
   REC.uploading=true;
   try{
-    const rows = REC.db ? await _idbOldest(CONFIG.recorder.uploadMaxBatch)
-                        : REC.mem.slice(0,CONFIG.recorder.uploadMaxBatch).map((v,i)=>({k:i,v}));
+    // Size the batch to the REMAINING budget instead of building a full batch and
+    // then rejecting it. A 200-event batch is always larger than the 8 kB/s cap, so
+    // the old check failed every single time: nothing was ever uploaded, nothing was
+    // ever deleted, and the on-disk ring grew forever while claiming backpressure.
+    const budget = _bwBudgetLeft();
+    if(budget <= 512){ return; }                                  // wait for the window to roll
+    const APPROX_BYTES_PER_EVENT = 250;
+    const room = Math.max(1, Math.floor(budget / APPROX_BYTES_PER_EVENT));
+    const want = Math.min(CONFIG.recorder.uploadMaxBatch, room);
+
+    let rows = REC.db ? await _idbOldest(want)
+                      : REC.mem.slice(0,want).map((v,i)=>({k:i,v}));
     if(!rows.length){ REC.backoffMs=0; return; }
     const now=_mono();
-    const records=rows.map(r=>({ ...r.v, up_lag_ms:Math.round(now-(r.v.t||now)) }));   // §5 — how long it waited
-    const body=JSON.stringify({ session_id:REC.session_id, records });
+    let records=rows.map(r=>({ ...r.v, up_lag_ms:Math.round(now-(r.v.t||now)) }));   // §5 — how long it waited
+    let body=JSON.stringify({ session_id:REC.session_id, records });
+    // Trim if the real encoding overshot the estimate, so we always make progress.
+    while(body.length > budget && rows.length > 1){
+      rows = rows.slice(0, Math.max(1, Math.floor(rows.length/2)));
+      records = rows.map(r=>({ ...r.v, up_lag_ms:Math.round(now-(r.v.t||now)) }));
+      body = JSON.stringify({ session_id:REC.session_id, records });
+    }
     const bytes=body.length;
-    if(!_bwBudgetOk(bytes)){ REC.log('log_backpressure', {reason:'bandwidth_cap', pending:REC.count}); return; }  // §5 cap hit
     const r=await fetch((state.httpBase||'')+CONFIG.recorder.clientlog, {method:'POST', headers:{'Content-Type':'application/json'}, body});
     if(!r.ok) throw new Error('http '+r.status);
     REC.bytesWindow.push({t:now, n:bytes});
@@ -250,6 +277,11 @@ REC.init = async function(){
   if(!CONFIG.recorder.enabled){ return; }
   REC.enabled=true;
   REC.db=await _openDB();
+  // Adopt what is already on disk, then enforce the cap immediately — otherwise a
+  // device that has been flying for weeks starts every session believing the ring
+  // is empty and never trims.
+  if(REC.db){ REC.count = await _idbCount(); _idbTrim();
+    LOG.state('blackbox ring holds', REC.count, 'events'); }
   // environment snapshot (§4.1)
   REC.log('env', {
     ua:navigator.userAgent, screen:[screen.width, screen.height], dpr:window.devicePixelRatio,

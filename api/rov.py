@@ -178,8 +178,16 @@ class RovState:
             battery_v=round(self.hw.read_voltage(), 1),
             signal=self.hw.link_quality(),
             link_ms=link_ms,
-            cpu_c=float(metrics.get("cpu_c", 0.0)),
-            ram_pct=int(metrics.get("ram_pct", 0)),
-            disk_gb=float(metrics.get("disk_gb", 0.0)),
+            # Pi system health passes through verbatim — including None, which means
+            # "probe unavailable". Never coerce a missing reading into a plausible 0.
+            cpu_c=metrics.get("cpu_c"),
+            cpu_pct=metrics.get("cpu_pct"),
+            ram_pct=metrics.get("ram_pct"),
+            disk_gb=metrics.get("disk_gb"),
+            uptime_s=metrics.get("uptime_s"),
+            net_tether_up=metrics.get("net_tether_up"),
+            net_tether_mbps=metrics.get("net_tether_mbps"),
+            net_cam_up=metrics.get("net_cam_up"),
+            net_cam_signal=metrics.get("net_cam_signal"),
             mock=self.hw.is_mock,
         )
