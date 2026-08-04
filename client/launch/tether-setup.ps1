@@ -179,16 +179,32 @@ try {
   $geoKey = "$chromePol\GeolocationAllowedForUrls"
   if (-not (Test-Path $geoKey)) { New-Item -Path $geoKey -Force | Out-Null }
   foreach ($v in (Get-Item $geoKey).Property) { Remove-ItemProperty -Path $geoKey -Name $v -ErrorAction SilentlyContinue }
-  New-ItemProperty -Path $geoKey -Name "1" -Value "http://localhost"  -PropertyType String -Force | Out-Null
-  New-ItemProperty -Path $geoKey -Name "2" -Value "http://127.0.0.1"  -PropertyType String -Force | Out-Null
-  OK "Chrome will auto-allow location for http://localhost (any port)"
+  # The PORT IS REQUIRED. A Chrome content-settings pattern with no port matches the
+  # scheme's DEFAULT port (80) - not "any port", which is what it looks like. Written
+  # as bare "http://localhost" the policy silently never matched http://localhost:8080
+  # and the map prompted on every launch. Enumerate the launcher's whole port range
+  # (it advances from 8080 when a port is busy), for both loopback spellings.
+  $i = 0
+  foreach ($p in 8080..8091) {
+    foreach ($h in @("http://localhost:$p", "http://127.0.0.1:$p")) {
+      $i++
+      New-ItemProperty -Path $geoKey -Name "$i" -Value $h -PropertyType String -Force | Out-Null
+    }
+  }
+  OK "Chrome will auto-allow location for localhost:8080-8091 ($i patterns)"
   Info "scope is loopback only - the page we serve ourselves, nothing else"
 } catch { Nope "could not set the Chrome geolocation policy: $($_.Exception.Message)" }
 # Edge shares the Chromium policy schema, in case the launcher falls back to it.
 try {
   $edgeKey = "HKLM:\SOFTWARE\Policies\Microsoft\Edge\GeolocationAllowedForUrls"
   if (-not (Test-Path $edgeKey)) { New-Item -Path $edgeKey -Force | Out-Null }
-  New-ItemProperty -Path $edgeKey -Name "1" -Value "http://localhost" -PropertyType String -Force | Out-Null
+  $j = 0
+  foreach ($p in 8080..8091) {
+    foreach ($h in @("http://localhost:$p", "http://127.0.0.1:$p")) {
+      $j++
+      New-ItemProperty -Path $edgeKey -Name "$j" -Value $h -PropertyType String -Force | Out-Null
+    }
+  }
   Info "same policy applied to Edge (fallback browser)"
 } catch { }
 

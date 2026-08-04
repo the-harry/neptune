@@ -323,6 +323,29 @@ try {
     $brand    = [System.IO.Path]::GetFileNameWithoutExtension($exe)   # chrome | msedge
     $userdata = Join-Path $userdataBase ("browser-" + $brand)
     Info "profile: $userdata"
+
+    # Retire the pre-split shared profile. Older versions of this launcher put every
+    # browser in Neptune\browser, so that directory can hold a Brave or Edge profile
+    # that Chrome will not read content settings from - which is exactly what made
+    # the map prompt for location on every launch and never take an origin.
+    # Move it aside once rather than delete: it costs nothing and is recoverable.
+    $legacy = Join-Path $userdataBase "browser"
+    if (Test-Path $legacy) {
+      $foreign = $false
+      try {
+        $lp = Join-Path $legacy "Default\Preferences"
+        if (Test-Path $lp) {
+          $keys = ((Get-Content $lp -Raw -ErrorAction Stop | ConvertFrom-Json).PSObject.Properties).Name
+          $foreign = @($keys | Where-Object { $_ -match '^brave|^edge' }).Count -gt 0
+        }
+      } catch { $foreign = $true }   # unreadable is reason enough not to trust it
+      try {
+        $retired = Join-Path $userdataBase ("browser-retired-" + (Get-Date -Format 'yyyyMMddHHmmss'))
+        Move-Item -Path $legacy -Destination $retired -ErrorAction Stop
+        if ($foreign) { Info "retired a foreign-brand profile from an older launcher" }
+        else          { Info "retired the old shared profile (now per-browser)" }
+      } catch { Info "could not retire the old shared profile (in use?) - ignoring it" }
+    }
   }
 
   # An orphaned window from a previous run owns the Chromium process-singleton for
@@ -419,7 +442,17 @@ try {
     if ($exe -like "*msedge.exe") { $bargs += "--edge-kiosk-type=fullscreen" }
     Nope "kiosk mode - there is no on-screen way out of this window"
   } else {
-    $bargs = @("--app=$url", "--start-fullscreen", "--start-maximized") + $common
+    # NOTE: no --start-fullscreen.
+    #
+    # Chromium SUPPRESSES permission prompts while a window is in fullscreen. With
+    # --start-fullscreen the map's location request produced a prompt that was either
+    # invisible or dismissed on sight, so the operator "kept accepting" and it never
+    # stuck - the request simply timed out (geolocation error code 3) every launch.
+    #
+    # The page puts itself into fullscreen on the first tap anyway (enableAppFullscreen
+    # in main.js), so nothing is lost: the window opens maximised and chrome-less, the
+    # location prompt is answerable, and the first touch takes it fullscreen.
+    $bargs = @("--app=$url", "--start-maximized") + $common
   }
 
   if ($exe) {
