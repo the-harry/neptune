@@ -29,6 +29,13 @@ const CONFIG = {
     factor: 1.8
   },
   staleTimeoutMs: 1000,        // telemetry older than this → readouts greyed/dashed as stale
+  // How long to keep showing the last real telemetry as STALE before giving up on the
+  // vehicle and handing back to the simulator. STALE is for a brief gap on a live
+  // socket ("this reading is a moment old"); once the link is actually gone, freezing
+  // the last frame forever is worse than useless — the controls stop responding and the
+  // console looks broken. The sim resumes from the last real values, so the handover
+  // is seamless.
+  simFallbackMs:  3000,
 
   /* ---- MAP / NAVIGATION (dive track + position over a basemap) ----------- */
   map: {

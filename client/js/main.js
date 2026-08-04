@@ -11,16 +11,30 @@ function frame(ts){
   computeInput(dt);
   pollLearn();
 
-  const realFresh = state.realTel && (now-state.realTelAt)<CONFIG.staleTimeoutMs;
+  // THREE data sources, in order of preference:
+  //   real   fresh telemetry from the vehicle
+  //   stale  a brief gap on a still-open socket — say so, don't invent numbers
+  //   sim    no vehicle (or the link is gone) — run the model so the console stays
+  //          flyable. Resumes from the last real values, which net.js mirrors in.
+  //
+  // The stale window is deliberately bounded. Falling back to sim only when realTel
+  // was NEVER set meant that once the Pi had connected even once, losing the link
+  // parked the dashboard in `stale` permanently: the simulator stopped, the ballast
+  // and depth froze, and every control appeared dead while still accepting input.
+  const age = now - state.realTelAt;
+  const realFresh = state.realTel && age < CONFIG.staleTimeoutMs;
+  const linkAlive = state.wsStatus === 'online';
+  const stillWorthWaiting = state.realTel && linkAlive && age < (CONFIG.simFallbackMs || 3000);
   let view;
   if(realFresh){
     state.mode='real';
     view=viewFromState(false);
     if(state.realTel.mock) view.sim=true; // server-side mock still flags SIM badge
-  } else if(state.realTel){
+  } else if(stillWorthWaiting){
     state.mode='stale';
     view=viewFromState(false); view.stale=true;
   } else {
+    if(state.mode!=='sim' && state.realTel) LOG.state('link gone — handing back to the simulator');
     state.mode='sim';
     simulate(dt);
     view=viewFromState(true);
