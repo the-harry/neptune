@@ -1,0 +1,49 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>NEPTUNE — Set Origin</title>
+<style>
+  :root{--bg:#0c0118;--fg:#ece3ff;--muted:#b9a9d6;--purple:#b46bff;--green:#4dffa6;--amber:#ff5bd0;--err:#ff5c7a}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:var(--bg);color:var(--fg);
+    font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:18px;padding:24px;text-align:center}
+  h1{font-size:20px;letter-spacing:.06em;color:var(--purple);margin:0}
+  p{color:var(--muted);font-size:14px;line-height:20px;max-width:420px;margin:0}
+  button{font-size:17px;font-weight:700;letter-spacing:.04em;padding:16px 28px;border-radius:12px;
+    border:2px solid var(--green);background:color-mix(in srgb,var(--green) 12%,transparent);color:var(--green);
+    cursor:pointer;min-width:260px}
+  button:active{transform:scale(.97)}
+  #out{font-family:ui-monospace,Menlo,monospace;font-size:14px;padding:14px;border-radius:10px;
+    border:1px solid #453860;min-width:280px;max-width:90vw;word-break:break-all}
+  .ok{color:var(--green);border-color:var(--green)!important}
+  .warn{color:var(--amber);border-color:var(--amber)!important}
+  .err{color:var(--err);border-color:var(--err)!important}
+  small{color:var(--muted);font-size:12px}
+</style></head>
+<body>
+  <h1>NEPTUNE — SET ORIGIN</h1>
+  <p>Stand at the launch point, pointing the sub in the launch direction, then capture your phone&rsquo;s GNSS fix.
+     The <b>accuracy</b> (metres) is the floor on the whole dive&rsquo;s accuracy — aim for &lt;&nbsp;15&nbsp;m.</p>
+  <button id="cap">📍 CAPTURE MY LOCATION</button>
+  <div id="out">waiting…</div>
+  <small>Requires HTTPS (trust the Pi&rsquo;s self-signed cert). Posts to <code>/api/origin</code> on this same host.</small>
+<script>
+  var out = document.getElementById('out');
+  function show(cls, txt){ out.className = cls; out.textContent = txt; }
+  if(!location.protocol.startsWith('https')) show('warn', 'Open this page over HTTPS — geolocation is blocked on plain HTTP.');
+  document.getElementById('cap').addEventListener('click', function(){
+    if(!navigator.geolocation){ show('err','no geolocation on this device'); return; }
+    show('warn','locating…');
+    navigator.geolocation.getCurrentPosition(function(p){
+      var body = { lat:p.coords.latitude, lon:p.coords.longitude, accuracy:p.coords.accuracy, source:'phone' };
+      show(p.coords.accuracy<=15?'ok':'warn',
+        'fix: '+body.lat.toFixed(6)+', '+body.lon.toFixed(6)+'\n±'+Math.round(body.accuracy)+' m — sending…');
+      fetch('/api/origin', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
+        .then(function(r){ return r.ok ? r.json().then(function(j){ show('ok','ORIGIN SET ✓\n'+body.lat.toFixed(6)+', '+body.lon.toFixed(6)+' (±'+Math.round(body.accuracy)+' m)'); })
+                                        : r.text().then(function(t){ show(r.status===422?'warn':'err','rejected ('+r.status+'): '+t); }); })
+        .catch(function(e){ show('err','could not reach the Pi: '+e); });
+    }, function(err){ show('err','location failed: '+err.message); }, {enableHighAccuracy:true, timeout:15000});
+  });
+</script>
+</body></html>

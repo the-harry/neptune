@@ -46,10 +46,26 @@ class NavSettings:
     dives_dir: Path = field(default_factory=lambda: Path(_s("NAV_DIVES_DIR", str(_ROOT / "data" / "dives"))))
     speed_lut_dir: Path = field(default_factory=lambda: Path(_s("NAV_LUT_DIR", str(_ROOT / "data" / "speed_luts"))))
 
-    # --- pmtiles extractor (§6.1) — a separate binary; may be absent in isolated phase ---
+    # --- pmtiles extractor (legacy vector path §6.1) — a separate binary; may be absent ---
     pmtiles_bin: str = field(default_factory=lambda: _s("NAV_PMTILES_BIN", "pmtiles"))
     pmtiles_source: str = field(default_factory=lambda: _s("NAV_PMTILES_SRC", ""))  # bootstrap-only world build URL
     area_size_cap_mb: float = field(default_factory=lambda: _f("NAV_AREA_CAP_MB", 200.0))
+
+    # --- satellite basemap downloader (§3/§4) — raster tiles → MBTiles ---
+    # {z}/{y}/{x} for Esri World Imagery (y BEFORE x). Provider-configurable (§3.1).
+    sat_tile_url: str = field(default_factory=lambda: _s(
+        "NAV_SAT_URL",
+        "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"))
+    sat_attribution: str = field(default_factory=lambda: _s("NAV_SAT_ATTR", "Imagery © Esri"))
+    sat_user_agent: str = field(default_factory=lambda: _s(
+        "NAV_SAT_UA", "NeptuneROV/1.0 (canal survey; offline tile cache)"))
+    sat_min_zoom: int = field(default_factory=lambda: _i("NAV_SAT_ZMIN", 16))
+    sat_max_zoom: int = field(default_factory=lambda: _i("NAV_SAT_ZMAX", 18))     # 'High' detail adds z19 (§4)
+    sat_rate_per_s: float = field(default_factory=lambda: _f("NAV_SAT_RATE", 6.0))  # polite throttle (§3.2)
+    sat_tile_cap: int = field(default_factory=lambda: _i("NAV_SAT_TILE_CAP", 8000))
+    sat_avg_kb: float = field(default_factory=lambda: _f("NAV_SAT_AVG_KB", 20.0))  # for size estimates (§3.3)
+    overpass_url: str = field(default_factory=lambda: _s("NAV_OVERPASS", "https://overpass-api.de/api/interpreter"))
+    nominatim_url: str = field(default_factory=lambda: _s("NAV_NOMINATIM", "https://nominatim.openstreetmap.org"))
 
     # --- live track decimation (§7.5) — cap the polyline ---
     max_live_points: int = field(default_factory=lambda: _i("NAV_MAX_POINTS", 4000))

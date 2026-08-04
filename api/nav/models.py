@@ -24,8 +24,8 @@ class Origin(BaseModel):
     lon: float
     accuracy: float = Field(ge=0)     # metres — floor on the whole track's accuracy (§4.2)
     heading_deg: float = 0.0          # heading0, from the IMU on the surface (§4.4)
-    source: Literal["phone", "map_tap"] = "phone"
-    t: Optional[float] = None
+    source: Literal["phone", "map_tap", "device", "manual"] = "phone"
+    t: Optional[float] = None          # capture timestamp (epoch ms), from the client (§2)
 
 
 class Adjustment(BaseModel):

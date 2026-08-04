@@ -41,17 +41,20 @@ def list_areas() -> list[dict]:
         except Exception:  # noqa: BLE001
             continue
         name = meta.stem
-        pm = settings.areas_dir / f"{name}.pmtiles"
+        mb = settings.areas_dir / f"{name}.mbtiles"       # satellite raster (§3, default)
+        pm = settings.areas_dir / f"{name}.pmtiles"       # legacy vector
+        archive = mb if mb.exists() else (pm if pm.exists() else None)
         d["name"] = name
-        d["size"] = pm.stat().st_size if pm.exists() else 0
-        d["present"] = pm.exists()
+        d["size"] = archive.stat().st_size if archive else 0
+        d["present"] = archive is not None
+        d["format"] = "mbtiles" if mb.exists() else ("pmtiles" if pm.exists() else d.get("format", "?"))
         d["has_centreline"] = (settings.areas_dir / f"{name}.geojson").exists()
         out.append(d)
     return out
 
 
 def delete_area(name: str) -> None:
-    for ext in (".pmtiles", ".json", ".geojson"):
+    for ext in (".mbtiles", ".pmtiles", ".json", ".geojson"):
         p = settings.areas_dir / f"{name}{ext}"
         if p.exists():
             p.unlink()

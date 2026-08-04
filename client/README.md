@@ -5,17 +5,20 @@ API consumer: WebRTC video (go2rtc), WebSockets for ROV control + camera
 telemetry, and REST for camera commands/config/files. No framework, no build
 step, no dependencies.
 
-It runs two ways from these exact same files:
-
-1. **From disk** — double-click `index.html` (`file://`). Fully interactive in
-   simulation mode with no server, no video, no gamepad.
-2. **Served by FastAPI on the Pi** — mount this folder as static files.
+**Serve it over HTTPS from the Pi** — `https://<pi>/` (nginx, self-signed cert
+trusted once on the handheld). This is required (§1): geolocation (the origin
+fix) only works in a secure context, and a `file://` origin can't fetch the Pi
+(video/telemetry/maps) — so opening `index.html` from disk now shows a **blocking
+message** explaining how to launch correctly (with a SIM-only escape hatch for
+quick offline UI checks). The backend resolves **same-origin**; `?host=IP:PORT`
+remains an override only.
 
 ## Layout
 
 ```
 client/
 ├── index.html          # markup only — links the CSS + loads the scripts in order
+├── origin.html          # standalone phone GNSS capture page → POST /api/origin
 ├── css/
 │   └── styles.css       # all styles (self-contained; replaces Tailwind + fonts + icons)
 └── js/
@@ -28,6 +31,9 @@ client/
     ├── controls.js      # on-screen sliders, SURFACE hold, CONFIG/mapper modal
     ├── render.js        # local simulation + telemetry→UI + status badges
     ├── camera.js        # WOLFANG camera plane: telemetry, record/capture, config, files
+    ├── tiles.js         # zero-dep raster XYZ satellite tile engine (Esri), overzoom, screen↔latlon
+    ├── map.js           # radar: camera-primary circular minimap, satellite basemap, track, expand
+    ├── navui.js         # origin (device geolocation + tap-to-refine) + navigate-and-select area download
     └── main.js          # RAF frame loop + bootstrap + window.NEPTUNE console API
 ```
 
@@ -76,6 +82,90 @@ Endpoints the client expects (all same-origin, proxied by nginx on the Pi):
 Override the host for local dev with `?host=192.168.1.10:8000` (remembered in
 localStorage) or via the CONFIG panel.
 
+## Navigation & radar
+
+The **camera feed is the primary instrument** and fills the viewport. The map is a
+**GTA-style circular radar** in the bottom-left (`#radar`, ~200 px) — the live
+basemap clipped to a circle, with the heading needle / input vector, `FWD`/`REV`,
+and a rotating **N** drawn on top. `THROTTLE` / `STEER` read out to its right; the
+scale bar sits below and updates with zoom. There is exactly **one** map instance;
+in the collapsed state it lives inside that circle.
+
+**Heading-up by default** (`CONFIG.map.headingUp`): the map rotates under a fixed
+forward-pointing sub marker (via the map's bearing / a canvas transform — never a
+CSS transform on a square, which would leave uncovered corners in the circle). Set
+`headingUp:false` for north-up.
+
+**Tap the radar to expand** it to fullscreen. The same instance animates open; the
+video shrinks to a **picture-in-picture** tile (never unmounted — no WebRTC
+reconnect). `Esc`, the ✕ button, or tapping the PiP video collapses it back.
+
+### A submarine can't be paused (§3)
+
+GTA freezes the world when the map opens; a sub keeps drifting. So expanding the
+map issues a **safe all-stop** instead (`CONFIG.map.allStopOnExpand`, default on):
+throttle+steer are held at zero and **`ALL STOP — MAP OPEN`** is shown. Telemetry,
+video, recording, and every safety indicator keep running at full rate; depth, the
+`SURFACE` warning, and the whole status strip stay live over the map. **Any thrust
+or steer input instantly collapses the map and returns control** — the operator
+never has to find a close button to drive. Set `allStopOnExpand:false` to hold
+station under power in current instead.
+
+### Satellite basemap (§3)
+
+All map views default to **satellite imagery** — `js/tiles.js` is a tiny zero-dep
+raster XYZ tile layer drawn straight to the radar canvas (no MapLibre needed). It
+handles the **Esri World Imagery** `{z}/{y}/{x}` order (y before x), heading-up
+rotation (a canvas transform, so no uncovered corners in the circle), **overzoom**
+from the nearest cached parent when a high-zoom tile 404s (blurry beats blank), and
+a dark **readability tint** over the imagery (darker in the radar, lighter expanded).
+
+Provider is configurable in `config.js` (`tileProvider` / `tileProviders`):
+- **online** (default): Esri World Imagery, fetched straight from the browser while
+  the Pi has connectivity — used to find and download areas. `Imagery © Esri` is
+  shown in the expanded view.
+- **offline**: when a downloaded area is **active**, tiles come from the Pi's cached
+  MBTiles (`/api/areas/{name}/tiles/{z}/{x}/{y}.jpg`) — works with no internet, the
+  field case.
+
+The **OSM waterway centreline** (the snapping target) is fetched during download and
+drawn as a bright-cored, dark-cased line over the imagery.
+
+**Honest empty states (§6):** no area/origin → compact `NO MAP` / `NO ORIGIN` in the
+circle (no fake marker), full explanation in the expanded view. The overlay steps
+aside while you're actively tapping an origin or selecting an area.
+
+### Setting the origin (§2)
+
+The fix comes from the **handheld's own browser**. On load with no origin, Neptune
+**auto-requests** `getCurrentPosition` (secure context required — hence HTTPS) and
+centres the map on you. The ROG Ally has no GNSS — Windows resolves position by WiFi,
+so accuracy reads tens–hundreds of metres; the **ORIGIN** tile shows it (`SET ±120m`),
+and above `originRefineM` (30 m) a non-blocking **TAP TO REFINE** prompt lets you tap
+your bank on the imagery (which beats WiFi). **North comes from the sub's IMU**
+(`heading0`, captured atomically in the same set-origin action) — never the handheld.
+Manual entry and post-hoc dx/dy/rotation adjustment remain via the ORIGIN tile. The
+phone page `origin.html` also still works.
+
+### Navigate-and-select area download (§4)
+
+No coordinates to type. Expand the map, **pan/zoom** to the spot (starting from your
+location), press **＋ AREA**: a fixed selection rectangle overlays the viewport and a
+live **`~N tiles · ~M MB`** readout updates as you move. Pick **Standard** (z16–18) or
+**High** (z19), press **DOWNLOAD THIS AREA** — one button. The Pi walks the tile
+pyramid (rate-limited, real User-Agent), writes an MBTiles archive, fetches the
+waterway centreline, and **auto-names** the area by reverse geocoding. Progress
+streams over `/ws/nav`. Downloaded areas are a simple list (thumbnail · size ·
+activate · delete). Place search (Nominatim, online) pans the map from the toolbar.
+
+### The HUD is sacrosanct
+
+The whole map (tile fetch, projection, snapping, redraw) runs inside an error
+boundary. A basemap failure, a 404, or a draw error leaves the radar **blank but all
+instruments — thrust, steering, video — fully live**. The map never captures
+gamepad/keyboard piloting input (handlers are scoped to the canvas; MapLibre, if ever
+vendored, is `keyboard:false`).
+
 ## Testing the fallbacks
 
 - **SIM mode** — open from disk, no server → gauges animate from your inputs.
@@ -96,4 +186,6 @@ NEPTUNE.openMapper()      // open CONFIG
 NEPTUNE.resetBindings()   // restore default input map
 NEPTUNE.connectVideo()    // (re)connect the WebRTC feed
 NEPTUNE.camRecordToggle() // camera record toggle
+NEPTUNE.openOrigin()      // open the origin modal
+NEPTUNE.openAreas()       // open the area manager
 ```

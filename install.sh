@@ -4,10 +4,10 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/<you>/<repo>/main/install.sh | sudo bash
 #
-# Fresh install OR update (auto-detected). Clones the repo, drops the client
-# (the Pi is headless — the dashboard runs topside), installs the control API +
-# go2rtc video plane, wires nginx + systemd, pins the camera route to wlan0, and
-# enables everything on boot. Idempotent: re-run to update.
+# Fresh install OR update (auto-detected). Clones the repo, serves the dashboard
+# SPA over HTTPS (self-signed cert, §1), installs the control API + go2rtc video
+# plane, wires nginx + systemd, pins the camera route to wlan0, and enables
+# everything on boot. Idempotent: re-run to update.
 #
 # Override anything via env, e.g.:
 #   curl -fsSL .../install.sh | sudo NEPTUNE_REPO=https://github.com/me/sub.git bash
@@ -96,12 +96,14 @@ else
   git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
 fi
 
-# ---- 4. drop the client (headless Pi) --------------------------------------
-# The dashboard is served topside from disk, not from the Pi. reset --hard above
-# would restore it on every update, so we remove it here each run.
+# ---- 4. keep the client (§1: the Pi serves the SPA over HTTPS) --------------
+# The dashboard MUST be served from the Pi over TLS — geolocation (the origin fix)
+# needs a secure context, and file:// blocks fetches to the Pi. nginx (below)
+# serves $INSTALL_DIR/client at https://<pi>/.
 if [ -d "$INSTALL_DIR/client" ]; then
-  log "removing client/ (Pi is headless)…"
-  rm -rf "$INSTALL_DIR/client"
+  log "client/ present — served at https://<pi>/ (§1)"
+else
+  warn "client/ missing from the repo checkout — the SPA will not be served"
 fi
 
 # ---- 5. python venv + deps --------------------------------------------------
@@ -145,50 +147,33 @@ else
   warn "could not detect $TETHER_IFACE IP — edit $INSTALL_DIR/deploy/go2rtc.yaml (<PI_TETHER_IP>) by hand"
 fi
 
-# ---- 8. nginx (headless: proxy-only, no SPA) --------------------------------
-log "configuring nginx (reverse proxy)…"
-cat > /etc/nginx/sites-available/neptune <<'NGINX'
-# NEPTUNE headless Pi — single origin, proxy only (no SPA served here).
-upstream neptune_api { server 127.0.0.1:8000; }
-upstream go2rtc      { server 127.0.0.1:1984; }
-server {
-    listen 80 default_server;
-    server_name _;
+# ---- 8. self-signed TLS cert (§1: HTTPS is required for geolocation) --------
+# A remote Pi is not localhost, so a secure context needs a real cert. Self-signed
+# is fine — trust it once on the handheld. Generated once, reused across updates.
+TLS_DIR=/etc/neptune/tls
+if [ ! -s "$TLS_DIR/neptune.crt" ] || [ ! -s "$TLS_DIR/neptune.key" ]; then
+  log "generating self-signed TLS cert at $TLS_DIR…"
+  mkdir -p "$TLS_DIR"
+  # SANs cover the tether IP + common Pi hostnames so the cert matches however it's reached.
+  SAN="IP:${TETHER_IP:-127.0.0.1},DNS:neptune,DNS:neptune.local,DNS:raspberrypi.local,DNS:localhost"
+  openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+    -keyout "$TLS_DIR/neptune.key" -out "$TLS_DIR/neptune.crt" \
+    -subj "/CN=neptune" -addext "subjectAltName=${SAN}" >/dev/null 2>&1 \
+    && chmod 600 "$TLS_DIR/neptune.key" \
+    || warn "openssl cert generation failed — HTTPS will not come up"
+else
+  log "TLS cert already present at $TLS_DIR (reusing)"
+fi
 
-    location = / { return 200 "NEPTUNE Pi OK\n"; add_header Content-Type text/plain; }
-
-    location /api/ {
-        proxy_pass http://neptune_api;
-        proxy_http_version 1.1; proxy_set_header Host $host;
-        proxy_read_timeout 120s; proxy_buffering off;
-        add_header Cache-Control "no-store" always;
-    }
-    location /ws/ {
-        proxy_pass http://neptune_api;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host; proxy_read_timeout 3600s;
-    }
-    location /stream.mjpg { proxy_pass http://neptune_api; proxy_buffering off; }
-    location /go2rtc/ {
-        proxy_pass http://go2rtc/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-    }
-    location /stream/ {
-        proxy_pass http://go2rtc/api/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-    }
-}
-NGINX
+# ---- 9. nginx (serves the SPA over HTTPS + proxies both planes, §1) ---------
+log "configuring nginx (HTTPS SPA + reverse proxy)…"
+sed "s#/opt/neptune#${INSTALL_DIR}#g" "$INSTALL_DIR/deploy/nginx.conf" \
+    > /etc/nginx/sites-available/neptune
 ln -sf /etc/nginx/sites-available/neptune /etc/nginx/sites-enabled/neptune
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
 
-# ---- 9. systemd units -------------------------------------------------------
+# ---- 10. systemd units -------------------------------------------------------
 log "installing systemd units…"
 # Copy the repo's units, but rewrite paths/ifaces to the real values here so the
 # units always match this host.
@@ -201,10 +186,10 @@ sed -i "s#192.72.1.1#${CAMERA_IP}#g; s#wlan0#${CAM_IFACE}#g" /etc/systemd/system
 sed -i "s#/opt/neptune#${INSTALL_DIR}#g; s#User=neptune#User=${SERVICE_USER}#g" \
     /etc/systemd/system/neptune-api.service /etc/systemd/system/go2rtc.service
 
-# ---- 10. permissions --------------------------------------------------------
+# ---- 11. permissions --------------------------------------------------------
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 
-# ---- 11. enable on boot + restart to apply changes -------------------------
+# ---- 12. enable on boot + restart to apply changes -------------------------
 # `enable` sets boot start; explicit `restart` applies new code/config on an
 # update (enable --now would NOT restart an already-running service).
 log "enabling on boot + (re)starting services…"
@@ -215,13 +200,14 @@ systemctl restart go2rtc.service        || warn "go2rtc failed to start"
 systemctl restart neptune-api.service   || warn "neptune-api failed to start"
 systemctl restart nginx                 || warn "nginx failed to (re)start"
 
-# ---- 12. report -------------------------------------------------------------
+# ---- 13. report -------------------------------------------------------------
 echo
 log "done. service status:"
 for s in wolfang-route go2rtc neptune-api nginx; do
   printf '  %-16s %s\n' "$s" "$(systemctl is-active "$s" 2>/dev/null || echo inactive)"
 done
 echo
-log "control API : http://${TETHER_IP:-<pi>}/api/status   (preflight: POST /api/preflight)"
-log "video (WebRTC): http://${TETHER_IP:-<pi>}/stream/ (go2rtc stream 'sub')"
+log "dashboard  : https://${TETHER_IP:-<pi>}/   (trust the self-signed cert once on the handheld)"
+log "control API: https://${TETHER_IP:-<pi>}/api/status   (preflight: POST /api/preflight)"
+log "video      : https://${TETHER_IP:-<pi>}/stream/ (go2rtc stream 'sub')"
 log "re-run this installer any time to update."

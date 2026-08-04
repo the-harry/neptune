@@ -98,6 +98,7 @@ function renderUI(v){
   const stale=!!v.stale;
   // Numeric readouts (dashed when stale)
   setText($('battery-v'), (v.batteryV!=null?v.batteryV.toFixed(1):'--')+'V', stale);
+  setText($('depth-val'), (v.depth!=null?v.depth.toFixed(1):'--')+' m', stale);
   setText($('pressure-val'), (v.pressure!=null?v.pressure.toFixed(1):'--')+' PSI', stale);
   // Pi system metrics — only when the server provides them (placeholders in SIM).
   if(v.cpuC!=null)   setText($('cpu-c'),   Math.round(v.cpuC)+'°C', stale);

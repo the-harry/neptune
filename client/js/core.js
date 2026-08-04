@@ -12,6 +12,20 @@ const HEADINGS = ['N','NE','E','SE','S','SW','W','NW'];
 function headingCardinal(deg){ return HEADINGS[Math.round(((deg%360)/45))%8]; }
 function vibrate(ms){ try{ navigator.vibrate && navigator.vibrate(ms); }catch(e){} }
 
+/* Flat-earth local (east,north metres) <-> lat/lon — mirrors api/nav/geo.py.
+   Exact enough at pond/canal scale; used to place the sub/track over imagery. */
+const EARTH_R = 6378137.0;
+function toLatLon(x, y, lat0, lon0){
+  const lat = lat0 + (y / EARTH_R) * 180 / Math.PI;
+  const lon = lon0 + (x / (EARTH_R * Math.cos(lat0*Math.PI/180))) * 180 / Math.PI;
+  return { lat, lon };
+}
+function toLocal(lat, lon, lat0, lon0){
+  const y = (lat - lat0)*Math.PI/180 * EARTH_R;
+  const x = (lon - lon0)*Math.PI/180 * EARTH_R * Math.cos(lat0*Math.PI/180);
+  return { x, y };
+}
+
 /* ============================================================================
    LOG — console debug bus. Everything of interest is logged here. High-rate
    streams (control/camera TX, telemetry RX) are throttled to 1/s by default.
@@ -94,15 +108,20 @@ const state = {
    in localStorage). WS base is derived from the same host (ws/wss to match).
    ============================================================================ */
 function resolveHost(){
+  // §1: the backend is SAME ORIGIN by default (served by nginx on the Pi). ?host=IP:PORT is an
+  // explicit override only — it no longer acts as the primary discovery path, and a stale stored
+  // host never shadows same-origin when served.
+  const served = location.protocol==='http:'||location.protocol==='https:';
   let host=null;
   try{
-    const params=new URLSearchParams(location.search);
-    host=params.get('host');
-    if(host){ localStorage.setItem('rov_host', host); }
-    else { host=localStorage.getItem('rov_host'); }
+    const p=new URLSearchParams(location.search).get('host');
+    if(p){ host=p; localStorage.setItem('rov_host', p); }  // explicit override wins (and is remembered)
   }catch(e){}
-  const sameOrigin = location.protocol==='http:'||location.protocol==='https:';
-  if(!host && sameOrigin) host=location.host;
+  if(!host && served) host=location.host;                  // default: same origin
+  if(!host){                                               // disk fallback only: last override / configured
+    try{ host=localStorage.getItem('rov_host')||''; }catch(e){}
+    if(!host && CONFIG.defaultHost) host=CONFIG.defaultHost;
+  }
   host = host || '';
   const secure = location.protocol==='https:';
   state.host = host;

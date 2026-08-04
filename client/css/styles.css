@@ -325,30 +325,153 @@ img{display:block}
             color-mix(in srgb,var(--hazard) 7%,transparent);
   box-shadow:0 0 14px rgba(255,140,26,.28)}
 
-/* ---- MAP + view modes (spec §6.6, §7) ---- */
-#map-canvas{background:#0c0118;display:block}
-/* view = MAP (default): the camera shrinks to a PiP */
-body.view-map #video-layer{position:fixed;inset:auto;top:72px;right:120px;width:280px;height:158px;
-  border:1px solid rgba(180,107,255,.4);border-radius:.5rem;overflow:hidden;
-  box-shadow:0 0 18px rgba(0,0,0,.55);z-index:41;cursor:pointer}
-body.view-map #video-layer #no-feed .nf-badge{font-size:13px;letter-spacing:.2em;padding:5px 12px}
-/* view = VIDEO: the camera fills the screen, map sits behind it */
-body.view-video #video-layer{position:fixed;inset:0;width:auto;height:auto;border:0;border-radius:0;box-shadow:none;z-index:0}
-/* map controls (pointer only) */
-.map-ctl{position:fixed;z-index:45;display:flex;flex-direction:column;gap:6px}
+/* ---- RADAR: GTA-style circular minimap (§2). ONE map instance; collapsed lives
+   INSIDE the circle, expanded fills the viewport (§3). Camera is primary. ---- */
+#radar-wrap{pointer-events:none}                 /* wrap is inert; only the circle/readout catch input */
+.radar-col{display:flex;flex-direction:column;align-items:center;gap:5px;pointer-events:auto}
+#radar{position:relative;width:var(--radar-px,200px);height:var(--radar-px,200px);border-radius:50%;
+  overflow:hidden;cursor:pointer;background:#0c0118;
+  border:1.5px solid color-mix(in srgb,var(--tertiary) 55%,transparent);
+  box-shadow:0 0 18px rgba(0,0,0,.6),0 0 14px rgba(77,255,166,.18)}
+#map-canvas{width:100%;height:100%;display:block;background:#0c0118}
+#maplibre-map{position:absolute;inset:0}
+#map-panel{position:absolute;inset:0;opacity:1;transition:opacity .25s ease}   /* fills the circle (collapsed) */
+#radar-dial{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:4}
+.radar-empty{position:absolute;inset:0;display:none;align-items:center;justify-content:center;z-index:3;
+  font-family:var(--font-sans);font-size:13px;font-weight:800;letter-spacing:.12em;color:var(--secondary);
+  text-shadow:0 0 8px var(--surface-dim);pointer-events:none}
+body:not(.map-expanded) #radar.empty .radar-empty{display:flex}
+.radar-scale{font-family:var(--font-sans);font-size:11px;font-weight:700;letter-spacing:.06em;
+  color:rgba(236,227,255,.72);text-shadow:0 0 6px var(--surface-dim);pointer-events:none}
+.radar-n{fill:var(--secondary);font-family:var(--font-sans);font-size:13px;font-weight:800}
+.radar-n-tick{stroke:var(--secondary);stroke-width:2;stroke-linecap:round}
+
+/* EXPANDED — the same map goes fullscreen; the dial/scale/readout step aside; video → PiP (§3) */
+@keyframes mapExpandIn{from{opacity:.25;transform:scale(.94)}to{opacity:1;transform:none}}
+body.map-expanded #map-panel{position:fixed;inset:0;width:100vw;height:100vh;z-index:2;cursor:default;
+  animation:mapExpandIn .28s ease}
+body.map-expanded #radar{overflow:visible;border:0;box-shadow:none;background:transparent;cursor:default}
+body.map-expanded #radar-dial,
+body.map-expanded #radar-empty,
+body.map-expanded .radar-scale,
+body.map-expanded #radar-wrap .sonar-readout{display:none}
+body.map-expanded #video-layer{position:fixed;inset:auto;top:72px;right:120px;width:280px;height:158px;
+  border:1px solid rgba(180,107,255,.4);border-radius:.5rem;overflow:hidden;z-index:41;cursor:pointer}
+body.map-expanded #video-layer #no-feed .nf-badge{font-size:13px;letter-spacing:.2em;padding:5px 12px}
+
+/* ALL STOP banner — shown while the map is expanded with all-stop engaged (§3) */
+.all-stop-banner{position:absolute;top:76px;left:calc(50% - 55px);transform:translateX(-50%);display:none;z-index:6;
+  font-family:var(--font-sans);font-size:14px;font-weight:800;letter-spacing:.14em;padding:8px 18px;border-radius:.4rem;
+  color:var(--hazard);border:1.5px solid var(--hazard);background:color-mix(in srgb,var(--hazard) 12%,rgba(12,1,24,.85));
+  box-shadow:0 0 18px rgba(255,140,26,.35);pointer-events:none;white-space:nowrap}
+body.map-expanded .all-stop-banner.on{display:block}
+
+/* full empty state — expanded view only (the radar uses the compact .radar-empty) */
+.map-empty{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;
+  gap:10px;background:rgba(12,1,24,.6);text-align:center;padding:12px;z-index:5}
+body.map-expanded .map-empty.on{display:flex}
+.map-empty-msg{font-family:var(--font-sans);font-size:14px;font-weight:700;letter-spacing:.08em;color:var(--secondary)}
+.map-empty-btn{font-family:var(--font-sans);font-size:12px;font-weight:700;letter-spacing:.06em;padding:8px 16px;
+  border-radius:.3rem;border:1px solid var(--secondary);color:var(--secondary);background:transparent;cursor:pointer}
+.map-empty-btn:hover{background:color-mix(in srgb,var(--secondary) 15%,transparent)}
+.map-ctl{position:absolute;right:120px;bottom:20px;z-index:7;display:none;flex-direction:column;gap:6px}
+body.map-expanded #map-ctl{display:flex}
 .map-btn{width:34px;height:34px;border-radius:.4rem;border:1px solid rgba(180,107,255,.35);
   background:rgba(18,4,38,.7);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
   color:var(--primary);font-family:var(--font-sans);font-size:16px;font-weight:700;cursor:pointer;line-height:1}
 .map-btn:hover{border-color:var(--primary)}
-.map-swap{height:auto;padding:6px 0;font-size:11px;letter-spacing:.08em}
-/* §7.3: the direction overlay must not swallow map gestures; fades when idle (momentary) */
-#sonar-wrap{pointer-events:none;transition:opacity .5s ease}
-#sonar-wrap.idle{opacity:.14}
 
-/* ---- SONAR movement indicator (bottom-left) ---- */
-.sonar{width:118px;height:118px;flex:0 0 auto}
-.sonar svg{width:100%;height:100%;overflow:visible}
-.sonar-ring{fill:rgba(77,255,166,.045);stroke:var(--tertiary);stroke-width:1.5;opacity:.75}
+/* ---- expanded-map toolbar + navigate-and-select download (§4) ---- */
+#map-search{position:absolute;top:76px;left:16px;z-index:6;display:none;flex-wrap:wrap;gap:6px;width:340px;max-width:60vw}
+body.map-expanded #map-search{display:flex}
+#map-search-in{flex:1;min-width:120px;background:rgba(16,4,32,.9);border:1px solid rgba(180,107,255,.4);border-radius:.4rem;
+  color:var(--on-surface);font-family:var(--font-sans);font-size:13px;padding:8px 10px;outline:none}
+#map-search-in:focus{border-color:var(--primary)}
+.ms-btn{font-family:var(--font-sans);font-size:11px;font-weight:700;letter-spacing:.04em;padding:8px 12px;border-radius:.4rem;
+  border:1px solid rgba(180,107,255,.4);background:rgba(16,4,32,.9);color:var(--on-surface-variant);cursor:pointer}
+.ms-btn.ms-primary{border-color:var(--tertiary);color:var(--tertiary)}
+.ms-btn:hover{border-color:var(--primary)}
+#map-search-res{flex-basis:100%;display:flex;flex-direction:column;background:rgba(16,4,32,.96);border-radius:.4rem;overflow:hidden}
+#map-search-res:empty{display:none}
+.msr-row{padding:8px 10px;font-family:var(--font-sans);font-size:12px;color:var(--on-surface);border-bottom:1px solid rgba(255,255,255,.06);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.msr-row:hover{background:color-mix(in srgb,var(--primary) 16%,transparent)}
+.msr-empty{padding:8px 10px;font-family:var(--font-sans);font-size:11px;color:var(--on-surface-variant)}
+
+#area-select{position:absolute;bottom:22px;left:calc(50% - 55px);transform:translateX(-50%);z-index:7;display:none;
+  flex-direction:column;gap:8px;padding:12px 16px;border-radius:.6rem;background:rgba(16,4,32,.95);
+  border:1px solid var(--tertiary);box-shadow:0 0 26px rgba(77,255,166,.28);min-width:340px;max-width:92vw}
+body.map-expanded #area-select.on{display:flex}
+.as-read{font-family:var(--font-sans);font-size:15px;font-weight:800;letter-spacing:.02em;color:var(--tertiary);text-align:center}
+.as-row{display:flex;align-items:center;gap:8px}
+.as-lbl{font-family:var(--font-sans);font-size:11px;color:var(--on-surface-variant)}
+.as-spacer{flex:1}
+.as-tog{font-family:var(--font-sans);font-size:11px;font-weight:700;padding:5px 10px;border-radius:.35rem;
+  border:1px solid var(--outline-variant);background:transparent;color:var(--on-surface-variant);cursor:pointer}
+.as-tog.on{border-color:var(--primary);color:var(--primary);background:color-mix(in srgb,var(--primary) 14%,transparent)}
+.as-btn{font-family:var(--font-sans);font-size:12px;font-weight:700;letter-spacing:.03em;padding:8px 14px;border-radius:.4rem;
+  border:1px solid var(--outline-variant);background:transparent;color:var(--on-surface-variant);cursor:pointer}
+.as-btn.as-primary{border-color:var(--tertiary);color:var(--tertiary);background:color-mix(in srgb,var(--tertiary) 12%,transparent)}
+.as-btn:hover{border-color:var(--primary)}
+.as-prog{font-family:var(--font-sans);font-size:11px;color:var(--on-surface-variant);text-align:center;min-height:14px}
+.a-thumb{width:44px;height:44px;border-radius:.3rem;object-fit:cover;background:#0c0118;border:1px solid rgba(180,107,255,.25);flex-shrink:0}
+
+/* ---- origin prompt banner (§2) — non-blocking, top-centre, clears the header ---- */
+#origin-prompt{position:fixed;top:72px;left:calc(50% - 55px);transform:translateX(-50%) translateY(-8px);
+  z-index:70;display:none;opacity:0;transition:opacity .2s ease,transform .2s ease;
+  flex-direction:column;align-items:center;gap:6px;padding:10px 16px;border-radius:.5rem;
+  background:rgba(16,4,32,.94);border:1px solid var(--primary);box-shadow:0 0 22px rgba(180,107,255,.35);text-align:center}
+#origin-prompt.show{display:flex;opacity:1;transform:translateX(-50%) translateY(0)}
+#origin-prompt .op-title{font-family:var(--font-sans);font-size:13px;font-weight:800;letter-spacing:.08em;color:var(--secondary)}
+#origin-prompt .op-sub{font-family:var(--font-sans);font-size:11px;color:var(--on-surface-variant);max-width:280px}
+#origin-prompt .op-btn{margin-top:2px;font-family:var(--font-sans);font-size:11px;font-weight:700;letter-spacing:.05em;
+  padding:6px 14px;border-radius:.35rem;border:1px solid var(--primary);background:transparent;color:var(--primary);cursor:pointer}
+#origin-prompt .op-btn:hover{background:color-mix(in srgb,var(--primary) 16%,transparent)}
+
+/* ---- file:// blocking guard (§1) ---- */
+#file-guard{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;
+  background:var(--surface-dim);padding:24px;text-align:center}
+#file-guard .fg-card{max-width:520px;display:flex;flex-direction:column;gap:14px}
+#file-guard .fg-title{font-family:var(--font-sans);font-size:20px;font-weight:800;letter-spacing:.1em;color:var(--hazard)}
+#file-guard p{font-family:var(--font-sans);font-size:14px;line-height:20px;color:var(--on-surface);margin:0}
+#file-guard code{font-family:var(--font-mono);color:var(--photo)}
+#file-guard .fg-url{font-family:var(--font-mono);font-size:16px;color:var(--tertiary);background:rgba(0,0,0,.35);
+  padding:10px 14px;border-radius:.4rem;border:1px solid var(--tertiary)}
+#file-guard .fg-small{font-size:12px;color:var(--on-surface-variant);line-height:17px}
+#file-guard button{margin-top:6px;font-family:var(--font-sans);font-size:12px;font-weight:700;letter-spacing:.04em;
+  padding:9px 14px;border-radius:.4rem;border:1px solid var(--outline-variant);background:transparent;
+  color:var(--on-surface-variant);cursor:pointer}
+#file-guard button:hover{border-color:var(--primary);color:var(--primary)}
+
+/* ---- NAV modals (origin §4 + area manager §5) ---- */
+.nav-modal{position:fixed;inset:0;z-index:86;display:none;align-items:center;justify-content:center;
+  background:color-mix(in srgb,var(--surface-dim) 80%,transparent);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
+.nav-modal.show{display:flex}
+.nav-card{background:rgba(16,4,32,.97);border:1px solid rgba(180,107,255,.25);border-radius:.5rem;width:430px;
+  max-width:94vw;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 0 40px rgba(180,107,255,.3)}
+.nav-head{padding:14px 20px;border-bottom:1px solid rgba(255,255,255,.1);display:flex;justify-content:space-between;align-items:center}
+.nav-body{overflow-y:auto;padding:10px 20px 18px}
+.nav-x{}
+.nav-sec{font-family:var(--font-sans);font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--primary);opacity:.65;margin:14px 0 4px}
+.nav-hint{font-family:var(--font-sans);font-size:11px;color:var(--on-surface-variant);line-height:15px;margin-bottom:4px}
+.nav-hint code{font-family:var(--font-mono);color:var(--photo)}
+.nav-url{font-family:var(--font-mono);font-size:12px;color:var(--photo);background:rgba(0,0,0,.3);padding:6px 8px;border-radius:.25rem;word-break:break-all}
+.nav-cur{font-family:var(--font-mono);font-size:12px;padding:8px 10px;border-radius:.25rem;border:1px solid var(--outline-variant)}
+.nav-cur.ok{color:var(--tertiary);border-color:var(--tertiary)}
+.nav-cur.warn{color:var(--secondary);border-color:var(--secondary)}
+.nav-row{display:flex;gap:8px;margin:4px 0}
+.nav-in{flex:1;min-width:0;background:rgba(0,0,0,.3);border:1px solid var(--outline-variant);border-radius:.25rem;
+  color:var(--on-surface);font-family:var(--font-mono);font-size:12px;padding:6px 8px;outline:none}
+.nav-in:focus{border-color:var(--primary)}
+.nav-in:disabled{opacity:.4}
+.nav-primary{border-color:var(--primary);color:var(--primary)}
+.nav-msg{font-family:var(--font-sans);font-size:11px;color:var(--on-surface-variant);margin-top:6px;min-height:14px}
+.a-list{display:flex;flex-direction:column;gap:2px}
+.a-row{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+.a-name{flex:1;font-family:var(--font-mono);font-size:12px;color:var(--on-surface)}
+.a-meta{font-family:var(--font-sans);font-size:10px;color:var(--on-surface-variant)}
+
+/* ---- RADAR dial overlay (heading needle / input vector, drawn over the map) ---- */
+.sonar-ring{fill:none;stroke:var(--tertiary);stroke-width:1.5;opacity:.55}
 .sonar-ring2{fill:none;stroke:var(--tertiary);stroke-width:1;opacity:.3}
 .sonar-cross{stroke:var(--tertiary);stroke-width:1;opacity:.22}
 .sonar-vec{stroke:var(--primary);stroke-width:3.5;stroke-linecap:round;filter:drop-shadow(0 0 5px var(--primary))}

@@ -17,6 +17,9 @@ const CONFIG = {
   paths: {
     control: '/ws/control'     // WebSocket — ROV control out + telemetry in
   },
+  // Backend discovery (§6): default same-origin; if opened from disk with no ?host,
+  // fall back to this configured host; ?host=IP:PORT always overrides.
+  defaultHost:    '',          // e.g. '192.168.1.10:8000'
   sendRateHz:     30,          // control/camera/ballast TX rate (Hz) — always on, even zeros
   pingIntervalMs: 1000,        // WS ping cadence; round-trip shows as link latency
   levelSendMs:    120,         // how often dirty LED brightness levels are pushed
@@ -30,13 +33,30 @@ const CONFIG = {
   /* ---- MAP / NAVIGATION (dive track + position over a basemap) ----------- */
   map: {
     navWs:          '/ws/nav',   // backend nav telemetry (x/y/heading/depth); client integrates if absent
-    redrawHz:       10,          // map redraw cap (§7.5 — decoupled from telemetry, never starves video)
+    redrawHz:       10,          // radar redraw cap (§4 — decoupled from telemetry, never starves video)
     metersPerPixel: 0.6,         // initial zoom (0.6 m/px). +/- buttons + wheel adjust.
     subMaxSpeedMs:  1.0,         // client-side integrator speed at full throttle (disk/SIM fallback)
     maxDepthColorM: 6.0,         // depth at which the track colour saturates (shallow→deep)
-    maxTrackPoints: 4000,        // decimate older points beyond this (§7.5)
-    gridMeters:     10,          // grid spacing in metres
-    sonarFadeMs:    1400         // direction overlay stays this long after the last input, then fades
+    maxTrackPoints: 4000,        // full-res track cap; decimated further for display (§4)
+    radarPx:        200,         // collapsed radar diameter in px — a glance instrument (§6: keep 180–220)
+    headingUp:      true,        // §2 — collapsed radar rotates heading-up (forward=up); false = north-up
+    allStopOnExpand:true,        // §3 — expanding the map commands throttle to zero (safe "pause" analogue)
+    originRefineM:  30,          // §2 — above this device-fix accuracy (m), offer tap-to-refine
+    autoOrigin:     true,        // §2 — auto-request the handheld's location on load when no origin is set
+    // --- satellite basemap (§3) — raster XYZ tiles drawn straight to the radar canvas (zero-dep) ---
+    tileProvider:   'esri',      // 'esri' (World Imagery) — see tileProviders below
+    tileProviders: {
+      esri: { // NOTE the {z}/{y}/{x} order (y before x) — Esri, unlike standard XYZ
+        url:'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        maxzoom:19, attribution:'Imagery © Esri' },
+      // offline cache served by the Pi from a downloaded area (standard {z}/{x}/{y}, TMS handled server-side)
+      offline: { url:'/api/areas/{area}/tiles/{z}/{x}/{y}.jpg', maxzoom:19, attribution:'Imagery © Esri (offline)' }
+    },
+    tintCollapsed:  0.45,        // §5 — dark overlay opacity over imagery in the radar (readability)
+    tintExpanded:   0.25,        // §5 — lighter tint in the expanded view
+    tileFadeMs:     220,         // fade tiles in as they load
+    // §4 — zoom range per detail level (must match the backend NAV_SAT_ZMIN/ZMAX)
+    detailZooms:  { standard:[16,18], high:[16,19] }
   },
 
   /* ---- CAMERA (WOLFANG control plane + go2rtc WebRTC video) --------------- */

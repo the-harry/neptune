@@ -8,11 +8,13 @@ import asyncio
 import json
 import logging
 import time
+from urllib.parse import urlencode as _urlencode
 
 from fastapi import APIRouter, Body, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from . import areas as areamod
+from . import satellite as satmod
 from .config import settings
 from .deadreckoning import DeadReckoner
 from .divelog import DiveLog
@@ -32,6 +34,7 @@ class NavService:
         self.dr: DeadReckoner | None = None
         self.dive: DiveLog | None = None
         self.last_state: NavState | None = None
+        self.last_sample = None            # latest raw sensor sample (heading0/IMU cal, even with no dive)
         self.active_area: str | None = None
         self.centreline: list[tuple[float, float]] | None = None   # [lon,lat]
         self._subs: set[WebSocket] = set()
@@ -58,6 +61,8 @@ class NavService:
         i = 0
         while True:
             s = self.sensors.read(dt)
+            if s is not None:
+                self.last_sample = s          # IMU heading/cal available even without a dive
             if s is not None and self.dr is not None:
                 ns = self.dr.update(s)
                 self.last_state = ns
@@ -136,9 +141,9 @@ class NavService:
             bool(self.origin) and (self.origin.accuracy <= settings.max_origin_accuracy_m if self.origin else False),
             f"accuracy={self.origin.accuracy}m ≤ {settings.max_origin_accuracy_m}m" if self.origin else "no origin")
         # 4 heading0 + IMU cal
-        mag_ok = (self.last_state.mag_cal >= 2) if self.last_state else False
-        add("heading0 captured + IMU cal good", bool(self.origin) and mag_ok,
-            f"mag_cal={self.last_state.mag_cal if self.last_state else '?'}")
+        mag_cal = self.last_sample.mag_cal if self.last_sample else None
+        add("heading0 captured + IMU cal good", bool(self.origin) and (mag_cal or 0) >= 2,
+            f"mag_cal={mag_cal}")
         # 5 clock sane (RTC or bootstrap-set)
         add("system clock sane", time.time() > 1_700_000_000, time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime()))
         # 6 speed LUT
@@ -183,8 +188,15 @@ def build_router(svc: NavService) -> APIRouter:
         if o.accuracy > settings.max_origin_accuracy_m and not override:
             raise HTTPException(422, f"origin accuracy {o.accuracy}m exceeds {settings.max_origin_accuracy_m}m "
                                      f"— re-fix or pass ?override=true")
+        # heading0 is the sub's IMU yaw at this instant (§4.4) — authoritative over any posted value
+        if svc.last_sample is not None:
+            o.heading_deg = round(svc.last_sample.heading_deg, 1)
         svc.set_origin(o)
         return {"ok": True, "origin": o.model_dump()}
+
+    @r.get("/api/origin")
+    async def get_origin():
+        return svc.origin.model_dump() if svc.origin else JSONResponse({"set": False})
 
     @r.get("/api/nav/state")
     async def nav_state():
@@ -230,24 +242,68 @@ def build_router(svc: NavService) -> APIRouter:
     async def list_dives():
         return sorted(p.name for p in settings.dives_dir.glob("*.geojson"))
 
-    # ---- areas (§6.4) ----
+    # ---- areas (§3/§4): satellite raster download → MBTiles ----
+    def _zooms(detail: str) -> tuple[int, int]:
+        # 'standard' → zmin..zmax (z18); 'high' adds one level (z19) (§4)
+        zmax = settings.sat_max_zoom + (1 if detail == "high" else 0)
+        return settings.sat_min_zoom, zmax
+
+    def _safe_name(s: str) -> str:
+        s = "".join(c if (c.isalnum() or c in "-_") else "-" for c in (s or "").strip()).strip("-")
+        return s[:48] or "area"
+
     @r.get("/api/areas")
     async def get_areas():
         return {"areas": areamod.list_areas(), "extractor_available": areamod.pmtiles_available()}
 
     @r.post("/api/areas/estimate")
     async def area_estimate(payload: dict = Body(...)):
-        return {"est_mb": areamod.estimate_size_mb(payload["bbox"], payload.get("maxzoom", 16))}
+        zmin, zmax = _zooms(payload.get("detail", "standard"))
+        return satmod.estimate(payload["bbox"], payload.get("zmin", zmin), payload.get("zmax", zmax))
 
     @r.post("/api/areas")
     async def area_create(payload: dict = Body(...)):
-        name, bbox, mz = payload["name"], payload["bbox"], payload.get("maxzoom", 16)
+        bbox = payload["bbox"]
+        zmin, zmax = _zooms(payload.get("detail", "standard"))
+        name = payload.get("name")
+        if not name:                                    # §4 — auto-name (reverse geocode, else coords)
+            gc = await satmod.reverse_geocode((bbox[1] + bbox[3]) / 2, (bbox[0] + bbox[2]) / 2)
+            name = gc or f"{(bbox[1]+bbox[3])/2:.4f}_{(bbox[0]+bbox[2])/2:.4f}"
+        name = _safe_name(name)
+
         async def progress(p):
             await svc._broadcast(json.dumps({"type": "area_progress", **p}))
         try:
-            return await areamod.extract_area(name, bbox, mz, progress)
+            return await satmod.download_area(name, bbox, zmin, zmax, progress)
         except (ValueError, RuntimeError) as e:
             raise HTTPException(400, str(e))
+
+    @r.get("/api/areas/{name}/tiles/{z}/{x}/{y}.jpg")
+    async def area_tile(name: str, z: int, x: int, y: int):
+        data = satmod.read_tile(name, z, x, y)
+        if data is None:
+            raise HTTPException(404, "tile not in area")   # client overzooms from a parent (§3.4)
+        return Response(content=data, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=604800"})
+
+    @r.get("/api/areas/{name}/thumb")
+    async def area_thumb(name: str):
+        meta = next((a for a in areamod.list_areas() if a["name"] == name), None)
+        if not meta or not meta.get("bbox"):
+            raise HTTPException(404, "no area")
+        bb, z = meta["bbox"], int(meta.get("minzoom", settings.sat_min_zoom))
+        cx, cy = satmod.deg2num((bb[1] + bb[3]) / 2, (bb[0] + bb[2]) / 2, z)
+        data = satmod.read_tile(name, z, cx, cy)
+        if data is None:
+            raise HTTPException(404, "no thumbnail")
+        return Response(content=data, media_type="image/jpeg")
+
+    @r.get("/api/areas/{name}/centreline")
+    async def area_centreline(name: str):
+        p = settings.areas_dir / f"{name}.geojson"
+        if not p.exists():
+            return {"type": "FeatureCollection", "features": []}
+        return json.loads(p.read_text())
 
     @r.delete("/api/areas/{name}")
     async def area_delete(name: str):
@@ -256,6 +312,24 @@ def build_router(svc: NavService) -> APIRouter:
             svc.active_area = None
             svc.centreline = None
         return {"deleted": name}
+
+    # ---- geocoding (§4) — online only, best-effort ----
+    @r.get("/api/geocode/reverse")
+    async def geocode_reverse(lat: float, lon: float):
+        return {"name": await satmod.reverse_geocode(lat, lon)}
+
+    @r.get("/api/geocode/search")
+    async def geocode_search(q: str):
+        raw = await satmod._fetch_retry(
+            f"{settings.nominatim_url}/search?" + _urlencode({"q": q, "format": "jsonv2", "limit": 5}), tries=1)
+        if not raw:
+            return {"results": []}
+        try:
+            items = json.loads(raw)
+            return {"results": [{"name": it.get("display_name"),
+                                 "lat": float(it["lat"]), "lon": float(it["lon"])} for it in items]}
+        except Exception:  # noqa: BLE001
+            return {"results": []}
 
     @r.post("/api/areas/{name}/activate")
     async def area_activate(name: str):

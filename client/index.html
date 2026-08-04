@@ -15,15 +15,11 @@
 </head>
 <body class="bg-surface-dim text-on-surface font-body-standard overflow-hidden select-none">
 
-<!-- MAP: full-screen canvas basemap + dive track, behind the HUD (§6, §7) -->
-<canvas id="map-canvas" class="fixed inset-0" style="z-index:0"></canvas>
-
-<!-- CAMERA FEED — fills the screen in 'video' view, shrinks to a PiP in 'map' view -->
-<div id="video-layer" class="fixed inset-0">
+<!-- CAMERA FEED — PRIMARY view (§2), fills the viewport; shrinks to a PiP only when the map is expanded. -->
+<div id="video-layer" class="fixed inset-0" style="z-index:0">
   <div id="video-backdrop"></div>
-  <!-- WebRTC feed from go2rtc (WOLFANG camera). srcObject set by video.js. -->
+  <!-- WebRTC feed from go2rtc (WOLFANG camera). srcObject set by video.js — never unmounted. -->
   <video id="video-feed" class="w-full h-full object-cover opacity-90" muted playsinline autoplay style="position:absolute;inset:0;z-index:1;visibility:hidden"></video>
-  <!-- NO FEED / RECONFIGURING overlay -->
   <div id="no-feed" class="hidden">
     <div class="nf-badge" id="no-feed-badge">NO&nbsp;FEED</div>
     <div class="nf-sub" id="no-feed-sub">awaiting camera</div>
@@ -32,21 +28,15 @@
   <div class="scanning-line" style="z-index:3"></div>
 </div>
 
-<!-- MAP controls (pointer-only) + view swap -->
-<div class="map-ctl" style="right:120px;bottom:24px">
-  <button id="map-zoom-in" class="map-btn" title="Zoom in">+</button>
-  <button id="map-zoom-out" class="map-btn" title="Zoom out">&minus;</button>
-  <button id="map-recenter" class="map-btn" title="Reset zoom / recenter">&#8982;</button>
-  <button id="view-swap" class="map-btn map-swap" title="Swap map / camera background"><span id="view-swap-label">CAM</span></button>
-</div>
-
 <!-- TOP APP BAR -->
 <header class="fixed top-0 left-0 h-16 flex justify-between items-center px-edge-margin z-50 bg-surface/30 backdrop-blur-lg border-b border-white/10" style="right:110px">
 <!-- LEAK: icon-only — green drop (normal) / red crossed drop (leak). Set by renderLeak. -->
 <span id="leak-icon" title="Leak sensor"></span>
+<div class="metric"><span class="m-label">Depth</span><span id="depth-val" class="m-val glow-cyan">1.3 m</span></div>
 <div class="metric"><span class="m-label">Pressure</span><span id="pressure-val" class="m-val glow-cyan">14.7 PSI</span></div>
 <div class="metric"><span class="m-label">Ballast</span><span id="ballast-pct" class="m-val">40%</span></div>
 <div class="metric"><span class="m-label">HDG</span><span id="heading-val" class="m-val">284&deg;</span></div>
+<div class="metric" id="origin-tile" style="cursor:pointer" title="Set / adjust the launch origin"><span class="m-label">Origin</span><span id="origin-val" class="m-val" style="color:var(--secondary)">NOT SET</span></div>
 <div class="m-sep"></div>
 <div class="metric"><span class="m-label">Cam Batt</span><span id="cam-battery" class="m-val">--</span></div>
 <div class="metric"><span class="m-label">SD</span><span id="cam-sd" class="m-val">--</span></div>
@@ -120,21 +110,66 @@
 </button>
 </aside>
 
-<!-- BOTTOM LEFT — SONAR: movement input as an X/Y vector (throttle=fwd/rev, steer=turn),
-     N64-stick-tester style: crosshair, sweep, and a live dot+line for direction+magnitude. -->
-<div id="sonar-wrap" class="fixed bottom-edge-margin left-edge-margin z-40 flex items-end gap-3">
-<div class="sonar">
-<svg viewBox="-100 -100 200 200">
-<circle class="sonar-ring" r="92"></circle>
-<circle class="sonar-ring2" r="46"></circle>
-<line class="sonar-cross" x1="-92" y1="0" x2="92" y2="0"></line>
-<line class="sonar-cross" x1="0" y1="-92" x2="0" y2="92"></line>
-<line id="sonar-vec" class="sonar-vec" x1="0" y1="0" x2="0" y2="0"></line>
-<circle id="sonar-dot" class="sonar-dot" cx="0" cy="0" r="7"></circle>
-<circle class="sonar-center" r="2.5"></circle>
-<text class="sonar-tick" x="0" y="-77" text-anchor="middle">FWD</text>
-<text class="sonar-tick" x="0" y="85" text-anchor="middle">REV</text>
-</svg>
+<!-- BOTTOM-LEFT RADAR (§2) — GTA-style circular minimap. ONE map instance lives INSIDE the
+     circle (collapsed) and expands to fullscreen (§3). Heading needle + ring + FWD/REV overlay
+     ON TOP of the live basemap; THROTTLE/STEER readouts to the right (unmoved). -->
+<div id="radar-wrap" class="fixed bottom-edge-margin left-edge-margin z-40 flex items-end gap-3">
+<div class="radar-col">
+<div id="radar" title="Tap to expand the map">
+  <!-- MAP: the single map instance — clipped to the circle when collapsed, fullscreen when expanded -->
+  <div id="map-panel">
+    <canvas id="map-canvas"></canvas>
+    <div id="maplibre-map"></div>                       <!-- MapLibre mounts here when vendored (§3) -->
+    <!-- full, honest empty state — expanded view only (§2: the radar shows a compact label instead) -->
+    <div id="map-empty" class="map-empty">
+      <div id="map-empty-msg" class="map-empty-msg">NO MAP AREA LOADED</div>
+      <button id="map-empty-btn" class="map-empty-btn">LOAD OR DOWNLOAD</button>
+    </div>
+    <div id="all-stop-banner" class="all-stop-banner">ALL&nbsp;STOP — MAP&nbsp;OPEN</div>
+    <!-- expanded-map toolbar (§4): place search + area management -->
+    <div id="map-search">
+      <input id="map-search-in" placeholder="search a place (online)" autocomplete="off">
+      <button id="map-areas-btn" class="ms-btn">AREAS</button>
+      <button id="map-add-area" class="ms-btn ms-primary">＋ AREA</button>
+      <div id="map-search-res"></div>
+    </div>
+    <!-- navigate-and-select download (§4): pan under a fixed rectangle, one button -->
+    <div id="area-select">
+      <div id="as-read" class="as-read">~0 tiles · ~0 MB</div>
+      <div class="as-row">
+        <span class="as-lbl">Detail</span>
+        <button id="as-std" class="as-tog on">Standard</button><button id="as-high" class="as-tog">High</button>
+        <span class="as-spacer"></span>
+        <button id="as-cancel" class="as-btn">CANCEL</button>
+        <button id="as-dl" class="as-btn as-primary">DOWNLOAD THIS AREA</button>
+      </div>
+      <div id="as-prog" class="as-prog"></div>
+    </div>
+    <div id="map-ctl" class="map-ctl">
+      <button id="map-zoom-in" class="map-btn" title="Zoom in">+</button>
+      <button id="map-zoom-out" class="map-btn" title="Zoom out">&minus;</button>
+      <button id="map-recenter" class="map-btn" title="Reset zoom">&#8982;</button>
+      <button id="map-close" class="map-btn" title="Collapse map (Esc)">&#10005;</button>
+    </div>
+  </div>
+  <!-- DIAL overlay: rings + input vector + FWD/REV + rotating North — drawn OVER the map (collapsed) -->
+  <svg id="radar-dial" viewBox="-100 -100 200 200">
+    <circle class="sonar-ring" r="92"></circle>
+    <circle class="sonar-ring2" r="46"></circle>
+    <line class="sonar-cross" x1="-92" y1="0" x2="92" y2="0"></line>
+    <line class="sonar-cross" x1="0" y1="-92" x2="0" y2="92"></line>
+    <line id="sonar-vec" class="sonar-vec" x1="0" y1="0" x2="0" y2="0"></line>
+    <circle id="sonar-dot" class="sonar-dot" cx="0" cy="0" r="7"></circle>
+    <circle class="sonar-center" r="2.5"></circle>
+    <text class="sonar-tick" x="0" y="-58" text-anchor="middle">FWD</text>
+    <text class="sonar-tick" x="0" y="70" text-anchor="middle">REV</text>
+    <!-- North indicator sits at the ring edge (radially clear of FWD, which is inset) -->
+    <g id="radar-north"><line class="radar-n-tick" x1="0" y1="-92" x2="0" y2="-84"></line><text class="radar-n" x="0" y="-77" text-anchor="middle">N</text></g>
+  </svg>
+  <!-- compact empty label INSIDE the circle (collapsed only) — the whole circle is clickable -->
+  <div id="radar-empty" class="radar-empty">NO&nbsp;MAP</div>
+</div>
+<div id="radar-scale" class="radar-scale">10&nbsp;m</div>
 </div>
 <div class="sonar-readout">
 <div class="metric" style="align-items:flex-start"><span class="m-label">Throttle</span><span id="sonar-thr" class="m-val">0%</span></div>
@@ -163,6 +198,8 @@
 <script src="js/controls.js"></script>
 <script src="js/render.js"></script>
 <script src="js/camera.js"></script>
+<script src="js/tiles.js"></script>
 <script src="js/map.js"></script>
+<script src="js/navui.js"></script>
 <script src="js/main.js"></script>
 </body></html>

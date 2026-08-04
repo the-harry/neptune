@@ -148,6 +148,15 @@ function computeInput(dt){
 
   const ni={ throttle:clamp(throttle,-1,1), steer:clamp(steer,-1,1),
              pan:clamp(pan,-1,1), tilt:clamp(tilt,-1,1), ballast:ballast };
+
+  // --- §3 map-open safety: a submarine can't be "paused". While the map is expanded,
+  // hold an all-stop (throttle+steer zeroed); the moment the operator commands thrust or
+  // steer past the deadzone, collapse the map and hand control back THIS SAME tick.
+  if(typeof MAP!=='undefined' && MAP.expanded){
+    if((Math.abs(ni.throttle)+Math.abs(ni.steer)) > CONFIG.deadzone){ collapseMap(); }
+    else if(CONFIG.map.allStopOnExpand){ ni.throttle=0; ni.steer=0; }
+  }
+
   if(ni.ballast!==state.input.ballast) LOG.input('ballast ->', ni.ballast);
   state.input=ni;
 }
