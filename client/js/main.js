@@ -132,7 +132,7 @@ function bindExit(){
 }
 
 /* ---- BOOTSTRAP ---- */
-function boot(forced){
+async function boot(forced){
   if(!forced && fileProtocolGuard()) return;
   resolveHost();
   enableAppFullscreen();
@@ -140,7 +140,12 @@ function boot(forced){
   loadBindings();
   registerServiceWorker();                                  // PWA — offline app shell + tile cache (§2)
   try{ initStatus(); }catch(e){ LOG.warn('status init failed:', e && e.message); }   // degradation indicator (§3)
-  try{ STORE.init(); }catch(e){ LOG.warn('store init failed:', e && e.message); }    // client owns its state (§1/§2)
+  // AWAIT the store before anything reads it. This used to be fire-and-forget, so
+  // autoRequestOrigin() ran while IndexedDB was still opening, saw no saved origin,
+  // and asked the browser for a position on EVERY boot - re-prompting for location
+  // each launch even though an origin was already stored. initMap/initNavUI read the
+  // same store, so they were racing it too.
+  try{ await STORE.init(); }catch(e){ LOG.warn('store init failed:', e && e.message); }  // client owns its state (§1/§2)
   try{ REC.init(); }catch(e){ LOG.warn('recorder init failed:', e && e.message); }   // blackbox recorder (§4/§5)
   // Initial light lamp render (icons + glow)
   renderLightButton('green', state.lights.green.on, state.lights.green.level);
