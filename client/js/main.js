@@ -31,6 +31,14 @@ function frame(ts){
 
   renderUI(view);
   updateBadges();
+  // §4.2 staleness: surface the age of the newest telemetry the operator is seeing (real link only)
+  if(window.REC && REC.enabled){
+    const age=REC.tickStaleness();
+    const b=$('stale-badge');
+    if(b){ const stale = state.mode!=='sim' && age>CONFIG.recorder.stalenessMs;
+      b.classList.toggle('show', stale);
+      if(stale){ const a=$('stale-age'); if(a) a.textContent=Math.round(age)+' ms'; } }
+  }
   requestAnimationFrame(frame);
 }
 
@@ -83,6 +91,7 @@ function boot(forced){
   enableAppFullscreen();
   LOG.state('boot — host="'+ (state.host||'(none, disk mode)') +'"  http="'+(state.httpBase||'(relative)')+'"  ws="'+(state.wsBase||'(none)')+'"');
   loadBindings();
+  try{ REC.init(); }catch(e){ LOG.warn('recorder init failed:', e && e.message); }   // blackbox recorder (§4/§5)
   // Initial light lamp render (icons + glow)
   renderLightButton('green', state.lights.green.on, state.lights.green.level);
   renderLightButton('white', state.lights.white.on, state.lights.white.level);
@@ -114,6 +123,7 @@ function boot(forced){
     openMapper, closeMapper, resetBindings,
     connectVideo, camRecordToggle, camCapture,
     openOrigin:openOriginModal, openAreas:openAreaManager, requestLocation:requestDeviceLocation,
+    REC, mark:(n)=>REC.mark(n), exportLog:()=>REC.exportLog(),
     get bindings(){ return state.bindings; }
   };
   LOG.state('ready. Console API available as window.NEPTUNE (try NEPTUNE.logRate(true))');

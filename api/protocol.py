@@ -40,10 +40,12 @@ class CommandMsg(BaseModel):
     # arm|disarm|stop|surface|ballast_home carry no value; magnet/light_* carry
     # bool; *_level carry float; dropweight carries "release".
     value: Optional[Union[bool, float, str]] = None
+    c_id: Optional[str] = None      # correlation id (§3) — carried through every stage, echoed in the ack
 
 
 class PingMsg(BaseModel):
     type: Literal["ping"]
+    t1: Optional[float] = None      # client monotonic ms at send (§2 SNTP) — echoed back in the pong
 
 
 Inbound = Annotated[
@@ -76,6 +78,8 @@ def parse_inbound(raw: str | bytes):
 
 class Telemetry(BaseModel):
     type: Literal["telemetry"] = "telemetry"
+    seq: Optional[int] = None       # monotonically increasing frame number (§4 — client gap detection)
+    t: Optional[float] = None       # Pi monotonic ms at send (§2/§4 — staleness/max_age)
     armed: bool
     left: float
     right: float
@@ -108,3 +112,15 @@ class Alarm(BaseModel):
 
 class Pong(BaseModel):
     type: Literal["pong"] = "pong"
+    t1: Optional[float] = None      # echoed client send time
+    t2: Optional[float] = None      # Pi monotonic ms at receive  (§2 SNTP)
+    t3: Optional[float] = None      # Pi monotonic ms at send
+
+
+class Ack(BaseModel):
+    """Command acknowledgement (§3) — closes the correlation loop back to the client."""
+    type: Literal["ack"] = "ack"
+    c_id: Optional[str] = None
+    name: str
+    ok: bool
+    reason: Optional[str] = None

@@ -3,7 +3,14 @@
    COMMANDS — discrete actions. Each sends to the server AND updates the local
    state mirror so the UI reacts identically online or offline.
    ============================================================================ */
-function cmd(name, value){ LOG.cmd(name, (value!==undefined?value:'')); send({type:'command', name:name, value:value}); }
+function cmd(name, value){
+  LOG.cmd(name, (value!==undefined?value:''));
+  // §3 correlation: a UUID at the moment of operator intent, carried through the socket and
+  // echoed in the Pi's ack, so the whole 8-stage lifecycle ties together across both logs.
+  const c_id = (window.REC && REC.enabled) ? REC.cmdIntent(name, value) : null;
+  send({type:'command', name:name, value:value, c_id:c_id});
+  if(c_id) REC.cmdSend(c_id);
+}
 
 function toggleArm(){
   state.armed=!state.armed;

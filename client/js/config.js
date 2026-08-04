@@ -68,6 +68,22 @@ const CONFIG = {
     videoRetryMs: 2500                     // WebRTC reconnect backoff floor (§7.4 self-heal)
   },
 
+  /* ---- BLACKBOX client recorder (logging addendum) ----------------------- */
+  recorder: {
+    enabled:       true,
+    session:       '/api/session',    // adopt the Pi's session id on connect (§1)
+    clientlog:     '/api/clientlog',  // batched upload target (§5)
+    uploadEveryMs: 5000,              // upload every 5 s …
+    uploadMaxBatch:200,               // … or every 200 events, whichever first (§5)
+    maxEvents:     200000,            // IndexedDB ring cap (~50 MB at ~250 B/event), oldest-out (§5)
+    uploadCapBps:  64000,             // 64 kbps upload cap — never starve video/telemetry (§5)
+    backoffMaxMs:  30000,             // exponential backoff ceiling on repeated upload failure (§5)
+    webrtcHz:      1,                 // WebRTC receiver-stats sample rate (§4.1)
+    gamepadHz:     10,                // raw gamepad sample rate (§4.1)
+    tlmWindow:     100,               // telemetry frames per compact tlm_rx line (§4.2)
+    stalenessMs:   500                // surface max_age in the HUD when the newest frame is older (§4.2)
+  },
+
   /* ---- INPUT ------------------------------------------------------------- */
   deadzone:       0.08,        // analog stick deadzone (0..1)
 

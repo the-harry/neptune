@@ -54,6 +54,8 @@
 </header>
 <!-- Camera fault channel (WarningMSG / degraded) — hidden unless there's a fault -->
 <div id="cam-warning" class="fixed left-1/2 -translate-x-1/2 z-50" style="top:64px"></div>
+<!-- STALE DATA warning (§4.2) — shown when the newest telemetry the operator sees exceeds the staleness threshold -->
+<div id="stale-badge" class="fixed z-50">STALE DATA <span id="stale-age"></span></div>
 
 <!-- RIGHT CONTROL RAIL — stacked; LED + ballast sliders flex to fill the height -->
 <aside class="fixed right-0 top-0 h-full w-[110px] z-50 glass-panel flex flex-col px-3 gap-1.5 overflow-hidden no-scrollbar border-l border-white/20 glow-shadow-rail" style="padding-top:10px;padding-bottom:10px">
@@ -191,6 +193,7 @@
      ============================================================================ -->
 <script src="js/config.js"></script>
 <script src="js/core.js"></script>
+<script src="js/recorder.js"></script>
 <script src="js/video.js"></script>
 <script src="js/net.js"></script>
 <script src="js/commands.js"></script>

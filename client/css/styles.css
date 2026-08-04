@@ -427,6 +427,14 @@ body.map-expanded #area-select.on{display:flex}
   padding:6px 14px;border-radius:.35rem;border:1px solid var(--primary);background:transparent;color:var(--primary);cursor:pointer}
 #origin-prompt .op-btn:hover{background:color-mix(in srgb,var(--primary) 16%,transparent)}
 
+/* ---- STALE DATA badge (§4.2 — operator was looking at old telemetry) ---- */
+#stale-badge{top:76px;left:calc(50% - 55px);transform:translateX(-50%);display:none;
+  font-family:var(--font-sans);font-size:12px;font-weight:800;letter-spacing:.12em;padding:6px 14px;border-radius:.4rem;
+  color:var(--hazard);border:1.5px solid var(--hazard);background:color-mix(in srgb,var(--hazard) 14%,rgba(12,1,24,.85));
+  box-shadow:0 0 16px rgba(255,140,26,.4);pointer-events:none}
+#stale-badge.show{display:block}
+#stale-badge #stale-age{opacity:.8;font-weight:600}
+
 /* ---- file:// blocking guard (§1) ---- */
 #file-guard{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;
   background:var(--surface-dim);padding:24px;text-align:center}

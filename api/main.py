@@ -28,8 +28,9 @@ from nav.app import create_nav_service
 from nav.service import build_router as build_nav_router
 from config import settings
 from hardware import get_hardware
-from protocol import Alarm, Pong, parse_inbound
+from protocol import COMMAND_NAMES, Ack, Alarm, Pong, parse_inbound
 from rov import RovState
+from blackbox import BlackBox, build_router as build_blackbox_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -73,10 +74,13 @@ async def _control_loop(app: FastAPI) -> None:
     """Advance sim, run the watchdog, refresh metrics, broadcast telemetry."""
     rov: RovState = app.state.rov
     mgr: ConnectionManager = app.state.manager
+    bb: BlackBox = app.state.bb
     period = 1.0 / max(1.0, settings.telemetry_hz)
     metrics_cache = sysmetrics.snapshot()
     last_metrics = time.monotonic()
     last = time.monotonic()
+    seq = 0
+    tx_from = None                    # telemetry seq-range accumulator (§4 — log ranges, not every frame)
     log.info("control loop @ %.0f Hz (watchdog %.2fs)", settings.telemetry_hz, settings.watchdog_timeout_s)
     while True:
         now = time.monotonic()
@@ -91,8 +95,18 @@ async def _control_loop(app: FastAPI) -> None:
             last_metrics = now
 
         if mgr.count:
+            seq += 1
             tel = rov.telemetry(metrics_cache)
+            tel.seq = seq
+            tel.t = round(bb.now_ms(), 3)
             await mgr.broadcast(tel.model_dump_json())
+            # record what we SENT as compact ranges so `rovlog diverge` can compare
+            # against the client's received ranges (§4/§6) without 30 Hz of log lines.
+            if tx_from is None:
+                tx_from = seq
+            if seq - tx_from >= 99:
+                bb.event("tlm_tx", {"seq_from": tx_from, "seq_to": seq, "n": seq - tx_from + 1})
+                tx_from = None
             if rov.leak_alarm_edge(tel.leak):
                 await mgr.broadcast(Alarm(name="leak").model_dump_json())
 
@@ -125,6 +139,9 @@ async def lifespan(app: FastAPI):
         with contextlib.suppress(Exception):
             app.state.hw.safe()
             app.state.hw.close()
+        with contextlib.suppress(Exception):
+            app.state.bb.event("session_end", {})
+            app.state.bb.close()
         log.info("NEPTUNE API down — vehicle safed")
 
 
@@ -136,6 +153,9 @@ app.state.camera_svc = create_camera_service()
 app.include_router(build_camera_router(app.state.camera_svc))
 app.state.nav_svc = create_nav_service()
 app.include_router(build_nav_router(app.state.nav_svc))
+# blackbox flight recorder: session handshake + client-log upload (§1/§5)
+app.state.bb = BlackBox()
+app.include_router(build_blackbox_router(app.state.bb))
 
 # file:// client reports Origin "null"; "*" lets disk-mode reach the REST/health
 # endpoints. (Browser WebSockets aren't subject to CORS.)
@@ -170,7 +190,9 @@ def stream() -> StreamingResponse:
 async def ws_control(ws: WebSocket) -> None:
     mgr: ConnectionManager = app.state.manager
     rov: RovState = app.state.rov
+    bb: BlackBox = app.state.bb
     await mgr.connect(ws)
+    bb.event("ws_connect", {"clients": mgr.count})
     try:
         while True:
             raw = await ws.receive_text()
@@ -185,11 +207,23 @@ async def ws_control(ws: WebSocket) -> None:
             elif t == "ballast":
                 rov.apply_ballast(msg)
             elif t == "command":
-                rov.apply_command(msg)
+                # §3 command lifecycle — recv → validate → apply → ack_send, each logged
+                c_id = getattr(msg, "c_id", None)
+                bb.event("cmd_recv", {"name": msg.name, "value": msg.value}, c_id=c_id)
+                valid = msg.name in COMMAND_NAMES
+                bb.event("cmd_validate", {"name": msg.name, "ok": valid}, c_id=c_id)
+                if valid:
+                    rov.apply_command(msg)
+                    bb.event("cmd_apply", {"name": msg.name, "value": msg.value}, c_id=c_id)
+                bb.event("cmd_ack_send", {"name": msg.name, "ok": valid}, c_id=c_id)
+                await ws.send_text(Ack(c_id=c_id, name=msg.name, ok=valid,
+                                       reason=None if valid else "unknown command").model_dump_json())
             elif t == "ping":
-                await ws.send_text(Pong().model_dump_json())
+                # §2 SNTP: stamp receive (t2) and send (t3) in the Pi's monotonic ms
+                t2 = bb.now_ms()
+                await ws.send_text(Pong(t1=msg.t1, t2=round(t2, 3), t3=round(bb.now_ms(), 3)).model_dump_json())
     except WebSocketDisconnect:
-        pass
+        bb.event("ws_disconnect", {"clients": mgr.count - 1, "reason": "client_close"})
     except Exception as exc:  # noqa: BLE001 — never let one socket take down the app
         log.warning("ws error: %s", exc)
     finally:

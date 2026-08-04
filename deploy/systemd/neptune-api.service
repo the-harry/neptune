@@ -13,6 +13,9 @@ Environment=NEPTUNE_HW=real
 Environment=NEPTUNE_CAM=none
 Environment=NEPTUNE_CLIENT_DIR=/opt/neptune/client
 Environment=WOLFANG_BASE=http://192.72.1.1
+Environment=ROV_LOG_DIR=/var/log/rov
+# blackbox flight recorder writes here; LogsDirectory creates + owns /var/log/rov
+LogsDirectory=rov
 Restart=always
 RestartSec=2
 

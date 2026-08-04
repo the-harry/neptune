@@ -166,6 +166,49 @@ instruments — thrust, steering, video — fully live**. The map never captures
 gamepad/keyboard piloting input (handlers are scoped to the canvas; MapLibre, if ever
 vendored, is `keyboard:false`).
 
+## Blackbox recorder (two-sided logging)
+
+`js/recorder.js` is the topside half of a two-sided flight recorder. It logs the
+same events the Pi logs — from *the operator's side* — so the two can be differenced
+afterwards to locate faults neither log pins down alone ("it didn't respond" =
+command never sent / never arrived / ack lost; "video froze" while the encoder was
+healthy = tether, not camera; a bad manoeuvre made on stale data).
+
+- **Session (§1):** adopts the Pi's `session_id`/`pi_boot_id` from `GET /api/session`
+  on connect; a Pi reboot starts a fresh client file.
+- **Clock sync (§2):** an SNTP-style `t1/t2/t3/t4` exchange rides the existing WS
+  ping every second → `rtt`/`offset` logged as `clock_sync` (and `rtt` feeds the
+  LINK readout). Client timestamps are **always** the client's own monotonic time —
+  never rewritten; correction happens only in analysis.
+- **Correlation IDs (§3):** every discrete command gets a UUID at operator intent
+  (`commands.js`), carried through the socket and echoed in the Pi's `ack`, so the
+  full 8-stage lifecycle (`cmd_intent→send→recv→validate→apply→ack_send→ack_recv→
+  confirm`) ties together across both logs.
+- **Client-only signals (§4):** 1 Hz WebRTC receiver stats, 10 Hz raw gamepad,
+  browser/visibility/error events, environment, and compact `tlm_rx` sequence
+  ranges + gaps. `max_age_ms` (age of the newest telemetry at render) drives a
+  **STALE DATA** HUD badge over `CONFIG.recorder.stalenessMs`.
+- **Durability (§5):** an IndexedDB ring buffer (oldest-out) written immediately;
+  uploaded to `POST /api/clientlog` every 5 s / 200 events, deleted only after the
+  Pi confirms; backlog flushes first on reconnect; `up_lag_ms` tags how long each
+  record waited; exponential backoff + a 64 kbps cap keep it off the tether;
+  `beforeunload` does a `sendBeacon` flush. **CONFIG → BLACKBOX → EXPORT LOG**
+  downloads the whole ring as JSONL even with the link fully down; **MARK EVENT**
+  drops a bookmark.
+
+Console: `NEPTUNE.mark('note')`, `NEPTUNE.exportLog()`, `NEPTUNE.REC`.
+
+### Analysis — `rovlog`
+
+On the Pi (`api/`): `python -m blackbox.rovlog <cmd>`
+- `merge nav.jsonl client.jsonl` — one clock-aligned stream (interpolated offsets;
+  flags windows where the offset estimate is unreliable).
+- `diverge <session>` — the payoff: lost commands (by `c_id`), lost telemetry (Pi
+  sent-ranges vs client received-ranges + worst gap), per-stage latency p50/p95/max,
+  staleness distribution, video divergence, one-sided outages, clock anomalies.
+- `timeline <session> --around <t> --window <s>` — side-by-side text around an incident.
+- `bundle <session>` — incident zip (both logs + merge + diverge + config).
+
 ## Testing the fallbacks
 
 - **SIM mode** — open from disk, no server → gauges animate from your inputs.

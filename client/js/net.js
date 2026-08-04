@@ -27,9 +27,10 @@ function connect(){
     LOG.net('OPEN', url);
     setWsStatus('online');
     state.reconnectDelay=CONFIG.reconnect.baseMs;
+    if(window.REC && REC.enabled){ REC.log('ws_connect', {url}); REC.adoptSession(); }   // §1 adopt session on connect
   };
   ws.onmessage = (ev)=>{ handleMessage(ev.data); };
-  ws.onclose = (ev)=>{ LOG.net('CLOSE', 'code='+ev.code, ev.reason||''); setWsStatus('offline'); scheduleReconnect(); };
+  ws.onclose = (ev)=>{ LOG.net('CLOSE', 'code='+ev.code, ev.reason||''); if(window.REC&&REC.enabled) REC.log('ws_disconnect', {code:ev.code, reason:ev.reason||''}); setWsStatus('offline'); scheduleReconnect(); };
   ws.onerror = ()=>{ LOG.warn('ws error'); try{ ws.close(); }catch(e){} };
 }
 function scheduleReconnect(){
@@ -45,8 +46,9 @@ function scheduleReconnect(){
 }
 function handleMessage(raw){
   let m; try{ m=JSON.parse(raw); }catch(e){ LOG.warn('bad ws frame', raw); return; }
-  if(m.type==='telemetry'){ LOG.rxRate('tel','telemetry', m); onTelemetry(m); }
-  else if(m.type==='pong'){ state.linkMs=Date.now()-state.lastPingAt; LOG.rxRate('pong','pong RTT', state.linkMs+'ms'); }
+  if(m.type==='telemetry'){ LOG.rxRate('tel','telemetry', m); if(window.REC&&REC.enabled) REC.onTelemetry(m); onTelemetry(m); }
+  else if(m.type==='pong'){ if(window.REC&&REC.enabled) REC.onPong(m); else state.linkMs=Date.now()-state.lastPingAt; LOG.rxRate('pong','pong RTT', state.linkMs+'ms'); }
+  else if(m.type==='ack'){ if(window.REC&&REC.enabled) REC.cmdAck(m.c_id, m.ok); LOG.rxRate('ack','cmd ack', m.name, m.ok); }
   else if(m.type==='alarm' && m.name==='leak'){ LOG.warn('ALARM: leak'); state.alarmLeak=true; }
   else LOG.rx('msg', m);
 }
@@ -82,7 +84,8 @@ function startSendLoop(){
   }, Math.round(1000/CONFIG.sendRateHz));
 }
 function startPingLoop(){
-  setInterval(()=>{ state.lastPingAt=Date.now(); send({type:'ping'}); }, CONFIG.pingIntervalMs);
+  // §2 SNTP: carry the client monotonic send time (t1) so the pong can complete the exchange.
+  setInterval(()=>{ state.lastPingAt=Date.now(); send({type:'ping', t1:(window.REC?REC.mono():performance.now())}); }, CONFIG.pingIntervalMs);
 }
 // Push dirty light-brightness levels at a modest rate (avoids flooding).
 function startLevelLoop(){
