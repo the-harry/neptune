@@ -9,11 +9,14 @@ Two halves, one repo — a topside **dashboard PWA** and an on‑board **Pi back
 ```
  ROG Ally (topside)                     Raspberry Pi (on the sub)                WOLFANG cam
  ┌───────────────┐   Ethernet tether   ┌────────────────────────────┐   Wi‑Fi   ┌──────────┐
- │ PWA dashboard │◀───────eth0────────▶│ nginx (HTTPS, one origin)   │◀──wlan0──▶│ RTSP/CGI │
- │ (browser)     │   https://neptune/  │  ├─ FastAPI  /api  /ws       │  AP:      └──────────┘
+ │ dashboard PWA │◀───────eth0────────▶│ nginx (plain HTTP proxy)    │◀──wlan0──▶│ RTSP/CGI │
+ │ runs on Ally  │  API · WS · WebRTC  │  ├─ FastAPI  /api  /ws       │  AP:      └──────────┘
  └───────────────┘                     │  └─ go2rtc  /go2rtc /stream  │  ActionCam_b981
                                         └────────────────────────────┘
 ```
+
+**The Pi is backend‑only** — it never serves the dashboard. The frontend runs **only on the
+ROG Ally**, pointed at the Pi's API. This keeps the Pi lightweight (no static files, no SPA).
 
 Video is **zero‑transcode** (go2rtc re‑streams the camera's H.264 to WebRTC), so even a Pi 3
 keeps up. `eth0` is the tether (the way in); `wlan0` joins the camera's Wi‑Fi, pinned off the
@@ -36,9 +39,14 @@ first run):
 curl -fsSL https://raw.githubusercontent.com/the-harry/neptune/master/install.sh | sudo bash
 ```
 
-Then open **`https://neptune.local/`** on the ROG Ally, trust the self‑signed cert once, and
-**Install** it as a PWA. Full walkthrough (imaging, swap, networking, the internet‑during‑install
-gotcha, updating) → **[Installing on the Pi](#-installing-on-the-pi)** below and the backend docs.
+**On the ROG Ally**, double‑click **`client/launch/Neptune.bat`**. It sets everything up in
+order — asks for the Pi IP once, makes a desktop **Neptune** shortcut, starts a tiny local
+static server, and opens **Brave/Chrome/Edge fullscreen** pointed at the Pi.
+After that, just use the desktop icon. Details → [`client/launch/README.md`](client/launch/README.md).
+
+The Pi is **backend‑only**; the dashboard runs on the Ally from `localhost` (a secure origin, so
+geolocation and the PWA work) and talks to the Pi over the tether. Full Pi walkthrough (imaging,
+swap, networking, updating) → **[Installing on the Pi](#-installing-on-the-pi)** below.
 
 **For development / simulation** (no hardware, no water):
 
@@ -105,10 +113,12 @@ Wi‑Fi in ⚙️ settings (use your **router** Wi‑Fi, not the camera's).
    curl -fsSL https://raw.githubusercontent.com/the-harry/neptune/master/install.sh | sudo bash
    ```
    It installs the API + a Python venv, downloads go2rtc, joins `ActionCam_b981` on `wlan0`
-   (never‑default), generates a self‑signed TLS cert, and wires nginx + systemd on boot.
-4. **Open it:** `https://neptune.local/` (control API at `/api/status`, video at `/stream/`).
-   Use the **hostname** — the cert's SAN covers it on any network. When you move `eth0` to the
-   **tether**, re‑run the installer once so it re‑stamps the real tether IP into go2rtc + the cert.
+   (never‑default), and wires nginx (plain HTTP) + systemd on boot. No TLS/cert — it's a sealed
+   two‑device tether.
+4. **Verify the backend:** `http://neptune.local/api/status` (JSON) and `/stream/` for video.
+   `http://neptune.local/` itself just returns a status line — the dashboard runs topside, not
+   here. When you move `eth0` to the **tether**, re‑run the installer once so it re‑stamps the
+   real tether IP into go2rtc. Then run the dashboard on the Ally (see **Quick start** above).
 
 Overrides (env): `NEPTUNE_REPO`, `NEPTUNE_BRANCH`, `NEPTUNE_TETHER_IFACE` (`eth0`),
 `NEPTUNE_CAM_IFACE` (`wlan0`), `NEPTUNE_CAM_SSID` / `NEPTUNE_CAM_PSK`, `NEPTUNE_CAMERA_IP`.

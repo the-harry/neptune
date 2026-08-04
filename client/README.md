@@ -5,9 +5,15 @@ API consumer: WebRTC video (go2rtc), WebSockets for ROV control + camera
 telemetry, and REST for camera commands/config/files. No framework, no build
 step, no dependencies.
 
-**Serve it over HTTPS from the Pi** — `https://<pi>/` (nginx, self-signed cert
-trusted once on the handheld), then **Install** it as a PWA. The backend resolves
-**same-origin**; `?host=IP:PORT` remains an override only.
+**This runs on the ROG Ally, not the Pi.** The Pi is backend-only. Double-click
+**[`launch/Neptune.bat`](launch/)** — it makes a desktop shortcut, starts a tiny local
+static server (a secure origin — geolocation and the PWA need one), and opens
+**Brave/Chrome/Edge fullscreen** at `http://localhost/?host=<pi-ip>`. The Pi is plain HTTP
+(sealed tether), so there's no cert to trust. See [`launch/README.md`](launch/README.md).
+
+`?host=<pi-ip>` is remembered (localStorage) and can also be set in the CONFIG panel.
+(Opening from `file://` is blocked — it has no secure context and can't reach the Pi;
+that's why the launcher serves it from `localhost` instead.)
 
 ## Offline-first: the client works without the backend
 
@@ -94,20 +100,24 @@ just edit and reload. Nothing else hard-codes these numbers.
   (`--app` = no tabs/URL bar; `--kiosk` = fullscreen locked. Add `--start-fullscreen`
   if you prefer a normal window that starts maximized.)
 
-## Serving from FastAPI (the Pi)
+## Talking to the Pi backend
 
-The backend in [`../api`](../api) already serves this folder (it mounts
-`client/` at `/` with `html=True`) and implements the endpoints below. Just run
-it (`cd api && python main.py`) and open `http://<host>:8000/`.
+The Pi is **backend-only** — it does not serve this folder. Run the client on the Ally
+(above) and point it at the Pi with `?host=<pi-ip>` (remembered in localStorage; also
+settable in the CONFIG panel). The Pi's nginx sends permissive CORS headers, so the
+cross-origin fetches work; WebSockets aren't subject to CORS.
 
-Endpoints the client expects (all same-origin, proxied by nginx on the Pi):
+Endpoints the client expects on the Pi:
 - `WS  /go2rtc/api/ws?src=sub` → WebRTC video signaling (go2rtc)
 - `WS  /ws/control`   → ROV control out + telemetry in
 - `WS  /ws/telemetry` → camera status (~15s)
 - `REST /api/status · /api/menu · /api/config/{p} · /api/record/toggle · /api/capture · /api/files · …`
 
-Override the host for local dev with `?host=192.168.1.10:8000` (remembered in
-localStorage) or via the CONFIG panel.
+For pure UI/dev work with **no Pi**, run the backend locally in mock mode
+(`cd api && python main.py`) and just open **`http://localhost:8000/`** — FastAPI
+serves the client same-origin, so every gauge animates from the simulator. (A cross-origin
+`?host` defaults to plain `http`/`ws`, matching the Pi; add `&secure=1` only if you ever
+front the Pi with HTTPS.)
 
 ## Navigation & radar
 
@@ -165,8 +175,8 @@ aside while you're actively tapping an origin or selecting an area.
 ### Setting the origin (§2)
 
 The fix comes from the **handheld's own browser**. On load with no origin, Neptune
-**auto-requests** `getCurrentPosition` (secure context required — hence HTTPS) and
-centres the map on you. The ROG Ally has no GNSS — Windows resolves position by WiFi,
+**auto-requests** `getCurrentPosition` (needs a secure context — which is why the
+launcher serves it from `localhost`) and centres the map on you. The ROG Ally has no GNSS — Windows resolves position by WiFi,
 so accuracy reads tens–hundreds of metres; the **ORIGIN** tile shows it (`SET ±120m`),
 and above `originRefineM` (30 m) a non-blocking **TAP TO REFINE** prompt lets you tap
 your bank on the imagery (which beats WiFi). **North comes from the sub's IMU**

@@ -19,7 +19,9 @@
       "Bash(python3 -m py_compile nav/*.py)",
       "Bash(cd *)",
       "Bash(sed -n '/^case \"\\\\$REPO_URL\"/,/esac/p' install.sh)",
-      "Bash(grep -nE \"^#{1,3} \" README.md)"
+      "Bash(grep -nE \"^#{1,3} \" README.md)",
+      "Bash(printf '192.168.1.88\\\\n')",
+      "Bash(command -v pwsh)"
     ]
   }
 }

@@ -4,10 +4,10 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/the-harry/neptune/master/install.sh | sudo bash
 #
-# Fresh install OR update (auto-detected). Clones the repo, serves the dashboard
-# SPA over HTTPS (self-signed cert, §1), installs the control API + go2rtc video
-# plane, wires nginx + systemd, pins the camera route to wlan0, and enables
-# everything on boot. Idempotent: re-run to update.
+# Fresh install OR update (auto-detected). Clones the repo, keeps ONLY the backend
+# (strips the client), installs the control API + go2rtc video plane behind a plain
+# nginx reverse proxy (no TLS — sealed tether), pins the camera route to wlan0, and
+# enables everything on boot. Idempotent: re-run to update.
 #
 # Override anything via env, e.g.:
 #   curl -fsSL .../install.sh | sudo NEPTUNE_BRANCH=dev bash
@@ -53,15 +53,25 @@ fi
 CAM_SSID="${NEPTUNE_CAM_SSID:-ActionCam_b981}"
 CAM_PSK="${NEPTUNE_CAM_PSK:-12345678}"
 if command -v nmcli >/dev/null 2>&1; then
-  log "configuring $CAM_IFACE to join camera AP '$CAM_SSID' (never-default)…"
+  log "saving camera Wi-Fi profile for '$CAM_SSID' on $CAM_IFACE (never-default, autoconnect)…"
   nmcli connection delete neptune-cam >/dev/null 2>&1 || true
-  nmcli connection add type wifi ifname "$CAM_IFACE" con-name neptune-cam \
-    ssid "$CAM_SSID" \
-    wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$CAM_PSK" \
-    ipv4.never-default yes ipv4.ignore-auto-dns yes ipv6.method disabled \
-    connection.autoconnect yes >/dev/null \
-    && nmcli connection up neptune-cam >/dev/null 2>&1 \
-    || warn "camera WiFi setup failed — join '$CAM_SSID' on $CAM_IFACE manually"
+  # Creating the PROFILE is what must persist — it autoconnects whenever the camera AP appears.
+  # `autoconnect-retries 0` = retry forever, so a camera powered on later still gets joined.
+  if nmcli connection add type wifi ifname "$CAM_IFACE" con-name neptune-cam \
+       ssid "$CAM_SSID" \
+       wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$CAM_PSK" \
+       ipv4.never-default yes ipv4.ignore-auto-dns yes ipv6.method disabled \
+       connection.autoconnect yes connection.autoconnect-retries 0 >/dev/null; then
+    log "camera Wi-Fi profile saved — auto-joins when '$CAM_SSID' is powered on"
+    # Activating NOW is best-effort: it fails harmlessly if the camera AP isn't broadcasting yet.
+    if nmcli connection up neptune-cam >/dev/null 2>&1; then
+      log "camera AP joined now"
+    else
+      log "camera AP not in range yet — it will connect automatically when the camera is on"
+    fi
+  else
+    warn "could not save the camera Wi-Fi profile on $CAM_IFACE — add '$CAM_SSID' manually"
+  fi
 elif [ -d /etc/wpa_supplicant ] || command -v wpa_supplicant >/dev/null 2>&1; then
   # older Pi OS (Bullseye / dhcpcd) fallback
   log "configuring $CAM_IFACE via wpa_supplicant to join '$CAM_SSID'…"
@@ -98,15 +108,15 @@ else
   git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
 fi
 
-# ---- 4. keep the client (§1: the Pi serves the SPA over HTTPS) --------------
-# The dashboard MUST be served from the Pi over TLS — geolocation (the origin fix)
-# needs a secure context, and file:// blocks fetches to the Pi. nginx (below)
-# serves $INSTALL_DIR/client at https://<pi>/.
-if [ -d "$INSTALL_DIR/client" ]; then
-  log "client/ present — served at https://<pi>/ (§1)"
-else
-  warn "client/ missing from the repo checkout — the SPA will not be served"
-fi
+# ---- 4. strip non-backend files (the Pi is backend-only, keep it lightweight) --
+# The dashboard + any frontend run TOPSIDE on the ROG Ally, never on the Pi. The
+# `reset --hard` above restores these on every update, so remove them each run.
+for junk in client README.md; do
+  if [ -e "$INSTALL_DIR/$junk" ]; then
+    log "removing $junk (not needed on the backend)…"
+    rm -rf "${INSTALL_DIR:?}/$junk"
+  fi
+done
 
 # ---- 5. python venv + deps --------------------------------------------------
 log "setting up python venv + dependencies…"
@@ -149,33 +159,18 @@ else
   warn "could not detect $TETHER_IFACE IP — edit $INSTALL_DIR/deploy/go2rtc.yaml (<PI_TETHER_IP>) by hand"
 fi
 
-# ---- 8. self-signed TLS cert (§1: HTTPS is required for geolocation) --------
-# A remote Pi is not localhost, so a secure context needs a real cert. Self-signed
-# is fine — trust it once on the handheld. Generated once, reused across updates.
-TLS_DIR=/etc/neptune/tls
-if [ ! -s "$TLS_DIR/neptune.crt" ] || [ ! -s "$TLS_DIR/neptune.key" ]; then
-  log "generating self-signed TLS cert at $TLS_DIR…"
-  mkdir -p "$TLS_DIR"
-  # SANs cover the tether IP + common Pi hostnames so the cert matches however it's reached.
-  SAN="IP:${TETHER_IP:-127.0.0.1},DNS:neptune,DNS:neptune.local,DNS:raspberrypi.local,DNS:localhost"
-  openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-    -keyout "$TLS_DIR/neptune.key" -out "$TLS_DIR/neptune.crt" \
-    -subj "/CN=neptune" -addext "subjectAltName=${SAN}" >/dev/null 2>&1 \
-    && chmod 600 "$TLS_DIR/neptune.key" \
-    || warn "openssl cert generation failed — HTTPS will not come up"
-else
-  log "TLS cert already present at $TLS_DIR (reusing)"
-fi
-
-# ---- 9. nginx (serves the SPA over HTTPS + proxies both planes, §1) ---------
-log "configuring nginx (HTTPS SPA + reverse proxy)…"
+# ---- 8. nginx (backend-only, PLAIN HTTP: reverse proxy only, no SPA, no TLS) -
+# Two trusted devices on a sealed tether → no cert, no TLS overhead. WebRTC media
+# stays DTLS-encrypted regardless; only the signaling is plain.
+log "configuring nginx (plain-HTTP reverse proxy — backend only)…"
+rm -rf /etc/neptune/tls 2>/dev/null || true          # drop any cert left by an older install
 sed "s#/opt/neptune#${INSTALL_DIR}#g" "$INSTALL_DIR/deploy/nginx.conf" \
     > /etc/nginx/sites-available/neptune
 ln -sf /etc/nginx/sites-available/neptune /etc/nginx/sites-enabled/neptune
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
 
-# ---- 10. systemd units -------------------------------------------------------
+# ---- 9. systemd units -------------------------------------------------------
 log "installing systemd units…"
 # Copy the repo's units, but rewrite paths/ifaces to the real values here so the
 # units always match this host.
@@ -188,10 +183,10 @@ sed -i "s#192.72.1.1#${CAMERA_IP}#g; s#wlan0#${CAM_IFACE}#g" /etc/systemd/system
 sed -i "s#/opt/neptune#${INSTALL_DIR}#g; s#User=neptune#User=${SERVICE_USER}#g" \
     /etc/systemd/system/neptune-api.service /etc/systemd/system/go2rtc.service
 
-# ---- 11. permissions --------------------------------------------------------
+# ---- 10. permissions --------------------------------------------------------
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 
-# ---- 12. enable on boot + restart to apply changes -------------------------
+# ---- 11. enable on boot + restart to apply changes -------------------------
 # `enable` sets boot start; explicit `restart` applies new code/config on an
 # update (enable --now would NOT restart an already-running service).
 log "enabling on boot + (re)starting services…"
@@ -202,14 +197,15 @@ systemctl restart go2rtc.service        || warn "go2rtc failed to start"
 systemctl restart neptune-api.service   || warn "neptune-api failed to start"
 systemctl restart nginx                 || warn "nginx failed to (re)start"
 
-# ---- 13. report -------------------------------------------------------------
+# ---- 12. report -------------------------------------------------------------
 echo
 log "done. service status:"
 for s in wolfang-route go2rtc neptune-api nginx; do
   printf '  %-16s %s\n' "$s" "$(systemctl is-active "$s" 2>/dev/null || echo inactive)"
 done
 echo
-log "dashboard  : https://${TETHER_IP:-<pi>}/   (trust the self-signed cert once on the handheld)"
-log "control API: https://${TETHER_IP:-<pi>}/api/status   (preflight: POST /api/preflight)"
-log "video      : https://${TETHER_IP:-<pi>}/stream/ (go2rtc stream 'sub')"
+log "this Pi is BACKEND-ONLY (plain HTTP) — the dashboard runs topside on the ROG Ally."
+log "control API: http://${TETHER_IP:-<pi>}/api/status   (preflight: POST /api/preflight)"
+log "video      : http://${TETHER_IP:-<pi>}/stream/ (go2rtc stream 'sub')"
+log "topside    : run client/launch/Neptune.bat on the Ally, Pi = ${TETHER_IP:-<pi>}"
 log "re-run this installer any time to update."

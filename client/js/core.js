@@ -113,10 +113,12 @@ function resolveHost(){
   // explicit override only — it no longer acts as the primary discovery path, and a stale stored
   // host never shadows same-origin when served.
   const served = location.protocol==='http:'||location.protocol==='https:';
-  let host=null;
+  let host=null, secureParam=null;
   try{
-    const p=new URLSearchParams(location.search).get('host');
-    if(p){ host=p; localStorage.setItem('rov_host', p); }  // explicit override wins (and is remembered)
+    const params=new URLSearchParams(location.search);
+    const p=params.get('host');
+    if(p){ host=p; localStorage.setItem('rov_host', p); } // explicit override wins (and is remembered)
+    secureParam=params.get('secure');                     // ?secure=0 forces plain http/ws (dev against a mock)
   }catch(e){}
   if(!host && served) host=location.host;                  // default: same origin
   if(!host){                                               // disk fallback only: last override / configured
@@ -124,7 +126,13 @@ function resolveHost(){
     if(!host && CONFIG.defaultHost) host=CONFIG.defaultHost;
   }
   host = host || '';
-  const secure = location.protocol==='https:';
+  // Scheme belongs to the PI, not the page. Same-origin → match the page. A cross-origin override
+  // (the kiosk launcher on http://localhost → the Pi) → plain http/ws, because the Pi is plain HTTP
+  // (sealed tether, no TLS). Pass ?secure=1 if you ever front the Pi with HTTPS.
+  let secure;
+  if(served && host===location.host) secure = (location.protocol==='https:');
+  else secure = false;
+  if(secureParam!==null) secure = (secureParam==='1' || secureParam==='true');
   state.host = host;
   state.httpBase = host ? (secure?'https':'http')+'://'+host : '';
   state.wsBase   = host ? (secure?'wss':'ws')+'://'+host : '';
