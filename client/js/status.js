@@ -94,40 +94,57 @@ STATUS.tick = function(){
 };
 
 /* Mark ONLY the controls whose own subsystem is down. Everything without a
-   data-needs attribute is client-owned and is never gated. */
+   data-needs attribute is client-owned and is never gated.
+
+   Two DIFFERENT kinds of "down", because they need different treatment:
+
+     SIMULATED  the vehicle link is absent, but every vehicle control still works
+                against the local simulator. Nothing is transmitted. The control
+                stays fully operable and is tinted, not disabled — the console has
+                to be flyable on the bench with the Pi unplugged.
+
+     GATED      the subsystem is genuinely unavailable and there is nothing to
+                simulate. Camera REC/PIC with no camera is a real dead end, so
+                those are disabled rather than pretending. */
 STATUS.applyGates = function(){
   const down = {
-    link:  commandsBlocked(),
+    link:  false,                 // never hard-disables: link loss => simulate
     cam:   !camUp(),
     video: !videoUp(),
     nav:   !navUp()
   };
-  const gateSig = down.link+'|'+down.cam+'|'+down.video+'|'+down.nav;
+  const simulated = commandsBlocked();
+  const gateSig = simulated+'|'+down.cam+'|'+down.video+'|'+down.nav+'|'+STATUS.link;
   if(gateSig === STATUS._lastGate) return;      // DOM churn only on an actual change
   STATUS._lastGate = gateSig;
 
   const b = document.body.classList;
-  b.toggle('link-down',       down.link);
+  b.toggle('link-sim',        simulated);
   b.toggle('link-connecting', STATUS.link === 'connecting');
   b.toggle('cam-down',        down.cam);
   b.toggle('video-down',      down.video);
   b.toggle('nav-down',        down.nav);
 
   document.querySelectorAll('[data-needs]').forEach(el=>{
-    const needs = (el.getAttribute('data-needs') || '').split(/\s+/).filter(Boolean);
+    const needs   = (el.getAttribute('data-needs') || '').split(/\s+/).filter(Boolean);
     const blocked = needs.some(n => down[n]);
+    const sim     = simulated && needs.indexOf('link') !== -1;
     el.classList.toggle('gated', blocked);
+    el.classList.toggle('simulated', sim && !blocked);
     el.setAttribute('aria-disabled', blocked ? 'true' : 'false');
   });
 
-  // The shared banner names what is actually down, instead of implying everything is.
+  // Say what the operator is actually looking at. "SIM" is the load-bearing word:
+  // the controls DO respond, they are simply not reaching a vehicle.
   const banner = $('controls-disabled');
   if(banner){
-    const outs = [];
-    if(down.link)  outs.push('ROV LINK');
-    if(down.cam)   outs.push('CAMERA');
-    banner.textContent = outs.length ? (outs.join(' · ') + ' OFFLINE') : '';
-    banner.classList.toggle('show', outs.length > 0);
+    let msg = '';
+    if(simulated && down.cam) msg = 'SIM · NO VEHICLE LINK · NO CAMERA';
+    else if(simulated)        msg = 'SIM · NOT COMMANDING A VEHICLE';
+    else if(down.cam)         msg = 'CAMERA OFFLINE';
+    banner.textContent = msg;
+    banner.classList.toggle('show', !!msg);
+    banner.classList.toggle('sim', simulated);
   }
 };
 

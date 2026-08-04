@@ -444,9 +444,20 @@ body.map-expanded #area-select.on{display:flex}
    never blanket-disabled: the map, radar, saved areas, dive logs, config panel
    and the input remapper are client-owned and keep working with the Pi off.
    Controls opt in with data-needs="link" / "cam" / "video" / "nav".          */
+/* GATED - the subsystem is genuinely unavailable and there is nothing to simulate
+   (camera REC/PIC with no camera). Disabled, because pretending would be a lie. */
 [data-needs].gated{opacity:.35;filter:grayscale(.6);pointer-events:none;cursor:not-allowed}
-/* A control that is merely reconnecting pulses instead of looking dead. */
-body.link-connecting [data-needs~="link"].gated{opacity:.5;filter:grayscale(.3);animation:stpulse 1.4s ease-in-out infinite}
+
+/* SIMULATED - no vehicle link, so these drive the local simulator instead. They stay
+   FULLY INTERACTIVE on purpose: the console has to be flyable on the bench with the
+   Pi unplugged. Tinted, never disabled - the previous build greyed them out and the
+   whole rail read as broken. */
+[data-needs].simulated{opacity:.92;filter:saturate(.75)}
+[data-needs].simulated:not(.gated){pointer-events:auto;cursor:pointer}
+/* A thin dashed edge marks "this is not reaching a vehicle" without hiding the control. */
+body.link-sim aside{box-shadow:inset 3px 0 0 0 color-mix(in srgb,var(--secondary) 55%,transparent)}
+/* Reconnecting pulses, so a blip is visibly different from a settled SIM state. */
+body.link-connecting #st-pi{animation:stpulse 1.4s ease-in-out infinite}
 /* Video is dimmed only when the VIDEO plane is down - never because the ROV link dropped. */
 body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
 
@@ -454,6 +465,10 @@ body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
   letter-spacing:.08em;padding:6px 12px;border-radius:.4rem;color:var(--error);border:1px solid var(--error);
   background:color-mix(in srgb,var(--error) 12%,rgba(12,1,24,.9));pointer-events:none}
 #controls-disabled.show{display:block}
+/* SIM is informational, not an error - colour it accordingly so a bench session
+   does not look like a fault. */
+#controls-disabled.sim{color:var(--secondary);border-color:var(--secondary);
+  background:color-mix(in srgb,var(--secondary) 12%,rgba(12,1,24,.9))}
 
 /* EXIT - the only way off a fullscreen dashboard on a handheld with no keyboard. */
 #btn-exit{position:fixed;top:8px;right:118px;z-index:60;width:30px;height:30px;border-radius:.4rem;

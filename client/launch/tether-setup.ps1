@@ -1,7 +1,7 @@
 <#
   NEPTUNE - one-time tether setup for the ROG Ally. RUN AS ADMINISTRATOR, once.
 
-  Three things, all of which need elevation:
+  Four things, all of which need elevation:
 
    1. Give the Ethernet adapter the fixed tether address 192.168.42.2/24.
       A direct Ally<->Pi cable has NO DHCP SERVER, so Windows falls back to an
@@ -16,7 +16,13 @@
       stays the internet path - the tether is a point-to-point link, not a route
       to the world.
 
-  Undo with:  tether-setup.ps1 -Revert   (back to DHCP + default power settings)
+   4. Allow DESKTOP APPS to use location. Windows keeps this off by default and it
+      is separate from the main location switch. Chrome is a desktop app, so with
+      it off navigator.geolocation always fails and the map can never take an
+      origin fix - and nothing in the dashboard can fix that from inside the page.
+
+  Undo with:  tether-setup.ps1 -Revert   (back to DHCP + default power settings;
+              the location switches are left alone, they are not tether-specific)
 #>
 param(
   [string]$Adapter = "Ethernet",
@@ -82,7 +88,7 @@ if ($Revert) {
 }
 
 # ---------------------------------------------------------------------------
-Write-Host "`n[1/3] Fixed tether address" -ForegroundColor Cyan
+Write-Host "`n[1/4] Fixed tether address" -ForegroundColor Cyan
 try {
   netsh interface ip set address name="$Adapter" static $Address $Mask | Out-Null
   OK "$Adapter = $Address/$Mask  (no gateway - the tether is point-to-point)"
@@ -91,7 +97,7 @@ try {
   Nope "could not set the address: $($_.Exception.Message)"
 }
 
-Write-Host "`n[2/3] USB selective suspend" -ForegroundColor Cyan
+Write-Host "`n[2/4] USB selective suspend" -ForegroundColor Cyan
 # Windows suspends the USB NIC and the tether silently drops. On a vehicle control
 # link that is not acceptable, so turn it off on both AC and battery.
 powercfg /setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
@@ -99,7 +105,7 @@ powercfg /setdcvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48
 powercfg /setactive SCHEME_CURRENT
 OK "disabled on AC and battery"
 
-Write-Host "`n[3/3] Adapter power management" -ForegroundColor Cyan
+Write-Host "`n[3/4] Adapter power management" -ForegroundColor Cyan
 # 0x18 = disable "allow the computer to turn off this device to save power"
 # and "allow this device to wake the computer".
 $guid = '{4d36e972-e325-11ce-bfc1-08002be10318}'
@@ -118,6 +124,32 @@ try {
   Disable-NetAdapterPowerManagement -Name $Adapter -ErrorAction Stop
   OK "Disable-NetAdapterPowerManagement applied"
 } catch { Info "adapter exposes no WMI power settings (registry change above still applies)" }
+
+Write-Host "`n[4/4] Location for desktop apps" -ForegroundColor Cyan
+# The map origin comes from the handheld's own position via navigator.geolocation.
+# Windows gates that behind TWO switches, and the second is OFF by default:
+#   Settings > Privacy & security > Location > Location services          (usually on)
+#   Settings > Privacy & security > Location > Let desktop apps access... (usually OFF)
+# Chrome is a desktop (non-packaged) app, so with the second one off it reports a
+# permission denial no matter what the page or the site permission says - and there
+# is nothing the dashboard can do about it from inside the browser.
+$consent = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location"
+try {
+  Set-ItemProperty -Path $consent -Name Value -Value "Allow" -ErrorAction Stop
+  OK "location services: Allow"
+} catch { Nope "could not set location services: $($_.Exception.Message)" }
+try {
+  if (-not (Test-Path "$consent\NonPackaged")) { New-Item -Path "$consent\NonPackaged" -Force | Out-Null }
+  Set-ItemProperty -Path "$consent\NonPackaged" -Name Value -Value "Allow" -ErrorAction Stop
+  OK "desktop apps (Chrome) may use location"
+} catch { Nope "could not allow desktop apps: $($_.Exception.Message)" }
+try {
+  $svc = Get-Service lfsvc -ErrorAction Stop
+  if ($svc.StartType -eq 'Disabled') { Set-Service lfsvc -StartupType Manual }
+  if ($svc.Status -ne 'Running') { Start-Service lfsvc -ErrorAction SilentlyContinue }
+  Info "geolocation service (lfsvc): $((Get-Service lfsvc).Status)"
+} catch { Info "geolocation service not available" }
+Info "Chrome will still ask once per profile - tap Allow when the map requests it"
 
 Write-Host "`n---- result ----" -ForegroundColor Magenta
 Get-NetIPAddress -InterfaceAlias $Adapter -AddressFamily IPv4 -ErrorAction SilentlyContinue |

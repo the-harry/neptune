@@ -3,18 +3,24 @@
    COMMANDS — discrete actions. Each sends to the server AND updates the local
    state mirror so the UI reacts identically online or offline.
    ============================================================================ */
-/* §4 — vehicle commands FAIL FAST and NEVER queue. If a real backend is expected
-   but the link is down, the press is rejected immediately, logged, and NOT sent
-   (no buffer, no replay — a late throttle is a hazard). Returns false if rejected.
-   In pure disk/SIM mode there is no vehicle, so the simulator's controls stay live. */
-function rejectCommand(name){
-  LOG.warn('command rejected (backend down):', name);
-  if(window.REC && REC.enabled) REC.log('cmd_rejected', {name, reason:'backend_down'});
-  vibrate([40,40,40]);
-  const el=$('controls-disabled'); if(el){ el.classList.add('flash'); setTimeout(()=>el.classList.remove('flash'),400); }
+/* §4 — vehicle commands NEVER queue. Nothing is ever buffered or replayed: a late
+   `throttle 100%` is a hazard, and send() is itself a no-op on a closed socket.
+   That rule is about TRANSMISSION, not about the console being usable.
+
+   With no live link the dashboard is a SIMULATOR, and every control stays fully
+   operable so it can be flown, rehearsed and demonstrated on the bench with the Pi
+   unplugged. The command is applied to the local mirror ONLY — never transmitted,
+   never stored to send later — and the HUD says SIM so the operator can always tell
+   the difference. Disabling the rail instead just made the console look broken. */
+function simulatedCommand(name, value){
+  LOG.cmd('SIM', name, (value!==undefined?value:''));
+  if(window.REC && REC.enabled) REC.log('cmd_sim', {name, value:value===undefined?null:value});
+  vibrate(8);
+  return true;                       // let the caller update the local mirror
 }
 function cmd(name, value){
-  if(typeof commandsBlocked==='function' && commandsBlocked()){ rejectCommand(name); return false; }
+  // No live vehicle -> simulate locally. Explicitly NOT sent and NOT queued.
+  if(typeof commandsBlocked==='function' && commandsBlocked()) return simulatedCommand(name, value);
   LOG.cmd(name, (value!==undefined?value:''));
   // §3 correlation: a UUID at the moment of operator intent, carried through the socket and
   // echoed in the Pi's ack, so the whole 8-stage lifecycle ties together across both logs.
@@ -24,8 +30,9 @@ function cmd(name, value){
   return true;
 }
 
-// Each action sends the command FIRST and only mutates the local mirror when the
-// command was accepted — so nothing fakes a vehicle response while the link is down.
+// Each action goes through cmd() first. With a live link that transmits and the
+// local mirror follows; with no link cmd() returns true having transmitted nothing,
+// so the same code drives the simulator. One path, both modes.
 function toggleArm(){
   const want=!state.armed;
   if(!cmd(want?'arm':'disarm')) return;
@@ -59,7 +66,9 @@ function toggleLight(which){
   vibrate(10);
 }
 function adjustLight(which, delta){
-  if(typeof commandsBlocked==='function' && commandsBlocked()) return;   // silent (called every frame while held)
+  // No link check: level changes are local state, and the dirty-level pump in net.js
+  // only transmits when the socket is open. Bailing out here was what made the
+  // brightness sliders feel dead on the bench.
   const L=state.lights[which];
   const nv=clamp(L.level+delta, 0, 1);
   if(nv!==L.level){
@@ -70,7 +79,6 @@ function adjustLight(which, delta){
 }
 // Set a light's brightness directly from a pointer position on its gauge track.
 function setLightLevel(which, level){
-  if(typeof commandsBlocked==='function' && commandsBlocked()) return;   // silent (pointer drag)
   const L=state.lights[which];
   level=clamp(level,0,1);
   L.level=level; state.levelDirty[which]=true; state.lastLight=which;

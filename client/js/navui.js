@@ -166,9 +166,29 @@ function offerRefine(accuracy){
     'Coarse fix. Tap the map on your launch point to refine.',
     { label:'TAP TO REFINE', run:armOriginTap });
 }
+/* A failed fix is nearly always one of three things, and "permission denied" alone
+   sends the operator hunting in the wrong place. On the ROG Ally the usual cause is
+   Windows itself: Settings > Privacy & security > Location > "Let desktop apps access
+   your location". That is OFF by default, and with it off Chrome reports a denial no
+   matter what the site permission says - there is no in-page way to fix it. */
 function showOriginFallback(err){
-  showOriginPrompt('LOCATION UNAVAILABLE', (err&&err.message)||'permission denied or timed out',
-    { label:'SET MANUALLY', run:()=>{ hideOriginPrompt(); openOriginModal(); } });
+  const code = err && err.code;
+  let why;
+  if(code === 1){                       // PERMISSION_DENIED
+    why = 'Blocked. Windows: Settings › Privacy & security › Location — turn ON ' +
+          '"Location services" AND "Let desktop apps access your location". ' +
+          'Then allow location for this page in Chrome.';
+  } else if(code === 2){                // POSITION_UNAVAILABLE
+    why = 'No fix available. Windows location services may be off, or there is no ' +
+          'Wi-Fi/GNSS signal to position from. You can set the origin by tapping the map instead.';
+  } else if(code === 3){                // TIMEOUT
+    why = 'Timed out waiting for a fix. Indoors this is common — tap the map to set the origin.';
+  } else {
+    why = (err && err.message) || 'location unavailable';
+  }
+  LOG.warn('geolocation failed:', code, (err && err.message) || '');
+  showOriginPrompt('LOCATION UNAVAILABLE', why,
+    { label:'SET ON MAP', run:()=>{ hideOriginPrompt(); armOriginTap(); } });
 }
 function armOriginTap(){
   if(typeof MAP==='undefined') return;
