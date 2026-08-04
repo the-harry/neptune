@@ -76,9 +76,13 @@ STATUS.tick = function(){
   STATUS.nav = (state.navOkAt && (now - state.navOkAt) <= NAV_SILENT_MS) ? 'ok' : 'down';
 
   // ---- vehicle -----------------------------------------------------------
-  if(!state.wsBase)             STATUS.vehicle = 'sim';
-  else if(STATUS.link !== 'online') STATUS.vehicle = '—';
-  else if(state.alarmLeak)      STATUS.vehicle = 'fault';
+  // There are only two states worth distinguishing at a glance: is there a real
+  // vehicle on the other end, or not. "No host configured" and "host configured but
+  // unreachable" both mean SIM to the operator, and the old code split them into
+  // 'sim' and an em-dash that rendered as muted grey - so the sub icon said nothing
+  // in the exact situation where it most needed to shout.
+  if(STATUS.link !== 'online')  STATUS.vehicle = 'sim';    // no live vehicle -> RED
+  else if(state.alarmLeak)      STATUS.vehicle = 'fault';  // leak -> pulsing red
   else                          STATUS.vehicle = state.armed ? 'armed' : 'idle';
 
   STATUS.applyGates();
@@ -163,10 +167,14 @@ STATUS.render = function(){
   const camCls = STATUS.cam === 'ok' ? 'ok' : (STATUS.cam === 'degraded' ? 'warn' : 'down');
   set('st-cam', camCls, 'Camera control: ' + STATUS.cam);
 
+  // RED = simulating, no vehicle. GREEN = a real vehicle is connected.
+  // Pulsing red is reserved for an actual fault, so it stays distinguishable.
   const vcls = STATUS.vehicle === 'fault' ? 'bad'
-             : (STATUS.vehicle === 'armed' ? 'ok'
-             : (STATUS.vehicle === 'sim' ? 'sim' : 'idle'));
-  set('st-veh', vcls, 'Vehicle: ' + STATUS.vehicle);
+             : (STATUS.vehicle === 'sim' ? 'sim' : 'ok');
+  const vtitle = STATUS.vehicle === 'sim'   ? 'Vehicle: SIMULATED — no vehicle connected'
+               : STATUS.vehicle === 'fault' ? 'Vehicle: FAULT — leak detected'
+               : 'Vehicle: connected (' + STATUS.vehicle + ')';
+  set('st-veh', vcls, vtitle);
 };
 
 /* ---- REAL Pi health (/api/system) -----------------------------------------

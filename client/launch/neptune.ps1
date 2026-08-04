@@ -28,7 +28,8 @@ param(
   [int]$Port = 8080,
   [switch]$Kiosk,
   [switch]$Setup,
-  [switch]$Stop
+  [switch]$Stop,
+  [switch]$SafeGraphics
 )
 
 $ErrorActionPreference = "Stop"
@@ -360,6 +361,26 @@ try {
 
   $common = @("--user-data-dir=$userdata", "--no-first-run", "--no-default-browser-check",
               "--disable-features=Translate", "--disable-background-networking")
+
+  # -SafeGraphics: keep the GPU's VIDEO ENGINE out of the path.
+  #
+  # Every crash on this handheld logs LiveKernelEvent 141 = VIDEO_ENGINE_TIMEOUT_DETECTED:
+  # the GPU block that does hardware H.264 decode stalls, and Windows resets it. The
+  # dashboard drives exactly that block, continuously, with a fullscreen WebRTC feed.
+  # Forcing software decode removes it from the equation entirely.
+  #
+  # Cost: a few percent CPU. A Z1 Extreme decodes 1080p30 H.264 in software without
+  # noticing. Use this if the machine is crashing; drop it once the driver is fixed.
+  if ($SafeGraphics) {
+    $common += @(
+      "--disable-accelerated-video-decode",
+      "--disable-accelerated-video-encode",
+      "--disable-features=AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecoder,AcceleratedVideoEncoder",
+      "--disable-gpu-driver-bug-workarounds"
+    )
+    Nope "SafeGraphics: hardware video decode DISABLED (software H.264)"
+    Info "use this while the GPU driver is unstable; expect slightly higher CPU"
+  }
   if ($Kiosk) {
     $bargs = @("--kiosk", $url) + $common
     if ($exe -like "*msedge.exe") { $bargs += "--edge-kiosk-type=fullscreen" }

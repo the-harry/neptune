@@ -436,7 +436,10 @@ body.map-expanded #area-select.on{display:flex}
 .st-ic.down{color:var(--error)}
 .st-ic.bad {color:var(--error);animation:stpulse 1s infinite}
 .st-ic.idle{color:var(--on-surface-variant)}
-.st-ic.sim {color:var(--primary)}
+/* SIM = no real vehicle on the other end. Red, because flying a simulation while
+   believing you are flying the sub is the dangerous confusion this icon exists to
+   prevent. Solid red, not pulsing - pulsing is reserved for an actual fault. */
+.st-ic.sim {color:var(--error)}
 @keyframes stpulse{50%{opacity:.35}}
 
 /* ---- per-subsystem degradation (§3/§4) ------------------------------------
