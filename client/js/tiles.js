@@ -44,15 +44,15 @@ function countTilesBBox(bbox, zmin, zmax){
   return total;
 }
 
-// Provider selection (§3): when an area is downloaded + active, serve the Pi's OFFLINE
-// MBTiles (works with no internet — the field case); otherwise the online default (Esri),
-// which is what you use while tethered to pick and download an area.
+// Always the online provider (Esri) — the client fetches tiles by their real provider
+// URLs. Offline is handled TRANSPARENTLY by the service worker's tile cache (§2): saved
+// areas are the same URLs, served cache-first, so no internet is needed once saved. The
+// Pi never sits in this path. (The `offline` Pi provider stays configured for a Pi-side view.)
 function _provider(area){
   const P=CONFIG.map.tileProviders||{};
-  if(area && P.offline) return P.offline;
   return P[CONFIG.map.tileProvider] || { url:'', maxzoom:19, attribution:'' };
 }
-function tileAttribution(){ return _provider(MAP&&MAP.activeArea).attribution || ''; }
+function tileAttribution(){ return _provider().attribution || ''; }
 
 function _tileUrl(p,z,x,y,area){
   return p.url.replace('{z}',z).replace('{x}',x).replace('{y}',y).replace('{area}', area||'');

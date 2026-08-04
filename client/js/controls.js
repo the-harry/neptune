@@ -201,6 +201,7 @@ function buildMapper(){
         '<span class="font-label-caps text-label-caps text-on-surface-variant" style="flex:0 0 80px">NAV</span>'+
         '<button id="cfg-areas" class="mp-btn">MAP AREAS</button>'+
         '<button id="cfg-origin" class="mp-btn">SET ORIGIN</button>'+
+        '<button id="cfg-dives" class="mp-btn">DIVE LOGS</button>'+
         '</div>'+
       '<div style="display:flex;align-items:center;gap:8px;padding:6px 20px">'+
         '<span class="font-label-caps text-label-caps text-on-surface-variant" style="flex:0 0 80px">BLACKBOX</span>'+
@@ -234,6 +235,7 @@ function buildMapper(){
   $('cfg-host').addEventListener('keydown', (e)=>{ if(e.key==='Enter') applyHost(); });
   $('cfg-areas').addEventListener('click', ()=>{ closeMapper(); if(typeof openAreaManager==='function') openAreaManager(); });
   $('cfg-origin').addEventListener('click', ()=>{ closeMapper(); if(typeof openOriginModal==='function') openOriginModal(); });
+  const cd=$('cfg-dives'); if(cd) cd.addEventListener('click', ()=>{ closeMapper(); if(typeof openDiveLog==='function') openDiveLog(); });
   const mk=$('cfg-mark'); if(mk) mk.addEventListener('click', ()=>{ if(window.REC) REC.mark('config'); });
   const ex=$('cfg-exportlog'); if(ex) ex.addEventListener('click', ()=>{ if(window.REC) REC.exportLog(); });
   // Camera config panel + file browser are wired by camera.js (initCamera).

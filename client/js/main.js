@@ -57,6 +57,19 @@ function enableAppFullscreen(){
   ['pointerdown','keydown','touchstart'].forEach(ev=>window.addEventListener(ev,go,{passive:true}));
 }
 
+/* Register the service worker so the dashboard is an installable PWA that launches
+   and runs with NO network of any kind (§2). Skipped over file:// (no SW there —
+   which is exactly why installing the PWA is the fix). */
+function registerServiceWorker(){
+  try{
+    if('serviceWorker' in navigator && location.protocol!=='file:'){
+      navigator.serviceWorker.register('sw.js').then(
+        ()=>LOG.state('service worker registered (offline-capable PWA)'),
+        (e)=>LOG.warn('service worker registration failed:', e && e.message));
+    }
+  }catch(e){/* ignore */}
+}
+
 /* ---- file:// guard (§1) — the SPA MUST be served over HTTPS from the Pi. From a file://
    origin the browser blocks geolocation (no origin fix) and cross-origin fetches to the Pi
    (no video/telemetry/maps), which degrades into confusing partial failures. Show a blocking
@@ -91,6 +104,9 @@ function boot(forced){
   enableAppFullscreen();
   LOG.state('boot — host="'+ (state.host||'(none, disk mode)') +'"  http="'+(state.httpBase||'(relative)')+'"  ws="'+(state.wsBase||'(none)')+'"');
   loadBindings();
+  registerServiceWorker();                                  // PWA — offline app shell + tile cache (§2)
+  try{ initStatus(); }catch(e){ LOG.warn('status init failed:', e && e.message); }   // degradation indicator (§3)
+  try{ STORE.init(); }catch(e){ LOG.warn('store init failed:', e && e.message); }    // client owns its state (§1/§2)
   try{ REC.init(); }catch(e){ LOG.warn('recorder init failed:', e && e.message); }   // blackbox recorder (§4/§5)
   // Initial light lamp render (icons + glow)
   renderLightButton('green', state.lights.green.on, state.lights.green.level);

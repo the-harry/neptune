@@ -6,6 +6,22 @@
    ============================================================================ */
 
 function _navFetch(path, opts){ return fetch((state.httpBase||'') + path, opts); }
+
+/* ---- geocoding is CLIENT-FIRST (§1): browser → Nominatim directly. It needs
+   INTERNET, not the Pi. The Pi proxy is only a fallback, never a precondition. ---- */
+async function _geocode(q){
+  const url='https://nominatim.openstreetmap.org/search?'+new URLSearchParams({q, format:'jsonv2', limit:'5', 'accept-language':'en'});
+  try{ const r=await fetch(url, {headers:{Accept:'application/json'}});
+    if(r.ok){ const j=await r.json(); if(Array.isArray(j)) return j.map(it=>({name:it.display_name, lat:+it.lat, lon:+it.lon})); } }catch(e){}
+  try{ const r=await _navFetch('/api/geocode/search?q='+encodeURIComponent(q)); const j=await r.json(); return j.results||null; }catch(e){}
+  return null;   // null → no internet (honest); NOT "backend unreachable"
+}
+async function _revGeocode(lat, lon){
+  const url='https://nominatim.openstreetmap.org/reverse?'+new URLSearchParams({lat, lon, format:'jsonv2', zoom:'16', 'accept-language':'en'});
+  try{ const r=await fetch(url, {headers:{Accept:'application/json'}}); if(r.ok){ const d=await r.json();
+    const a=d.address||{}; return a.waterway||a.road||a.suburb||a.village||a.town||a.city||(d.display_name||'').split(',')[0]||null; } }catch(e){}
+  return null;
+}
 function _mkModal(id){
   let m=$(id); if(m) return m;
   m=document.createElement('div'); m.id=id; m.className='nav-modal';
@@ -70,11 +86,12 @@ function originSearch(q){
   clearTimeout(_oSearchTimer);
   _oSearchTimer=setTimeout(async()=>{
     res.innerHTML='<div class="msr-empty">searching…</div>';
-    try{
-      const r=await _navFetch('/api/geocode/search?q='+encodeURIComponent(q)); const j=await r.json();
-      if(!j.results||!j.results.length){ res.innerHTML='<div class="msr-empty">no matches (needs internet)</div>'; return; }
+    {
+      const results=await _geocode(q);
+      if(results===null){ res.innerHTML='<div class="msr-empty">no internet — search needs a connection</div>'; return; }
+      if(!results.length){ res.innerHTML='<div class="msr-empty">no matches</div>'; return; }
       res.innerHTML='';
-      j.results.forEach(it=>{ const d=document.createElement('div'); d.className='msr-row'; d.textContent=it.name;
+      results.forEach(it=>{ const d=document.createElement('div'); d.className='msr-row'; d.textContent=it.name;
         d.onclick=async()=>{
           const msg=$('o-msg'); if(msg) msg.textContent='setting origin…';
           if(typeof MAP!=='undefined'){ MAP.viewLat=it.lat; MAP.viewLon=it.lon; MAP.follow=false; }
@@ -85,23 +102,27 @@ function originSearch(q){
           }
         };
         res.appendChild(d); });
-    }catch(e){ res.innerHTML='<div class="msr-empty">search unavailable (offline)</div>'; }
+    }
   }, 350);
 }
+/* Origin is CLIENT-OWNED (§1): it is stored locally and works with the Pi off.
+   Mirroring to the Pi is best-effort and secondary (the Pi needs it for dead
+   reckoning) — its absence never blocks setting or using the origin. */
 async function setOrigin(o){
-  // heading0 comes from the SUB's IMU (the handheld has no magnetometer, §2), captured atomically here.
-  o.heading_deg = Math.round((typeof MAP!=='undefined'?MAP.hdg:state.heading)||0);
+  o.heading_deg = Math.round((typeof MAP!=='undefined'?MAP.hdg:state.heading)||0);   // heading0 from the sub's IMU (§2)
+  o.t = o.t || Date.now();
   const msg=(t)=>{ const el=$('o-msg'); if(el) el.textContent=t; };
-  try{
-    let r = await _navFetch('/api/origin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});
-    if(r.status===422){        // accuracy above the arm threshold — device WiFi fixes are coarse, so allow override
-      if(confirm('Origin accuracy ±'+Math.round(o.accuracy)+' m exceeds the threshold. Set it anyway (refine by tapping the map)?')){
-        r = await _navFetch('/api/origin?override=true',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});
-      } else { msg('refused: accuracy too high'); return false; }
-    }
-    if(r.ok){ msg('origin set'); if(typeof refreshBootstrap==='function') await refreshBootstrap(); return true; }
-    msg('set failed: '+r.status); return false;
-  }catch(e){ msg('backend unreachable'); return false; }
+  // 1) client accuracy gate (no backend involved)
+  if(o.accuracy>15 && !o._override){
+    if(!confirm('Origin accuracy ±'+Math.round(o.accuracy)+' m is coarse. Set it anyway (refine by tapping the map)?')){ msg('cancelled — accuracy too high'); return false; }
+  }
+  // 2) persist locally — this is the source of truth
+  try{ if(typeof STORE!=='undefined') await STORE.set('origin', o); }catch(e){}
+  if(typeof MAP!=='undefined'){ MAP.origin=o; MAP.hasOrigin=true; if(typeof renderOriginTile==='function') renderOriginTile(); if(typeof updateEmptyState==='function') updateEmptyState(); }
+  msg('origin set');
+  // 3) mirror to the Pi if it's up (dead reckoning). Best-effort; never blocks.
+  try{ await _navFetch('/api/origin?override=true',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)}); }catch(e){/* Pi off — fine */}
+  return true;
 }
 
 /* ---- §2: auto-request the handheld's location on load ------------------------
@@ -112,10 +133,13 @@ async function setOrigin(o){
    from the sub's IMU (captured in setOrigin), never the handheld. */
 async function autoRequestOrigin(){
   if(!CONFIG.map.autoOrigin || state._fileSim) return;
+  // client-owned origin first (works with the Pi off); mirror it up if the Pi is there.
   try{
-    const r=await _navFetch('/api/origin'); const o=await r.json();
-    if(!(o&&o.set===false) && o && typeof o.lat==='number'){ return; }   // already set this session — respect it
-  }catch(e){ /* backend unreachable — still try the device fix */ }
+    if(typeof STORE!=='undefined'){ const o=await STORE.get('origin', null);
+      if(o && typeof o.lat==='number'){ if(typeof MAP!=='undefined'){ MAP.origin=o; MAP.hasOrigin=true; renderOriginTile&&renderOriginTile(); }
+        _navFetch('/api/origin?override=true',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)}).catch(()=>{});
+        return; } }
+  }catch(e){}
   requestDeviceLocation();
 }
 function requestDeviceLocation(){
@@ -189,25 +213,27 @@ function openAreaManager(){
 }
 async function _loadAreas(){
   const box=$('a-list'); if(!box) return;
-  try{
-    const r=await _navFetch('/api/areas'); const j=await r.json();
-    if(!j.areas.length){ box.textContent='none yet — add one from the map'; return; }
-    box.innerHTML='';
-    j.areas.forEach(a=>{
-      const row=document.createElement('div'); row.className='a-row';
-      const thumb=document.createElement('img'); thumb.className='a-thumb';
-      thumb.src=(state.httpBase||'')+'/api/areas/'+encodeURIComponent(a.name)+'/thumb';
-      thumb.onerror=()=>{ thumb.style.visibility='hidden'; };
-      const meta=document.createElement('div'); meta.style.flex='1'; meta.style.minWidth='0';
-      meta.innerHTML=`<div class="a-name">${a.name}${a.active?' •':''}</div>`+
-        `<div class="a-meta">${(a.size/1e6).toFixed(1)} MB · z≤${a.maxzoom??'?'} ${a.has_centreline?'· ⌇ waterway':''}</div>`;
-      const act=document.createElement('button'); act.className='mp-btn'; act.textContent=a.active?'ACTIVE':'ACTIVATE';
-      act.onclick=async()=>{ await _navFetch('/api/areas/'+a.name+'/activate',{method:'POST'}); _loadAreas(); if(typeof refreshBootstrap==='function') refreshBootstrap(); };
-      const del=document.createElement('button'); del.className='mp-btn'; del.textContent='DEL';
-      del.onclick=async()=>{ if(confirm('Delete area "'+a.name+'"? This removes the downloaded imagery.')){ await _navFetch('/api/areas/'+a.name,{method:'DELETE'}); _loadAreas(); if(typeof refreshBootstrap==='function') refreshBootstrap(); } };
-      row.appendChild(thumb); row.appendChild(meta); row.appendChild(act); row.appendChild(del); box.appendChild(row);
-    });
-  }catch(e){ box.textContent='backend unreachable'; }
+  // areas are CLIENT-OWNED (§2): listed from local storage, no Pi involved.
+  const areas = (typeof STORE!=='undefined') ? await STORE.areas() : [];
+  if(!areas.length){ box.textContent='none yet — add one from the map'; return; }
+  box.innerHTML='';
+  areas.sort((a,b)=>(b.savedAt||0)-(a.savedAt||0)).forEach(a=>{
+    const active = (typeof MAP!=='undefined' && MAP.activeArea===a.name);
+    const row=document.createElement('div'); row.className='a-row';
+    const meta=document.createElement('div'); meta.style.flex='1'; meta.style.minWidth='0';
+    const mb=(a.cached||0)*20/1024;
+    meta.innerHTML=`<div class="a-name">${a.name}${active?' •':''}</div>`+
+      `<div class="a-meta">${a.cached||0}/${a.tiles||0} tiles · ~${mb<10?mb.toFixed(1):Math.round(mb)} MB · z${a.zmin}–${a.zmax}${a.mirrored?' · ⤴ Pi':''}</div>`;
+    const act=document.createElement('button'); act.className='mp-btn'; act.textContent=active?'ACTIVE':'ACTIVATE';
+    act.onclick=()=>{ if(typeof MAP!=='undefined'){ MAP.activeArea=a.name; MAP.hasArea=true; MAP.viewLat=(a.bbox[1]+a.bbox[3])/2; MAP.viewLon=(a.bbox[0]+a.bbox[2])/2; MAP.follow=false; if(typeof updateEmptyState==='function') updateEmptyState(); } _loadAreas(); };
+    const del=document.createElement('button'); del.className='mp-btn'; del.textContent='DEL';
+    del.onclick=async()=>{ if(confirm('Delete area "'+a.name+'"? This removes the saved imagery from this device.')){
+      await STORE.evictArea(a);
+      _navFetch('/api/areas/'+encodeURIComponent(a.name),{method:'DELETE'}).catch(()=>{});   // also drop the Pi mirror if present
+      if(typeof MAP!=='undefined' && MAP.activeArea===a.name){ MAP.activeArea=null; MAP.hasArea=false; if(typeof updateEmptyState==='function') updateEmptyState(); }
+      _loadAreas(); } };
+    row.appendChild(meta); row.appendChild(act); row.appendChild(del); box.appendChild(row);
+  });
 }
 
 /* ---- §4: navigate-and-select download (in the expanded map) --------------- */
@@ -236,18 +262,31 @@ function updateAreaReadout(bbox){
 }
 async function downloadSelected(){
   if(typeof MAP==='undefined') return;
-  const bbox=mapSelectionBBox(); if(!bbox){ const p=$('as-prog'); if(p)p.textContent='no imagery yet — wait for tiles to load'; return; }
-  const prog=$('as-prog'); if(prog) prog.textContent='queued…';
-  _watchAreaProgress();
+  const prog=(t)=>{ const p=$('as-prog'); if(p) p.textContent=t; };
+  const bbox=mapSelectionBBox(); if(!bbox){ prog('pan/zoom to select an area'); return; }
+  // SAVE OFFLINE writes tiles into the Cache API FROM THE BROWSER (§2) — works with the Pi off.
+  // Auto-name client-side (reverse geocode, else coordinates); the operator can rename later.
+  let name=await _revGeocode((bbox[1]+bbox[3])/2, (bbox[0]+bbox[2])/2);
+  name=(name || (((bbox[1]+bbox[3])/2).toFixed(4)+'_'+((bbox[0]+bbox[2])/2).toFixed(4)));
+  name=name.replace(/[^\w-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,48) || 'area';
+  prog('saving imagery…');
   try{
-    const r=await _navFetch('/api/areas',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({bbox, detail:_asDetail})});   // name auto-derived server-side (§4)
-    const j=await r.json();
-    if(r.ok){ if(prog) prog.textContent='done: '+j.name+' ('+((j.size||0)/1e6).toFixed(1)+' MB)';
-      await _navFetch('/api/areas/'+encodeURIComponent(j.name)+'/activate',{method:'POST'});
-      if(typeof refreshBootstrap==='function') refreshBootstrap(); setTimeout(exitSelectMode,1500); }
-    else if(prog) prog.textContent='failed: '+(j.detail||r.status);
-  }catch(e){ const p=$('as-prog'); if(p) p.textContent='backend unreachable'; }
+    const meta=await STORE.saveArea(name, bbox, _asDetail, (done,total)=>prog('saving '+done+'/'+total+' tiles…'));
+    prog('saved '+meta.cached+'/'+meta.tiles+' tiles offline'+(window.isSecureContext?'':' (meta only — insecure context)'));
+    if(typeof MAP!=='undefined'){ MAP.hasArea=true; MAP.activeArea=name; if(typeof updateEmptyState==='function') updateEmptyState(); }
+    _mirrorToPi(name, bbox);                         // optional second copy — never required (§2)
+    setTimeout(exitSelectMode, 1600);
+  }catch(e){ prog('save failed: '+(e&&e.message||'')); }
+}
+/* mirror a saved area to the Pi as a SECOND copy (and for a Pi-side map view). If the
+   Pi is off or the mirror fails, the area is still saved client-side and still usable. */
+function _mirrorToPi(name, bbox){
+  if(state.wsStatus!=='online') return;
+  _navFetch('/api/areas',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name, bbox, detail:_asDetail})})
+    .then(async()=>{ LOG.state('area mirrored to Pi: '+name);
+      try{ if(typeof STORE!=='undefined'){ const a=(await STORE.areas()).find(x=>x.name===name); if(a){ a.mirrored=true; await STORE.areaPut(a); } } }catch(e){} })
+    .catch(()=>{ LOG.net('Pi mirror skipped (area saved client-side)'); });
 }
 function _watchAreaProgress(){
   const base = state.wsBase || (location.host ? (location.protocol==='https:'?'wss':'ws')+'://'+location.host : '');
@@ -268,15 +307,64 @@ function mapSearch(q){
   if(!q || q.length<3){ res.innerHTML=''; return; }
   clearTimeout(_searchTimer);
   _searchTimer=setTimeout(async()=>{
-    try{
-      const r=await _navFetch('/api/geocode/search?q='+encodeURIComponent(q)); const j=await r.json();
-      if(!j.results || !j.results.length){ res.innerHTML='<div class="msr-empty">no matches (needs internet)</div>'; return; }
-      res.innerHTML='';
-      j.results.forEach(it=>{ const d=document.createElement('div'); d.className='msr-row'; d.textContent=it.name;
-        d.onclick=()=>{ if(typeof MAP!=='undefined'){ MAP.follow=false; MAP.viewLat=it.lat; MAP.viewLon=it.lon; } res.innerHTML=''; $('map-search-in').value=''; };
-        res.appendChild(d); });
-    }catch(e){ res.innerHTML='<div class="msr-empty">search unavailable (offline)</div>'; }
+    const results=await _geocode(q);   // browser → Nominatim directly (§1); needs internet, not the Pi
+    if(results===null){ res.innerHTML='<div class="msr-empty">no internet — search needs a connection</div>'; return; }
+    if(!results.length){ res.innerHTML='<div class="msr-empty">no matches</div>'; return; }
+    res.innerHTML='';
+    results.forEach(it=>{ const d=document.createElement('div'); d.className='msr-row'; d.textContent=it.name;
+      d.onclick=()=>{ if(typeof MAP!=='undefined'){ MAP.follow=false; MAP.viewLat=it.lat; MAP.viewLon=it.lon; } res.innerHTML=''; $('map-search-in').value=''; };
+      res.appendChild(d); });
   }, 350);
+}
+
+/* ---- dive logs (§1) — CLIENT-OWNED, browsable with the Pi off ---- */
+async function saveCurrentDive(){
+  if(typeof MAP==='undefined' || !MAP.track || MAP.track.length<2){ alert('No track to save yet — dive first.'); return null; }
+  const id='dive-'+new Date().toISOString().replace(/[:.]/g,'').slice(0,15);
+  const depths=MAP.track.map(p=>p.depth||0);
+  const dive={ id, at:Date.now(), origin:MAP.origin||null, points:MAP.track.length,
+    max_depth:Math.max(0,...depths),
+    track:MAP.track.map(p=>({x:+(p.x||0).toFixed(2), y:+(p.y||0).toFixed(2), depth:+(p.depth||0).toFixed(2)})) };
+  await STORE.divePut(dive); LOG.state('dive saved locally: '+id);
+  return dive;
+}
+function openDiveLog(){
+  const m=_mkModal('dive-modal');
+  m.innerHTML =
+    '<div class="nav-card"><div class="nav-head">'+
+      '<span class="font-headline-sm text-headline-sm text-primary font-bold">DIVE LOGS</span>'+
+      '<button class="mp-btn nav-x">CLOSE</button></div>'+
+    '<div class="nav-body">'+
+      '<div class="nav-hint">Stored on this device — browse and replay with the Pi off.</div>'+
+      '<button id="d-save" class="mp-btn nav-primary">SAVE CURRENT TRACK AS A DIVE</button>'+
+      '<div class="nav-sec">Saved dives</div><div id="d-list" class="a-list">loading…</div>'+
+      (MAP&&MAP.replay?'<button id="d-live" class="mp-btn">↩ EXIT REPLAY (RESUME LIVE)</button>':'')+
+    '</div></div>';
+  m.querySelector('.nav-x').onclick=()=>m.classList.remove('show');
+  $('d-save').onclick=async()=>{ const d=await saveCurrentDive(); if(d){ _loadDives(); } };
+  const lv=$('d-live'); if(lv) lv.addEventListener('click', ()=>{ if(typeof MAP!=='undefined'){ MAP.replay=false; MAP.track=[]; } m.classList.remove('show'); });
+  _loadDives();
+  m.classList.add('show');
+}
+async function _loadDives(){
+  const box=$('d-list'); if(!box) return;
+  const dives = (typeof STORE!=='undefined') ? await STORE.dives() : [];
+  if(!dives.length){ box.textContent='none yet'; return; }
+  box.innerHTML='';
+  dives.sort((a,b)=>(b.at||0)-(a.at||0)).forEach(d=>{
+    const row=document.createElement('div'); row.className='a-row';
+    const meta=document.createElement('div'); meta.style.flex='1'; meta.style.minWidth='0';
+    const when=new Date(d.at||0).toLocaleString();
+    meta.innerHTML=`<div class="a-name">${d.id}</div><div class="a-meta">${when} · ${d.points} pts · max ${Math.round((d.max_depth||0)*10)/10} m</div>`;
+    const rep=document.createElement('button'); rep.className='mp-btn'; rep.textContent='REPLAY';
+    rep.onclick=()=>{ if(typeof MAP!=='undefined'){ MAP.replay=true; MAP.track=(d.track||[]).slice();
+      if(d.origin){ MAP.origin=d.origin; MAP.hasOrigin=true; renderOriginTile&&renderOriginTile(); }
+      MAP.follow=false; if(typeof expandMap==='function') expandMap(); if(typeof updateEmptyState==='function') updateEmptyState(); }
+      $('dive-modal').classList.remove('show'); };
+    const del=document.createElement('button'); del.className='mp-btn'; del.textContent='DEL';
+    del.onclick=async()=>{ if(confirm('Delete '+d.id+'?')){ await STORE.diveDelete(d.id); _loadDives(); } };
+    row.appendChild(meta); row.appendChild(rep); row.appendChild(del); box.appendChild(row);
+  });
 }
 
 function initNavUI(){

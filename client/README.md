@@ -6,12 +6,39 @@ telemetry, and REST for camera commands/config/files. No framework, no build
 step, no dependencies.
 
 **Serve it over HTTPS from the Pi** — `https://<pi>/` (nginx, self-signed cert
-trusted once on the handheld). This is required (§1): geolocation (the origin
-fix) only works in a secure context, and a `file://` origin can't fetch the Pi
-(video/telemetry/maps) — so opening `index.html` from disk now shows a **blocking
-message** explaining how to launch correctly (with a SIM-only escape hatch for
-quick offline UI checks). The backend resolves **same-origin**; `?host=IP:PORT`
-remains an override only.
+trusted once on the handheld), then **Install** it as a PWA. The backend resolves
+**same-origin**; `?host=IP:PORT` remains an override only.
+
+## Offline-first: the client works without the backend
+
+**Standing rule:** the only things that require the Pi are the things that *are*
+the vehicle (live video, live telemetry, and any command that moves the sub).
+Everything else works with the Pi off, unplugged, or not yet built — and no panel
+checks backend availability for a dependency it doesn't have.
+
+- **PWA (`sw.js`):** a service worker precaches the whole app shell and keeps a
+  separate `neptune-tiles` cache. Once installed, the dashboard launches and runs
+  with **no network of any kind** — which also permanently solves `file://`, since
+  an installed PWA is a real secure origin (geolocation etc. stay available). No CDN
+  references anywhere; everything is vendored.
+- **Client owns its state (`store.js`, IndexedDB + Cache API):** origin, settings,
+  the saved-area registry, and dive logs live client-side. `SAVE OFFLINE` writes
+  satellite tiles into the Cache API **from the browser** — you can save an area
+  the night before with the Pi powered off. Mirroring to the Pi is an optional
+  second copy, never a precondition.
+- **Client-first services:** address search and geocoding go **browser → Nominatim
+  directly** (they need *internet*, not the Pi); map imagery is fetched by the
+  browser and served from the tile cache offline. The old `MAP AREAS: backend
+  unreachable` / `search unavailable` anti-patterns are gone.
+- **Degradation model (`status.js`):** three independent states in one compact
+  indicator — **NET** (internet), **PI** (backend), **VEH** (vehicle). Backend
+  down greys the vehicle controls + live data **only**, with one shared reason
+  (`NO LINK · CONTROLS DISABLED`) — never the map, search, saved areas, logs, or
+  settings. Reconnection is automatic and silent (no retry buttons).
+- **Commands never queue (§4):** a `Command` fails fast and visibly when the
+  backend is down — rejected, logged (`cmd_rejected`), never buffered or replayed
+  (a late `throttle 100%` is a hazard). Only inert data (telemetry/log records)
+  buffers through an outage and uploads on reconnect.
 
 ## Layout
 

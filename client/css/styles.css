@@ -427,6 +427,27 @@ body.map-expanded #area-select.on{display:flex}
   padding:6px 14px;border-radius:.35rem;border:1px solid var(--primary);background:transparent;color:var(--primary);cursor:pointer}
 #origin-prompt .op-btn:hover{background:color-mix(in srgb,var(--primary) 16%,transparent)}
 
+/* ---- degradation indicator (§3): NET · PI · VEH ---- */
+#status-tri{display:flex;gap:6px;align-items:center;margin-right:6px;flex:0 0 auto}
+.st-pip{display:flex;flex-direction:column;align-items:center;line-height:1;gap:1px;padding:3px 6px;border-radius:.35rem;
+  border:1px solid var(--outline-variant);min-width:34px}
+.st-pip .st-k{font-family:var(--font-sans);font-size:8px;font-weight:700;letter-spacing:.08em;color:var(--on-surface-variant)}
+.st-pip .st-v{font-family:var(--font-sans);font-size:10px;font-weight:800;letter-spacing:.03em}
+.st-pip.ok  {border-color:var(--tertiary)} .st-pip.ok .st-v{color:var(--tertiary)}
+.st-pip.warn{border-color:var(--hazard)}   .st-pip.warn .st-v{color:var(--hazard)}
+.st-pip.down{border-color:var(--error);background:color-mix(in srgb,var(--error) 12%,transparent)} .st-pip.down .st-v{color:var(--error)}
+.st-pip.bad {border-color:var(--error);animation:stpulse 1s infinite} .st-pip.bad .st-v{color:var(--error)}
+.st-pip.idle .st-v{color:var(--on-surface-variant)} .st-pip.sim{border-color:var(--primary)} .st-pip.sim .st-v{color:var(--primary)}
+@keyframes stpulse{50%{background:color-mix(in srgb,var(--error) 28%,transparent)}}
+
+/* ---- backend-down: grey the vehicle controls + live-data ONLY (§3/§4) ---- */
+body.backend-down aside{opacity:.4;pointer-events:none;filter:grayscale(.5)}
+body.backend-down #video-layer{filter:grayscale(.6) brightness(.7)}
+#controls-disabled{display:none;top:76px;right:16px;font-family:var(--font-sans);font-size:11px;font-weight:800;
+  letter-spacing:.08em;padding:6px 12px;border-radius:.4rem;color:var(--error);border:1px solid var(--error);
+  background:color-mix(in srgb,var(--error) 12%,rgba(12,1,24,.9));pointer-events:none}
+body.backend-down #controls-disabled{display:block}
+
 /* ---- STALE DATA badge (§4.2 — operator was looking at old telemetry) ---- */
 #stale-badge{top:76px;left:calc(50% - 55px);transform:translateX(-50%);display:none;
   font-family:var(--font-sans);font-size:12px;font-weight:800;letter-spacing:.12em;padding:6px 14px;border-radius:.4rem;

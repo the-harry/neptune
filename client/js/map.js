@@ -26,6 +26,7 @@ const MAP = {
   centreline:null,                           // [[lon,lat],…] waterway overlay (§3.5)
   originTap:false,                           // one-shot: next map tap sets the origin (§2)
   drag:null, selReadout:null,                // pan drag state; area-selection readout callback (§4)
+  replay:false,                              // viewing a saved dive — freeze live integration (§1)
 };
 const C = { grid:'rgba(180,107,255,0.13)', origin:'#ff8c1a', sub:'#b46bff',
            shallow:'#4dffa6', deep:'#1f9dff' };
@@ -142,18 +143,25 @@ function afterResize(){   // two rAFs so the panel is at its final size before w
 
 /* ---- bootstrap state → honest empty states (§6) + ORIGIN tile (§4) ---- */
 async function refreshBootstrap(){
+  // CLIENT-FIRST (architectural rule): areas + origin come from local storage and work
+  // with the Pi off. The Pi is never consulted here — its data is the mirror, not the source.
   try{
-    const r = await navFetch('/api/areas'); const j = await r.json();
-    const active = (j.areas||[]).find(a=>a.active) || (j.areas||[]).find(a=>a.present);
-    const name = active ? active.name : null;
-    if(name!==MAP.activeArea){ MAP.activeArea=name; loadCentreline(name); }   // waterway overlay (§3.5)
-    MAP.hasArea = !!active;
-  }catch(e){ MAP.hasArea=false; MAP.activeArea=null; MAP.centreline=null; }
+    if(typeof STORE!=='undefined'){
+      const areas = await STORE.areas();
+      if(!MAP.activeArea && areas.length){                     // default-activate the most recent save
+        const newest = areas.slice().sort((a,b)=>(b.savedAt||0)-(a.savedAt||0))[0];
+        MAP.activeArea = newest.name; MAP.viewLat=(newest.bbox[1]+newest.bbox[3])/2; MAP.viewLon=(newest.bbox[0]+newest.bbox[2])/2;
+      }
+      MAP.hasArea = areas.some(a=>a.name===MAP.activeArea) || areas.length>0;
+      if(MAP.activeArea && MAP._clArea!==MAP.activeArea){ MAP._clArea=MAP.activeArea; loadCentreline(MAP.activeArea); }   // Pi-side overlay if reachable
+    }
+  }catch(e){ MAP.hasArea=false; }
   try{
-    const r = await navFetch('/api/origin'); const o = await r.json();
-    MAP.hasOrigin = !(o && o.set===false) && o && typeof o.lat==='number';
-    MAP.origin = MAP.hasOrigin ? o : null;
-  }catch(e){ MAP.hasOrigin=false; MAP.origin=null; }
+    if(typeof STORE!=='undefined'){
+      const o = await STORE.get('origin', null);
+      MAP.hasOrigin = !!(o && typeof o.lat==='number'); MAP.origin = MAP.hasOrigin ? o : null;
+    }
+  }catch(e){}
   renderOriginTile();
   updateEmptyState();
 }
@@ -235,7 +243,7 @@ function connectNavWs(){
   ws.onerror=()=>{ try{ ws.close(); }catch(e){} };
 }
 function pushTrack(x,y,depth){
-  if(!MAP.hasOrigin) return;                              // no track without an origin (§6)
+  if(MAP.replay || !MAP.hasOrigin) return;                // no track without an origin (§6); frozen during replay
   const t=MAP.track, last=t[t.length-1];
   if(last && Math.hypot(x-last.x,y-last.y)<0.25) return;
   t.push({x,y,depth});
@@ -244,7 +252,7 @@ function pushTrack(x,y,depth){
 
 function mapTick(){
   const now=performance.now(); let dt=(now-MAP.lastTick)/1000; if(dt>0.5)dt=0.5; MAP.lastTick=now;
-  if(now-MAP.lastNavAt>1500){                             // client integrator (disk/SIM fallback)
+  if(!MAP.replay && now-MAP.lastNavAt>1500){             // client integrator (disk/SIM fallback; paused during replay)
     MAP.hdg=state.heading; const spd=(state.input.throttle||0)*CONFIG.map.subMaxSpeedMs; const h=MAP.hdg*Math.PI/180;
     MAP.x+=spd*Math.sin(h)*dt; MAP.y+=spd*Math.cos(h)*dt; MAP.depth=state.depth; pushTrack(MAP.x,MAP.y,MAP.depth);
   }

@@ -30,6 +30,12 @@
 
 <!-- TOP APP BAR -->
 <header class="fixed top-0 left-0 h-16 flex justify-between items-center px-edge-margin z-50 bg-surface/30 backdrop-blur-lg border-b border-white/10" style="right:110px">
+<!-- Degradation model (§3): three independent states, one compact indicator -->
+<div id="status-tri" title="Internet · Backend · Vehicle — these fail independently">
+  <span id="st-net" class="st-pip"><span class="st-k">NET</span><span class="st-v">—</span></span>
+  <span id="st-pi"  class="st-pip"><span class="st-k">PI</span><span class="st-v">—</span></span>
+  <span id="st-veh" class="st-pip"><span class="st-k">VEH</span><span class="st-v">—</span></span>
+</div>
 <!-- LEAK: icon-only — green drop (normal) / red crossed drop (leak). Set by renderLeak. -->
 <span id="leak-icon" title="Leak sensor"></span>
 <div class="metric"><span class="m-label">Depth</span><span id="depth-val" class="m-val glow-cyan">1.3 m</span></div>
@@ -56,6 +62,8 @@
 <div id="cam-warning" class="fixed left-1/2 -translate-x-1/2 z-50" style="top:64px"></div>
 <!-- STALE DATA warning (§4.2) — shown when the newest telemetry the operator sees exceeds the staleness threshold -->
 <div id="stale-badge" class="fixed z-50">STALE DATA <span id="stale-age"></span></div>
+<!-- Shared controls-disabled reason (§4) — shown ONCE when the backend is down (not per-control) -->
+<div id="controls-disabled" class="fixed z-50">NO&nbsp;LINK&nbsp;·&nbsp;CONTROLS&nbsp;DISABLED</div>
 
 <!-- RIGHT CONTROL RAIL — stacked; LED + ballast sliders flex to fill the height -->
 <aside class="fixed right-0 top-0 h-full w-[110px] z-50 glass-panel flex flex-col px-3 gap-1.5 overflow-hidden no-scrollbar border-l border-white/20 glow-shadow-rail" style="padding-top:10px;padding-bottom:10px">
@@ -143,7 +151,7 @@
         <button id="as-std" class="as-tog on">Standard</button><button id="as-high" class="as-tog">High</button>
         <span class="as-spacer"></span>
         <button id="as-cancel" class="as-btn">CANCEL</button>
-        <button id="as-dl" class="as-btn as-primary">DOWNLOAD THIS AREA</button>
+        <button id="as-dl" class="as-btn as-primary">SAVE OFFLINE</button>
       </div>
       <div id="as-prog" class="as-prog"></div>
     </div>
@@ -193,6 +201,8 @@
      ============================================================================ -->
 <script src="js/config.js"></script>
 <script src="js/core.js"></script>
+<script src="js/store.js"></script>
+<script src="js/status.js"></script>
 <script src="js/recorder.js"></script>
 <script src="js/video.js"></script>
 <script src="js/net.js"></script>
