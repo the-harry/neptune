@@ -31,21 +31,78 @@ function toLocal(lat, lon, lat0, lon0){
    streams (control/camera TX, telemetry RX) are throttled to 1/s by default.
    Runtime toggles:  NEPTUNE.log(false) · NEPTUNE.logRate(true) · NEPTUNE.state
    ============================================================================ */
+/* The log is a BUS, not a console call.
+
+   A submarine fault is diagnosed after the fact, from whatever was recorded while
+   it was happening — and on this vehicle the operator cannot leave the console
+   mid-dive to go and read a file. So every line goes three places at once:
+
+     console   for a dev machine with devtools open
+     ring      an in-memory scrollback the LOGS overlay tails live
+     sinks     the on-disk session log, so it survives the machine dying
+
+   Levels exist so the overlay can filter: ok / info / warn / err. Anything that is
+   sent, received, attempted or refused should end up here — the point is that a
+   question about what the vehicle did five minutes ago is answerable without
+   having prepared for it. */
 const LOG = (function(){
   let enabled=true, highRate=false;
   const t0=Date.now();
   const ts=()=>((Date.now()-t0)/1000).toFixed(2)+'s';
   const last={};
-  function base(tag,color,args){
+  const ring=[];
+  const sinks=[];
+  let seq=0;
+  const MAX = 4000;                         // ~ a long dive; bounded so memory cannot run away
+
+  function fmt(a){
+    if(a instanceof Error) return a.message || String(a);
+    if(typeof a === 'string') return a;
+    try{ return JSON.stringify(a); }catch(e){ return String(a); }
+  }
+  function emit(tag, level, color, args){
+    const line = { i:++seq, t:Date.now(), rel:(Date.now()-t0)/1000, tag:tag.trim(), level:level,
+                   msg:args.map(fmt).join(' ') };
+    ring.push(line);
+    if(ring.length > MAX) ring.splice(0, ring.length - MAX);
+    for(let i=0;i<sinks.length;i++){ try{ sinks[i](line); }catch(e){} }
     if(!enabled) return;
     try{ console.log('%c'+tag+'%c '+ts(), 'color:'+color+';font-weight:bold', 'color:#7a8a8f', ...args); }catch(e){}
   }
+  function base(tag,color,args,level){ emit(tag, level||'info', color, args); }
+  /* Rate-limited categories are the high-frequency ones: control frames at 20 Hz
+     would be 200 s of scrollback in a 4000-line ring, evicting everything that
+     explains how the dive got there. So they are coalesced rather than dropped
+     silently, and the suppressed count is carried on the next line that does get
+     through - dmesg's "message repeated N times", for the same reason. */
   function throttled(key,ms,tag,color,args){
-    if(!enabled) return;
-    if(highRate){ base(tag,color,args); return; }
+    if(highRate){ emit(tag,'info',color,args); return; }
     const n=Date.now();
-    if(!last[key] || n-last[key]>=ms){ last[key]=n; base(tag,color,args); }
+    const st = last[key] || (last[key] = {t:0, n:0, ms:ms, tag:tag, color:color});
+    st.ms=ms; st.tag=tag; st.color=color;
+    if(n - st.t >= ms){
+      const extra = st.n;
+      st.t = n; st.n = 0;
+      emit(tag,'info',color, extra ? args.concat(['(+'+extra+' more)']) : args);
+    } else {
+      st.n++;
+    }
   }
+  /* A burst that STOPS would otherwise take its suppressed count with it: the
+     count is only reported by the next line to get through, and if the stream
+     goes quiet there is no next line. That loses exactly the interesting case -
+     "telemetry was flowing, then it wasn't". Sweep the tail out on a timer. */
+  setInterval(function(){
+    const n = Date.now();
+    for(const k in last){
+      const st = last[k];
+      if(st.n > 0 && (n - st.t) >= (st.ms || 1000)){
+        const extra = st.n;
+        st.t = n; st.n = 0;
+        emit(st.tag, 'info', st.color, ['(+'+extra+' more, then quiet)']);
+      }
+    }
+  }, 1000);
   return {
     net:  (...a)=>base('[NET] ','#b46bff',a),
     tx:   (...a)=>base('[TX]  ','#c99bff',a),
@@ -56,8 +113,13 @@ const LOG = (function(){
     input:(...a)=>base('[IN]  ','#ff9be0',a),
     map:  (...a)=>base('[MAP] ','#ff5bd0',a),
     state:(...a)=>base('[STATE]','#b9a9d6',a),
-    warn: (...a)=>base('[WARN]','#ff5c7a',a),
-    setEnabled:(v)=>{ enabled=!!v; try{console.log('%c[NEPTUNE] logging '+(enabled?'ON':'OFF'),'color:#b46bff');}catch(e){} },
+    ok:   (...a)=>base('[OK]  ','#4dffa6',a,'ok'),
+    warn: (...a)=>base('[WARN]','#ff8c1a',a,'warn'),
+    err:  (...a)=>base('[ERR] ','#ff5c7a',a,'err'),
+    // ---- consumers ----
+    ring: ()=>ring,
+    subscribe:(fn)=>{ sinks.push(fn); return ()=>{ const i=sinks.indexOf(fn); if(i>=0) sinks.splice(i,1); }; },
+    setEnabled:(v)=>{ enabled=!!v; try{console.log('%c[NEPTUNE] console logging '+(enabled?'ON':'OFF'),'color:#b46bff');}catch(e){} },
     setHighRate:(v)=>{ highRate=!!v; try{console.log('%c[NEPTUNE] high-rate logging '+(highRate?'ON':'OFF'),'color:#b46bff');}catch(e){} }
   };
 })();

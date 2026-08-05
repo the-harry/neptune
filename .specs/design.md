@@ -358,6 +358,49 @@ repeating what the tile's own label and colour already said, and a header that r
 EXIT button. Measured at 1280px: 20 tiles, one row, zero collisions, with the worst-case values
 for every field simultaneously. If it ever does run out of width it wraps rather than overlaps.
 
+### The log is a bus (`client/js/core.js`, `wire.js`, `logview.js`)
+`LOG` stopped being a console call. Every line goes three places: the console, a bounded
+in-memory ring, and the on-disk session log. Levels (`ok` / `info` / `warn` / `err`) exist so
+the overlay can filter.
+
+**`wire.js` wraps `fetch` and `WebSocket` once, at load.** Relying on each call site to log is
+how half of it turns out to be missing exactly where something went wrong, so instrumentation
+happens at the boundary instead: every request, response, socket frame, close code and failure
+is recorded with its outcome and duration. Two details that matter:
+- A `4xx`/`5xx` is a **warning**, not a success. `fetch` resolves for those, which is precisely
+  how a failed request gets mistaken for a working one.
+- An `AbortError` is a deadline we set on purpose, so it is distinguished from a fault.
+
+**High-frequency categories are coalesced, not dropped.** Control frames at 20 Hz would be
+200 s of scrollback in a 4000-line ring, evicting everything explaining how the dive got there.
+The suppressed count rides on the next line (`(+N more)`), and a **sweep** flushes the tail of
+a burst that stops (`(+N more, then quiet)`) - without it, "telemetry was flowing and then it
+wasn't" is the one case that disappears.
+
+**The two endpoints that carry the log are not logged**, or the bus feeds itself: a flush would
+append a line, which would trigger a flush.
+
+### The LOGS overlay
+A fault underwater is diagnosed while the vehicle is still in the water, and the operator
+cannot leave the console mid-session. So the log is an overlay: centred, deliberately **not**
+full screen, over a dimmed-but-visible backdrop - the vehicle behind it has to stay readable.
+
+Tails by default; scrolling up suspends the tail so a line being read does not slide away, and
+returning to the end resumes it. Rows are **appended**, not re-rendered - at 20 Hz a full
+redraw per line would make the log viewer the thing slowing the console down - and the DOM is
+capped independently of the ring. Closing unsubscribes, so nothing is built for a view nobody
+is looking at. The filter input stops key propagation, because the HUD rule is that the map and
+its overlays never capture piloting input.
+
+The footer names the file on disk and says plainly that the view is the bounded in-memory tail,
+so the scrollback is never mistaken for the whole record.
+
+### One diagnostics button
+CONFIG had MARK EVENT, EXPORT LOG and DIVE LOGS - three controls for things that now happen by
+themselves (the session log writes itself; dives and media live in `navigation_logs/`). They
+are replaced by one **LOGS** button. `openDiveLog()` is still on the console API rather than
+deleted: removing a control should not silently remove the capability.
+
 ### Session artefacts (`client/navigation_logs/`)
 Stills, screen recordings and the session log land in `images/`, `videos/` and `logs/` under
 one folder, all named `{mode}_{iso}` - mode being what the console was actually doing, so a

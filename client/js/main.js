@@ -176,6 +176,7 @@ async function boot(forced){
   window.NEPTUNE = {
     state, LOG, CONFIG, STORE, MAP,
     log:LOG.setEnabled, logRate:LOG.setHighRate,
+    logs:openLogView, closeLogs:closeLogView, ring:()=>LOG.ring(), LOGVIEW,
     openMapper, closeMapper, resetBindings,
     connectVideo, camRecordToggle, camCapture,
     // Topside stills taken by PIC. `stills()` lists metadata; `openStill(id)`
@@ -185,6 +186,10 @@ async function boot(forced){
                            window.open(URL.createObjectURL(b), '_blank'); return b; },
     camUp, commandsBlocked,
     openOrigin:openOriginModal, openAreas:openAreaManager, requestLocation:requestDeviceLocation,
+    // The DIVE LOGS button is gone from CONFIG (recorded dives live in
+    // navigation_logs/), but the browser is still there rather than deleted -
+    // removing a control should not silently remove the capability.
+    openDives:openDiveLog,
     REC, mark:(n)=>REC.mark(n),
     // The session log writes itself; this only says where it is going.
     sessionLog:()=>({file:REC.diskFile, path:REC.diskPath||'', written:REC.diskWritten,

@@ -645,3 +645,38 @@ aside > button .material-symbols-outlined{font-size:20px}
    stacked, each flex:1 so they share equal height. min-height keeps them grabbable. */
 .rail-slider{position:relative;width:28px;margin:0 auto;background:var(--surface-variant);
   border:1px solid rgba(255,255,255,.12);border-radius:14px;overflow:hidden;cursor:ns-resize;min-height:44px}
+
+/* ---- LOGS overlay -------------------------------------------------------
+   Centred and deliberately NOT full screen: the operator reads the log while a
+   dive is live, so the vehicle behind it has to stay visible. Backdrop is dimmed
+   rather than opaque for the same reason. */
+#logview{position:fixed;inset:0;z-index:70;display:none;align-items:center;justify-content:center;
+  background:rgba(6,2,16,.45);backdrop-filter:blur(2px)}
+#logview.show{display:flex}
+#logview .lv-card{width:min(1000px,82vw);height:min(620px,72vh);display:flex;flex-direction:column;
+  background:rgba(12,1,24,.94);border:1px solid var(--outline-variant);border-radius:.5rem;
+  box-shadow:0 24px 80px rgba(0,0,0,.6);overflow:hidden}
+#logview .lv-head{display:flex;align-items:center;gap:6px;padding:8px 10px;
+  border-bottom:1px solid var(--outline-variant);background:rgba(0,0,0,.25);flex:0 0 auto}
+#logview .lv-title{font-family:var(--font-sans);font-size:11px;font-weight:700;letter-spacing:.12em;
+  color:var(--primary);margin-right:4px}
+#logview #lv-filter{flex:1;min-width:60px;background:rgba(0,0,0,.35);border:1px solid var(--outline-variant);
+  border-radius:.25rem;color:var(--on-surface);font-family:var(--font-mono);font-size:11px;padding:4px 8px;outline:none}
+#logview #lv-filter:focus{border-color:var(--primary)}
+#logview .lv-btn{font-family:var(--font-sans);font-size:10px;font-weight:700;letter-spacing:.06em;
+  padding:4px 8px;border:1px solid var(--outline-variant);border-radius:.25rem;
+  color:var(--on-surface-variant);background:rgba(0,0,0,.25);flex:0 0 auto}
+#logview .lv-btn.lv-on{color:var(--primary);border-color:var(--primary);background:rgba(180,107,255,.12)}
+#logview .lv-btn.lv-close{color:var(--error);border-color:transparent;font-size:12px;padding:2px 6px}
+#logview .lv-count{font-family:var(--font-mono);font-size:10px;color:var(--on-surface-variant);flex:0 0 auto}
+#logview .lv-body{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;padding:6px 8px;
+  font-family:var(--font-mono);font-size:11px;line-height:1.45;overscroll-behavior:contain}
+#logview .lv-row{display:flex;gap:8px;white-space:pre-wrap;word-break:break-word;padding:1px 0}
+#logview .lv-t{color:#6d5b8a;flex:0 0 auto}
+#logview .lv-tag{color:var(--on-surface-variant);flex:0 0 62px}
+#logview .lv-m{color:var(--on-surface);flex:1 1 auto}
+#logview .lv-ok  .lv-tag,#logview .lv-ok  .lv-m{color:var(--tertiary)}
+#logview .lv-warn .lv-tag,#logview .lv-warn .lv-m{color:var(--hazard)}
+#logview .lv-err  .lv-tag,#logview .lv-err  .lv-m{color:var(--error)}
+#logview .lv-foot{flex:0 0 auto;padding:6px 10px;border-top:1px solid var(--outline-variant);
+  font-family:var(--font-sans);font-size:10px;color:var(--on-surface-variant);background:rgba(0,0,0,.25)}

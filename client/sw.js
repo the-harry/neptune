@@ -12,13 +12,14 @@
 /* Bump SHELL on every client release. It is the ONLY thing that evicts the old
    app shell — a stale cache silently pins the dashboard to old JS, which makes a
    deployed fix look like it did nothing. */
-const SHELL = "neptune-shell-v24";
+const SHELL = "neptune-shell-v25";
 const TILES = "neptune-tiles";
 const SHELL_ASSETS = [
   "./", "index.html", "origin.html", "manifest.json", "icon.svg", "css/styles.css",
-  "js/config.js", "js/core.js", "js/store.js", "js/status.js", "js/recorder.js",
+  "js/config.js", "js/core.js", "js/wire.js", "js/store.js", "js/status.js", "js/recorder.js",
   "js/video.js", "js/net.js", "js/commands.js", "js/input.js", "js/controls.js",
-  "js/render.js", "js/camera.js", "js/tiles.js", "js/map.js", "js/navui.js", "js/main.js",
+  "js/render.js", "js/camera.js", "js/tiles.js", "js/map.js", "js/navui.js",
+  "js/logview.js", "js/main.js",
 ];
 
 self.addEventListener("install", (e) => {

@@ -231,6 +231,40 @@ instruments — thrust, steering, video — fully live**. The map never captures
 gamepad/keyboard piloting input (handlers are scoped to the canvas; MapLibre, if ever
 vendored, is `keyboard:false`).
 
+## LOGS - reading the log without leaving the dive
+
+A fault underwater has to be diagnosed while the vehicle is still in the water, and the
+operator cannot leave the console to open a file mid-session. So **CONFIG -> LOGS** opens a
+live view: centred, deliberately **not** full screen, over a dimmed-but-visible background,
+because the point is to read the log while still seeing what the vehicle is doing behind it.
+
+- **tails** by default; scrolling up pauses the tail so a line you are reading does not slide
+  away, and scrolling back to the bottom resumes it
+- **filter** box and **ALL / WARN+ / ERR** chips
+- colour-coded by level, timestamped to the millisecond
+- the footer says where the complete file is - the overlay's scrollback is the in-memory ring
+  and is bounded; `navigation_logs/logs/{mode}_{iso}.log` is not
+
+### Everything crosses the log
+
+`js/wire.js` wraps `fetch` and `WebSocket` once, at load, so every request, response, socket
+frame, close code and failure is recorded with its outcome and duration - without each call
+site having to remember. Relying on callers to log is how half of it turns out to be missing
+exactly where something went wrong.
+
+A `4xx`/`5xx` is logged as a **warning**, not a success: `fetch` resolves for those, which is
+how failed requests get mistaken for working ones. Aborts are distinguished from faults,
+because an abort is a deadline we set on purpose.
+
+High-frequency categories (control frames at 20 Hz) are **coalesced**, not dropped: the
+suppressed count rides on the next line as `(+N more)`, and a burst that stops gets its tail
+swept out within a second as `(+N more, then quiet)`. Without that, "telemetry was flowing and
+then it wasn't" is exactly the case that vanishes.
+
+The two endpoints that carry the log are deliberately not logged, or the bus feeds itself.
+
+Console: `NEPTUNE.logs()` / `NEPTUNE.closeLogs()` / `NEPTUNE.ring()`.
+
 ## Everything a session produces
 
 ```

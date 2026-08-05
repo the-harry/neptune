@@ -118,6 +118,14 @@ const CONFIG = {
   },
 
   /* ---- BLACKBOX client recorder (logging addendum) ----------------------- */
+  /* ---- LOGS overlay ------------------------------------------------------ */
+  log: {
+    // Rows kept in the overlay's DOM. The in-memory ring is larger, and the file
+    // under navigation_logs/logs is the complete record - this is only what the
+    // browser has to lay out.
+    viewMaxRows: 1200,
+  },
+
   recorder: {
     // The session log writes itself to navigation_logs/logs as it happens. Flushed
     // on a timer, not at shutdown: this handheld has an unresolved kernel fault

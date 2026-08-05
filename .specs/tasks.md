@@ -23,6 +23,35 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
   *Verified on the Pi:* steer RIGHT `284.0 → 301.9`, steer LEFT `301.9 → 278.5`, straight
   `4.20 m` in `6.1 s`, auto dive log `dive-20260805-014654.jsonl` written unasked.
 
+## Diagnostics
+
+- 🧪 **Make the log answer questions it was not prepared for, and readable mid-dive.**
+  Logging was per-call-site, console-only, and gone the moment devtools closed - so the state
+  of the vehicle five minutes ago was answerable only if someone had thought to log it. And a
+  fault underwater has to be diagnosed while the vehicle is still in the water; leaving the
+  console to open a file is not an option.
+  `LOG` is now a bus: console + a bounded ring + the on-disk session log, with levels.
+  `wire.js` wraps `fetch` and `WebSocket` once at load, so every request, response, frame,
+  close code and failure is recorded with outcome and duration without any caller opting in.
+  A `4xx`/`5xx` is logged as a WARNING, not a success - `fetch` resolves for those, which is
+  exactly how a failed request gets read as a working one - and an abort is distinguished from
+  a fault.
+  High-frequency categories are coalesced rather than dropped: the suppressed count rides on
+  the next line, and a **sweep** flushes the tail of a burst that stops. Without the sweep,
+  "telemetry was flowing and then it wasn't" was the one case that vanished silently - found
+  by a test asserting the count was reported, which failed.
+  CONFIG -> **LOGS** opens it live: centred, NOT full screen, over a visible background, with
+  tail-follow, a filter and ALL/WARN+/ERR chips. Rows are appended rather than re-rendered,
+  because at 20 Hz a redraw per line would make the log viewer the thing slowing the console
+  down.
+  MARK EVENT, EXPORT LOG and DIVE LOGS are gone from CONFIG - all three were controls for
+  things that now happen by themselves. `openDiveLog()` stays on the console API rather than
+  being deleted: removing a control should not silently remove the capability.
+  *Verified in a real browser, 33 checks: send/success/failure all logged, the log's own
+  writes NOT logged (no feedback loop), WebSocket wrapper preserving constants, 500 events
+  coalescing to 1 line with the count reported, and the overlay measured centred at 1000x518
+  in a 1280x720 viewport with tail suspend/resume on scroll.*
+
 ## Top bar and stills
 
 - 🧪 **Stop the top-bar metrics rendering on top of each other.**

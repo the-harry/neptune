@@ -317,6 +317,16 @@ REC.init = async function(){
   // Named once, at the start, so the whole session appends to one file. The mode
   // can change mid-session (sim -> real); the name records what it started as.
   if(typeof stampName === 'function') REC.diskFile = stampName(Date.now()) + '.log';
+  // Everything on the log bus also goes to disk, so the session file is the whole
+  // account - requests, socket frames, warnings, failures - not just the blackbox
+  // events. The overlay's scrollback is bounded; this file is not.
+  // No loop: the flush POSTs to /__save, which wire.js deliberately does not log.
+  if(typeof LOG.subscribe === 'function'){
+    LOG.subscribe(function(line){
+      REC.queueForDisk({ t:+line.rel.toFixed(3), e:'log',
+                         d:{ lvl:line.level, tag:line.tag, msg:line.msg } });
+    });
+  }
   REC.db=await _openDB();
   // Adopt what is already on disk, then enforce the cap immediately — otherwise a
   // device that has been flying for weeks starts every session believing the ring

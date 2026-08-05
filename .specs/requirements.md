@@ -287,6 +287,38 @@ I never have to remember a menu sequence on a handheld at the waterside.
 9. WHEN enforcement is disabled, THEN the camera state SHALL still be audited and reported.
 10. Neither the camera nor the link to it SHALL be allowed to enter a power-saving state.
 
+### R5.8 - The log is readable during the dive
+**As an** operator with a vehicle in the water, **I want** to read the live log without
+leaving the console, **so that** I can diagnose a fault while it is still happening.
+
+**Acceptance criteria**
+1. THE log SHALL be viewable from within the console, without navigating away or opening a
+   file.
+2. THE view SHALL NOT occupy the whole screen; what the vehicle is doing SHALL remain visible
+   behind it.
+3. THE view SHALL follow new lines by default, SHALL stop following when the operator scrolls
+   back, and SHALL resume when they return to the end.
+4. THE operator SHALL be able to narrow the view by text and by severity.
+5. THE view SHALL state where the complete record is, AND SHALL NOT imply it holds more than
+   it does.
+6. THE view SHALL NOT capture piloting input.
+7. Opening or holding the view open SHALL NOT degrade piloting.
+
+### R5.9 - Everything that crosses a boundary is logged
+**As an** operator debugging after the fact, **I want** every send, receive, success and
+failure recorded, **so that** a question about what happened is answerable without having
+prepared for it.
+
+**Acceptance criteria**
+1. EVERY outbound request and socket frame SHALL be logged.
+2. EVERY response SHALL be logged with its outcome, INCLUDING failures that do not raise.
+3. Failures, refusals and warnings SHALL be distinguishable from successes at a glance.
+4. Logging SHALL NOT require the calling code to opt in.
+5. High-frequency events SHALL be bounded in the log, AND any suppression SHALL be stated
+   rather than silent.
+6. Writing the log SHALL NOT itself generate log entries.
+7. A logging fault SHALL NOT affect piloting.
+
 ---
 
 ## 6. Navigation and the map
