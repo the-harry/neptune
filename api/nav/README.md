@@ -117,6 +117,13 @@ and logs a warning, and the vehicle carries on.
 This used to default to `sim`, so on a connected vehicle the map traced a canned
 route and steering changed nothing — which presents as *"I can only go straight"*.
 
+The same symptom came back later from the **client** side, for the same underlying
+reason: its fallback integrator paired a commanded speed with a measured heading. On
+a Pi with no sensors, `MockHardware`'s compass only turns while the thrusters drive,
+so a disarmed vehicle reports a constant bearing and the sub ran in a straight line.
+See *Piloting must not wait for sensors* in `client/README.md`. If this ever appears
+a third time, check that heading and speed are coming from the **same** source.
+
 Speed is taken from the **actual thruster output** (`(left+right)/2`), not the
 commanded throttle. Heading only changes when the thrusters really run, so sourcing
 speed from the command while heading came from the hardware meant a disarmed sub

@@ -172,6 +172,16 @@ const state = {
   lastFrame:0
 };
 
+/* Does the vehicle carry real navigation sensors, or is it a mocked hull?
+   Telemetry carries `mock` (api/hardware.py `is_mock`), and on a Pi with nothing
+   wired yet RealHardware refuses to start and `auto` falls back to the bench
+   simulator — so a connected vehicle reporting mock:true has NO compass and NO
+   depth sensor, and its heading is a constant.
+
+   Only an EXPLICIT mock:true counts as "no sensors": a server that omits the flag
+   is trusted rather than second-guessed, so this can never downgrade a real fix. */
+function vehicleHasSensors(){ return !!(state.realTel && state.realTel.mock !== true); }
+
 /* ============================================================================
    HOST RESOLUTION — default same origin; override via ?host=IP:PORT (persisted
    in localStorage). WS base is derived from the same host (ws/wss to match).

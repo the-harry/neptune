@@ -25,6 +25,19 @@ function frame(ts){
   const realFresh = state.realTel && age < CONFIG.staleTimeoutMs;
   const linkAlive = state.wsStatus === 'online';
   const stillWorthWaiting = state.realTel && linkAlive && age < (CONFIG.simFallbackMs || 3000);
+  // Connected to a vehicle that cannot measure its own heading: estimate it from
+  // the operator's steer so the console still answers the sticks. Piloting must not
+  // depend on sensors that are not fitted yet — only the *traced path* does.
+  if((realFresh || stillWorthWaiting) && !vehicleHasSensors()){
+    if(!state._headingEstimated){
+      state._headingEstimated=true;
+      LOG.state('vehicle reports no sensors (mock) — heading estimated from your steer input, not measured');
+    }
+    estimateHeadingFromInput(dt);
+  } else if(state._headingEstimated && vehicleHasSensors()){
+    state._headingEstimated=false;
+    LOG.state('vehicle sensors present — heading is measured again');
+  }
   let view;
   if(realFresh){
     state.mode='real';

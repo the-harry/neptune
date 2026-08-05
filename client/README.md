@@ -165,6 +165,39 @@ CSS transform on a square, which would leave uncovered corners in the circle). S
 video shrinks to a **picture-in-picture** tile (never unmounted — no WebRTC
 reconnect). `Esc`, the ✕ button, or tapping the PiP video collapses it back.
 
+### Piloting must not wait for sensors
+
+Heading and position are shown from whichever source can honestly produce them:
+
+| Vehicle reports | Heading | Position | Path traced |
+|---|---|---|---|
+| `mock:true` (no IMU wired) | **estimated from your steer**, client-side | integrated from your throttle | no — it is your command, not a fix |
+| `mock:false` (sensors fitted) | measured, from telemetry / `/ws/nav` | dead-reckoned by the Pi | yes |
+
+The rule is that **heading and speed always come from the same source.** Mixing them
+is what produced *"I can only go straight"* — twice.
+
+The first time it was server-side: nav took speed from the *commanded* throttle while
+heading came from the hardware, so a disarmed sub advanced across the map without ever
+turning (see `api/nav/README.md`). The second time was the client's own fallback
+integrator, which had the identical pairing — `MAP.hdg` from telemetry, speed from
+`state.input.throttle`.
+
+That one only bites on a **real link**, which is why SIM looked fine. A Pi with no
+sensors wired falls back to `MockHardware`, whose compass only moves while the
+thrusters are actually driving — so a *disarmed* vehicle reports one constant bearing
+forever. Sim integrates heading from steer with no arm gate, so it turned; the Pi
+reported 284° no matter what the stick did, and the sub travelled in a perfectly
+straight line.
+
+So `vehicleHasSensors()` (`core.js`) now decides, and only an **explicit** `mock:true`
+counts as sensorless — a server that omits the flag is trusted, so this can never
+downgrade a real fix. While the vehicle is mocked the client owns the estimate and
+ignores the Pi's nav frames for position: that nav is *also* a simulation, and an
+arm-gated one, so adopting it would overwrite the local estimate every frame and
+re-freeze the map. The SIM badge is already showing throughout — nothing here is
+presented as a measurement.
+
 ### A submarine can't be paused (§3)
 
 GTA freezes the world when the map opens; a sub keeps drifting. So expanding the

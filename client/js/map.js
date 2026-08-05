@@ -372,8 +372,17 @@ function connectNavWs(){
   MAP.navWs=ws;
   ws.onopen=()=>{ _navBackoff=0; };
   ws.onmessage=(ev)=>{ let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
-    if(m.type==='nav'){ MAP.x=m.x_m; MAP.y=m.y_m; MAP.hdg=m.heading_deg; MAP.depth=m.depth_m;
-      MAP.lastNavAt=performance.now(); state.navOkAt=Date.now(); pushTrack(m.x_m,m.y_m,m.depth_m); }
+    if(m.type==='nav'){
+      MAP.lastNavAt=performance.now(); state.navOkAt=Date.now();   // the nav plane IS alive either way
+      // A vehicle with no sensors dead-reckons from its own mocked compass, behind
+      // the arm gate. Adopting that position would overwrite the local estimate
+      // every frame and win, freezing the sub on the map while the operator steers.
+      // Trace the real thing only when there is a real thing to trace.
+      if(vehicleHasSensors()){
+        MAP.x=m.x_m; MAP.y=m.y_m; MAP.hdg=m.heading_deg; MAP.depth=m.depth_m;
+        pushTrack(m.x_m,m.y_m,m.depth_m);
+      }
+    }
   };
   ws.onclose=()=>{ MAP.navWs=null; scheduleNavWs(); };
   ws.onerror=()=>{ try{ ws.close(); }catch(e){} };
@@ -395,7 +404,12 @@ function pushTrack(x,y,depth){
 
 function mapTick(){
   const now=performance.now(); let dt=(now-MAP.lastTick)/1000; if(dt>0.5)dt=0.5; MAP.lastTick=now;
-  if(!MAP.replay && now-MAP.lastNavAt>1500){             // client integrator (disk/SIM fallback; paused during replay)
+  // Client integrator — runs when there is no navigation worth trusting: no nav
+  // frames at all (disk/SIM), OR a connected vehicle with no sensors, whose nav is
+  // itself an estimate and freezes whenever the thrusters are not driving.
+  // Heading and speed MUST come from the same source; mixing a commanded speed with
+  // a measured heading is precisely what made the sub travel in a straight line.
+  if(!MAP.replay && (!vehicleHasSensors() || now-MAP.lastNavAt>1500)){
     MAP.hdg=state.heading; const spd=(state.input.throttle||0)*CONFIG.map.subMaxSpeedMs; const h=MAP.hdg*Math.PI/180;
     MAP.x+=spd*Math.sin(h)*dt; MAP.y+=spd*Math.cos(h)*dt; MAP.depth=state.depth; pushTrack(MAP.x,MAP.y,MAP.depth);
   }
