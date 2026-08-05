@@ -1,0 +1,165 @@
+# Neptune — Tasks / Changelog
+
+Newest first. Each entry names the defect, not just the change, because on this project the
+*why* has repeatedly been the expensive part.
+
+Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠️ open
+
+---
+
+## Navigation follows the vehicle
+
+- ✅ **`16dba9f` — Log the nav sensor source and its simulated-ness separately.**
+  Startup printed `sensors=sim` while `VehicleSensorSource` was in use, because `is_sim`
+  reports whether the *vehicle hardware* is mocked, not which source feeds nav. That
+  conflation is part of why the scripted-path bug survived so long.
+
+- ✅ **`b17434f` — Make navigation follow the vehicle, not a scripted route.**
+  `NAV_SENSORS` defaulted to `sim`, a scripted path with preset heading legs that ignores the
+  operator entirely; `NavService` had no reference to the ROV at all. Added
+  `VehicleSensorSource` (heading from hardware, depth from pressure, speed from thrusters) and
+  bound it to the live `RovState`. Speed now comes from actual thruster output `(left+right)/2`
+  rather than commanded throttle, so a **disarmed** sub no longer advances without turning.
+  *Verified on the Pi:* steer RIGHT `284.0 → 301.9`, steer LEFT `301.9 → 278.5`, straight
+  `4.20 m` in `6.1 s`, auto dive log `dive-20260805-014654.jsonl` written unasked.
+
+## Map geometry and readability
+
+- ✅ **`d56d90c` — Size the map canvas from layout, not a mid-animation transform.**
+  `getBoundingClientRect()` includes CSS transforms and both full-screen layouts animate from
+  `scale(.94)`, so the canvas was sized to 94% (1280 → 1203) permanently. The map centre sat
+  39 px from the dial centre — the *two parallel lines*. Now `offsetWidth`/`offsetHeight`.
+  *Before* `sub vs dialCentre = -39,-20` → *after* `0,0`.
+  Same commit: radar and blind-nav zooms retuned so a real track is visible within seconds
+  (12 s of driving spanned 20 px; now 101 px).
+
+- 🧪 **`6d994ee` — Give the radar its own zoom.**
+  `MAP.scale` was shared by radar, expanded map and blind nav. `collapseMap()` reset it, masking
+  the problem; `exitBlindNav()` did not — so the zoom controls added to blind nav silently
+  rescaled the minimap for good. Radar now keeps a fixed glance zoom.
+
+- 🧪 **`43eca61` — Fix blind nav geometry.**
+  Two self-inflicted CSS bugs: `inset:auto` written *after* `left/top` reset them, flinging the
+  dial into the corner at 64vh; then `opacity:0` on `#radar` blanked the whole map because
+  `#map-panel` is its child. Also closed the gaps that exposed — blind nav had no zoom controls,
+  and a stray tap could call `expandMap()` and zero the throttle.
+
+- 🧪 **`93e28a4` — Add blind nav.**
+  With no camera the dashboard showed a black rectangle at the one moment the map is most
+  useful. Blind nav is a third layout, deliberately not `expandMap()` (which engages all-stop
+  and goes north-up for planning). `MAP.expanded` stays false so heading-up, follow-the-sub and
+  live throttle come for free. Debounced both ways.
+
+## Automatic navigation logging (safety)
+
+- ✅ **`78416cb` — Log every session automatically, and make the log survive a crash.**
+  Nothing was logged unless someone remembered to `POST /api/nav/dive/start`, and worse, samples
+  lived in memory and were written once by `stop_dive()` — a crash lost the entire track. Each
+  dive now appends `dive-<ts>.jsonl` as it happens; orphaned journals are rebuilt on next start
+  and marked `recovered`; a truncated final line is tolerated. Failing to record never fails to
+  fly. *Verified against the real classes, then on the Pi.*
+
+## Origin and location
+
+- 🧪 **`2c81085` — Never prompt for location on open.**
+  Requesting on every open re-prompted every launch, because Chrome does not persist a grant
+  unless it came from a user gesture. Gated on `granted`; the ORIGIN tile is marked so one tap
+  sets it up permanently.
+
+- 🧪 **`8dd4f43` — Take a fresh fix on open without downgrading a better origin.**
+  Beyond `originMoveM` it is a different site and gets USE MY POSITION / KEEP; within it, a fix
+  is adopted only if no less accurate, so a ±58 m Wi-Fi fix never overwrites a ±8 m tap.
+  *(Superseded in part by `2c81085`.)*
+
+- 🧪 **`0073336` — Notice when the origin no longer refers to where you are.**
+  A launch point set at home followed the operator to the canal silently. The ORIGIN tile now
+  ages and turns amber — which needs neither permission nor internet, so it works in the field.
+
+- ✅ **`d6e124d` — Await the store before reading it.**
+  `boot()` called `STORE.init()` fire-and-forget then synchronously read the origin, so the
+  saved origin was invisible and a position was requested on **every** boot.
+  *Verified:* `ASKED_BROWSER_FOR_POSITION=false` with an origin stored.
+
+- ✅ **`5ce06dc` — Stop launching fullscreen, which was swallowing the location prompt.**
+  Chromium suppresses permission prompts in fullscreen, so the prompt could be accepted and
+  never stick. The page takes itself fullscreen on first tap anyway.
+
+- ✅ **`875ee59` — Per-browser profiles.**
+  One `--user-data-dir` across Brave → Edge → Chrome left Chrome reading a foreign fork's
+  profile, out of which it would not honour its geolocation setting.
+
+- ⚠️ **`f506015`, `e03752a` — Chrome geolocation policy.**
+  `GeolocationAllowedForUrls` set via `tether-setup.ps1` (policy writes need elevation even in
+  HKCU). **Not demonstrably effective** — kept as belt-and-braces only; the fixes above do not
+  depend on it. Also fixed: `tether-setup.ps1` aborted entirely when the tether NIC was absent,
+  skipping the unrelated location steps.
+
+## Crash and stability (topside)
+
+- ⚠️ **`9ce0233`, `d75d4e6` — GPU/kernel fault mitigations.**
+  Every crash logs `LiveKernelEvent 141` (`VIDEO_ENGINE_TIMEOUT_DETECTED`) with
+  `DPC_WATCHDOG_VIOLATION (0x133)`. `-SafeGraphics` (software decode) did **not** stop it — a
+  fault fired 11 s after Chrome started — so `-NoGpu` takes the browser off the GPU entirely.
+  `crash-diagnostics.ps1` enables kernel dumps and raises `TdrDelay` 2 s → 10 s.
+  **Root cause unresolved**; `C:\Windows\MEMORY.DMP` (1.9 GB) will name the driver.
+  Also in `d75d4e6`: the sub icon now reads red for simulated / green for connected, instead of
+  a muted grey in exactly the situation it exists to warn about.
+
+- ✅ **`0e954c7` — Hand back to the simulator when the link dies.**
+  `main.js` fell back to sim only when telemetry had *never* arrived, so once the Pi had
+  connected even once, losing the link parked the console in `stale` forever — the model stopped
+  advancing and every control looked dead while still accepting input.
+
+- ✅ **`e27681e` — Keep every control usable with no vehicle link.**
+  Gating vehicle controls on the link meant the whole rail died on the bench. Split into
+  `simulated` (interactive) and `gated` (genuinely unavailable).
+
+## Installation and reproducibility
+
+- ✅ **`b48ae76` — Stop `install.sh` mangling the comment explaining the placeholder.**
+  Found by checksumming all 41 deployed files against `origin/master`.
+
+- ✅ **`5187ae2` — Make `install.sh` reproduce the working state offline; pin line endings.**
+  Added `ipv4.dhcp-timeout` (the last setting that existed only on the machine), end-of-run
+  verification that the tether address stuck, and offline operation — apt/pip/git each skip
+  cleanly with no internet, which is the normal state on the tether. `.gitattributes` pins LF
+  for shell/systemd/YAML/Python and CRLF for PowerShell/batch.
+
+## The big one
+
+- ✅ **`b92d25d` — Tether, video plane, subsystem isolation, topside lockout.**
+  Five independent faults that together made the dashboard look dead with the cable plugged in:
+  1. **Tether had no addressing.** `install.sh` only *read* `eth0`'s address. A direct cable has
+     no DHCP, so `eth0` had no IPv4 at all while the client was hard-coded to a home-LAN IP.
+     Fixed point-to-point pair, additive to DHCP, plus `neptune-tether.service`.
+  2. **Video could never connect.** go2rtc rejected every WebRTC handshake with
+     `request origin not allowed by Upgrader.CheckOrigin` — the signaling socket is cross-origin
+     by design here. `api.origin: "*"`. Separately, `go2rtc.yaml` kept a literal
+     `<PI_TETHER_IP>` whenever `eth0` had no IPv4 — the exact tether condition.
+  3. **The whole control rail died as one blob** on `body.backend-down aside{pointer-events:none}`.
+     Replaced with a five-subsystem model and `data-needs`.
+  4. **Metrics were fabricated, not mocked.** `NEPTUNE_HW=real` was forced and
+     `RealHardware.__init__` could not fail, so the API reported `mock: false` while every sensor
+     returned a constant. Added `api/sysinfo.py` — real health from `/proc` and `/sys`, zero
+     dependencies, `null` for unreadable rather than `0`.
+  5. **Topside could only be recovered by rebooting.** PID-based browser liveness + Chromium's
+     process-singleton shut the web server down ~180 ms after launch, leaving a `--kiosk` window
+     with no on-screen exit on a keyboard-less handheld.
+  Also: blackbox upload was deadlocked (a full batch always exceeded the cap, so nothing ever
+  uploaded or was deleted), the ring cap never applied across reloads, WebRTC/nav/camera
+  reconnects leaked sockets and stacked timers, and the service worker pinned `js/*` cache-first
+  behind a version that was never bumped.
+
+---
+
+## Open
+
+| | Item | Owner |
+|---|---|---|
+| ⚠️ | **`DPC_WATCHDOG_VIOLATION`** — kernel dumps now enabled; `MEMORY.DMP` needs WinDbg `!analyze -v` to name the driver | hardware |
+| ⚠️ | **USB tether NIC drops off the bus** (`Present: False`), needs a physical replug; suspect the hub/port/power path | hardware |
+| ⚠️ | **`RealHardware` is a stub** — depth, pressure, heading and pack voltage are simulated; only Pi health is real. `TODO(hardware)` in `api/hardware.py` | firmware |
+| ⚠️ | **No GNSS on the Ally** — Wi-Fi positioning needs internet, so the field workflow is tap-on-map. A USB GNSS on the Pi feeding `/api/origin` is the real answer | hardware |
+| ⚠️ | **Chrome geolocation policy unverified** — kept as belt-and-braces; nothing depends on it | topside |
+| ⚠️ | **Blind nav zoom/dial size are judgement calls** — `radarMetersPerPixel`, `blindSpanM` and the dial size were tuned by measurement, not by driving | field trial |
+| ⚠️ | **Nav track unexercised in the field** — needs an origin set at a real site and a dive | field trial |

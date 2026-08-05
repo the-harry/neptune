@@ -62,6 +62,20 @@ cd api && python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt && python main.py   # http://localhost:8000/
 ```
 
+## Specs
+
+The reasoning behind the system lives in [`.specs/`](.specs/) — extracted from the code so it
+is readable without opening every file:
+
+| File | What |
+|---|---|
+| [`.specs/requirements.md`](.specs/requirements.md) | user stories + acceptance criteria — what it must do and why |
+| [`.specs/design.md`](.specs/design.md) | the breakdown: architecture, mechanisms, and *why* each decision is the way it is |
+| [`.specs/tasks.md`](.specs/tasks.md) | changelog — each defect, its cause, and what remains open |
+
+Start with `design.md` if you are about to change something. Most of what looks like an odd
+choice is a failure that has already happened on this hardware.
+
 ## Documentation
 
 Everything lives in a README next to the code it describes. Start here, then dive in:

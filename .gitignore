@@ -1,0 +1,19 @@
+# Agent / editor tooling — local to a machine, never part of the vehicle.
+.claude/
+CLAUDE.md
+.kiro/
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Runtime data written by the Pi (dive logs, offline areas, blackbox)
+data/
+*.jsonl
+
+# OS noise
+Thumbs.db
+.DS_Store
