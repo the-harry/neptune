@@ -26,8 +26,12 @@ log = logging.getLogger("neptune.nav")
 
 
 class NavService:
-    def __init__(self) -> None:
-        self.sensors = get_sensor_source()
+    def __init__(self, get_rov=None) -> None:
+        # get_rov lets navigation read the LIVE vehicle (heading/depth/throttle) instead
+        # of a scripted path. Without it - e.g. nav running standalone - it falls back
+        # to the simulator, which is fine there and wrong when a real vehicle exists.
+        self._get_rov = get_rov
+        self.sensors = get_sensor_source(get_rov)
         self.origin: Origin | None = None
         self.flow = FlowVector()
         self.speed_lut: SpeedLUT = DEFAULT_LUT

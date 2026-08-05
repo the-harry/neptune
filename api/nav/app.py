@@ -9,8 +9,10 @@ from fastapi import FastAPI
 from .service import NavService, build_router
 
 
-def create_nav_service() -> NavService:
-    return NavService()
+def create_nav_service(get_rov=None) -> NavService:
+    """get_rov: callable returning the live RovState, so the map follows the vehicle
+    rather than a scripted route. Omitted when nav runs standalone."""
+    return NavService(get_rov)
 
 
 @contextlib.asynccontextmanager

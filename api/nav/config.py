@@ -44,7 +44,10 @@ class NavSettings:
     snapping_enabled: bool = field(default_factory=lambda: _s("NAV_SNAP", "auto") != "off")
 
     # --- sensor backend: "sim" | "real" | "auto" ---
-    sensor_backend: str = field(default_factory=lambda: _s("NAV_SENSORS", "sim"))
+    # "vehicle" (default) = heading/depth/throttle from the live ROV, so steering the
+    # sub actually moves the map. "sim" = the scripted demo path, which ignores the
+    # operator entirely. "real" = the (unwired) IMU/depth/encoder stubs.
+    sensor_backend: str = field(default_factory=lambda: _s("NAV_SENSORS", "vehicle"))
 
     # --- storage ---
     data_dir: Path = field(default_factory=lambda: Path(_s("NAV_DATA_DIR", str(_ROOT / "data"))))

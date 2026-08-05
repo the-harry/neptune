@@ -103,3 +103,25 @@ mid-write, and that must not cost the rest of the dive.
 
 Logging never blocks navigation: a full disk or an unwritable path drops the journal
 and logs a warning, and the vehicle carries on.
+
+## Where the position actually comes from
+
+`NAV_SENSORS` selects the sensor source:
+
+| Value | Source | Follows the operator? |
+|---|---|---|
+| `vehicle` *(default)* | live ROV: heading from the hardware layer, depth from pressure, speed from actual thruster output | **yes** |
+| `sim` | scripted demo path with preset heading legs | **no** — ignores input entirely |
+| `real` | the unwired IMU/depth/encoder stubs | no — returns zeros |
+
+This used to default to `sim`, so on a connected vehicle the map traced a canned
+route and steering changed nothing — which presents as *"I can only go straight"*.
+
+Speed is taken from the **actual thruster output** (`(left+right)/2`), not the
+commanded throttle. Heading only changes when the thrusters really run, so sourcing
+speed from the command while heading came from the hardware meant a disarmed sub
+advanced across the map without ever turning. Both now come from the same place:
+disarmed means neither.
+
+`is_sim` stays true while the vehicle hardware is mocked, so the dashboard keeps
+flagging a simulation as a simulation.
