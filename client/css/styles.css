@@ -393,6 +393,10 @@ body.map-blind #radar-wrap{z-index:42}
 /* Zoom controls belong here too: without them blind nav is stuck at whatever scale
    the radar happened to be on, and a driving view you cannot zoom is not much use. */
 body.map-blind #map-ctl{display:flex}
+/* No close button in blind nav: there is nothing to close, and leaving would land on
+   a full-screen NO FEED - strictly less useful than the map that replaced it. The
+   camera view comes back on its own when the feed does. */
+body.map-blind:not(.map-expanded) #map-close{display:none}
 body.map-blind #radar-empty{display:none}
 /* Video shrinks to a corner tile. It stays on screen ON PURPOSE: it is how the
    operator notices the feed coming back, and tapping it returns to camera view. */

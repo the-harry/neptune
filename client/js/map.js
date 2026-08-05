@@ -27,7 +27,7 @@ const MAP = {
   originTap:false,                           // one-shot: next map tap sets the origin (§2)
   drag:null, selReadout:null,                // pan drag state; area-selection readout callback (§4)
   replay:false,                              // viewing a saved dive — freeze live integration (§1)
-  blind:false, blindOptOut:false, blindSince:0, videoOkSince:0,   // BLIND NAV (map as the driving view)
+  blind:false, blindSince:0, videoOkSince:0, videoWasLive:false,   // BLIND NAV (map as the driving view)
 };
 const C = { grid:'rgba(180,107,255,0.13)', origin:'#ff8c1a', sub:'#b46bff',
            shallow:'#4dffa6', deep:'#1f9dff' };
@@ -66,17 +66,19 @@ function initMap(){
     expandMap();
   });
   const cl=$('map-close'); if(cl) cl.addEventListener('click', (e)=>{ e.stopPropagation();
-    // In blind nav the X is the way back to the (dead) camera view. Opt out so it
-    // does not re-engage a second later and fight the operator.
-    if(!MAP.expanded && MAP.blind){ MAP.blindOptOut = true; exitBlindNav(); return; }
+    // Only meaningful for the EXPANDED map. In blind nav there is nothing to close:
+    // leaving would land on a full-screen NO FEED, which is strictly less useful than
+    // the map. The button is hidden there (see styles.css) and this is a belt-and-braces
+    // no-op in case it is reached another way.
+    if(MAP.blind && !MAP.expanded) return;
     collapseMap(); });
   document.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && MAP.expanded && !typingInField(e)) collapseMap(); });
   $('video-layer').addEventListener('click', ()=>{
     if(MAP.expanded){ collapseMap(); return; }                 // tap PiP video → back to camera
-    // In BLIND NAV the video tile is the way back: the operator may want the (dead)
-    // camera view anyway. Opt out until the feed actually returns, so it does not
-    // immediately flip back and fight them.
-    if(MAP.blind){ MAP.blindOptOut = true; exitBlindNav(); }
+    // In BLIND NAV the tile is a STATUS indicator, not a way out. It used to opt out of
+    // blind nav, which returned the operator to a full-screen NO FEED — a dead end with
+    // strictly less information than the map it replaced. The feed coming back is what
+    // restores the camera view, and that is automatic.
   });
   // resize AFTER layout settles (§3 — else a grey half-render). transitionend is a backup to the rAF pass.
   MAP.panel.addEventListener('transitionend', (ev)=>{ if(ev.propertyName==='opacity'){ resizeMap(); if(MAP.ml) MAP.ml.resize(); } });
@@ -172,10 +174,10 @@ function updateBlindNav(){
 
   if(videoOk){
     MAP.blindDownSince = 0;
+    MAP.videoWasLive = true;      // a real feed existed; future outages get the full debounce
     if(!MAP.videoOkSince) MAP.videoOkSince = now;
     // feed is genuinely back: drop the opt-out so the next outage engages again
     if(now - MAP.videoOkSince >= (CONFIG.map.blindBackMs||1500)){
-      MAP.blindOptOut = false;
       if(MAP.blind) exitBlindNav();
     }
     return;
@@ -184,10 +186,14 @@ function updateBlindNav(){
 
   // The expanded map wins: it is a deliberate operator action and it is all-stopped.
   if(MAP.expanded){ if(MAP.blind) exitBlindNav(); return; }
-  if(MAP.blindOptOut) return;
 
   if(!MAP.blindDownSince) MAP.blindDownSince = now;
-  if(now - MAP.blindDownSince >= (CONFIG.map.blindAfterMs||4000)) enterBlindNav();
+  // The debounce exists to stop a transient WebRTC blip throwing the operator between
+  // views. On a COLD START there is no established feed to blip, so waiting the full
+  // window just parks a useless NO FEED on screen. Engage promptly the first time.
+  const everLive = !!MAP.videoWasLive;
+  const wait = everLive ? (CONFIG.map.blindAfterMs||4000) : (CONFIG.map.blindColdMs||1200);
+  if(now - MAP.blindDownSince >= wait) enterBlindNav();
 }
 
 function expandMap(){

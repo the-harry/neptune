@@ -187,9 +187,11 @@ still drive rather than stare at a black rectangle.
 3. THE view SHALL be heading-up and follow the sub.
 4. THE display SHALL state plainly that there is no camera.
 5. WHEN the feed returns beyond a debounce, THEN the camera view SHALL be restored.
-6. THE operator SHALL be able to leave blind navigation manually, and it SHALL NOT
-   immediately re-engage.
-7. A stray tap in this view SHALL NOT zero the throttle.
+6. THERE SHALL be no full-screen "no feed" state. Blind navigation is the fallback in
+   every mode, including a cold start where a feed has never existed.
+7. THE operator SHALL NOT be able to leave blind navigation into a camera view that has
+   nothing to show; the feed returning is what restores it.
+8. A stray tap in this view SHALL NOT zero the throttle.
 
 ---
 

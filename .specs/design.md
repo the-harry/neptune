@@ -143,10 +143,16 @@ submarine cannot be paused, so an open planning map means throttle zero. Blind n
 live throttle, no all-stop) stays in its piloting form for free. Only the layout changes.
 
 Entry and exit are debounced both ways: a WebRTC hiccup throwing the operator between views
-mid-manoeuvre is worse than either view alone. The video shrinks to a corner tile rather than
-disappearing — that is how the return of the feed is noticed, and tapping it opts out until the
-feed is genuinely restored. A tap cannot expand the map while blind, because expanding would
-zero the throttle.
+mid-manoeuvre is worse than either view alone. On a **cold start** the debounce is shorter
+(`blindColdMs`) — there is no established feed to blip, so the full window would only park a
+useless NO FEED on screen.
+
+**There is no full-screen NO FEED state.** Blind nav is the fallback in every mode. The X is
+hidden (there is nothing to close) and tapping the video tile no longer exits — both used to
+land the operator on a black rectangle carrying strictly less information than the map it
+replaced. The tile remains as a status indicator, which is how the return of the feed is
+noticed, and that return is what restores the camera view. A tap cannot expand the map while
+blind, because expanding would zero the throttle.
 
 ### Two zooms, on purpose
 `MAP.radarScale` (fixed) and `MAP.scale` (adjustable) are separate. A single shared value meant

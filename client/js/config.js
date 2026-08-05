@@ -77,6 +77,9 @@ const CONFIG = {
     // ~768 m across - useless for driving a 1 m/s vehicle.
     blindSpanM:     60,
     blindBackMs:    1500,        // how long it must be back before switching away again
+    // Cold start: no feed has ever existed, so there is no blip to debounce and no
+    // reason to sit on a NO FEED screen. Blind nav is the fallback in every mode.
+    blindColdMs:    1200,
     // --- satellite basemap (§3) — raster XYZ tiles drawn straight to the radar canvas (zero-dep) ---
     tileProvider:   'esri',      // 'esri' (World Imagery) — see tileProviders below
     tileProviders: {
