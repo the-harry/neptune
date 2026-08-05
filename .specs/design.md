@@ -288,6 +288,26 @@ The frame source is the live video when there is one and **the map otherwise**. 
 the map *is* the view, so capturing a black `<video>` would be actively misleading: it would
 look like the camera worked. This is also what makes PIC exercisable in sim.
 
+**A page cannot screenshot itself.** A canvas composite only ever knows about the video and
+the map — never the instrument bar, the control rail or the banners the operator is actually
+looking at. So the *launcher* takes the capture: it already serves the page from localhost, so
+`GET /__screenshot` returns a real `CopyFromScreen` PNG, the same thing PrintScreen does. Being
+same-origin it does not taint the canvas it is drawn into, so the satellite basemap survives as
+a side effect. The listener is loopback-only, so nothing off the machine can ask for it.
+
+`SetProcessDPIAware()` has to be called before anything asks how big the screen is: this
+handheld runs 1920×1080 at 150%, and a DPI-unaware process is told the screen is 1280×720 and
+silently captures only its top-left corner.
+
+The capture is stored **unmodified** — no caption. The instrument bar is already in frame and
+the filename carries the timestamp, so a strip along the bottom would only cover the control
+rail. The composite fallbacks below *do* get one, because there the surrounding UI is genuinely
+absent from the image.
+
+Everything below is the fallback, for when the page is not served by the launcher (from the Pi,
+a static server, a test harness) or the capture fails. A slow endpoint is bounded by
+`screenshotTimeoutMs` — PIC must never hang on it.
+
 **The map canvas cannot be exported.** Tiles are loaded without `crossOrigin` and cached as
 opaque responses so the offline archive works, which taints the canvas — `toBlob` throws
 `Tainted canvases may not be exported`. Making the tiles CORS-clean would fix the screenshot

@@ -96,3 +96,13 @@ does, `Neptune.bat -Stop` fixes it without a reboot:
 
 **Chrome, then Edge.** Brave is no longer used. If Chrome isn't installed the launcher falls back
 to Edge, which is the same Chromium engine and works identically.
+
+## `/__screenshot`
+
+The dashboard's PIC button hits this for a real screen capture — a page cannot screenshot
+itself, and a canvas only knows about the video and the map, not the instruments around them.
+Returns a PNG of the primary screen (`CopyFromScreen`, the same thing PrintScreen does).
+
+The listener is **loopback-only**, so only this machine can ask. `SetProcessDPIAware()` is
+called at startup because a DPI-unaware process on this 1920x1080-at-150% handheld is told the
+screen is 1280x720 and captures only its top-left corner.

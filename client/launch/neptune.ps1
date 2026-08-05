@@ -211,6 +211,18 @@ try {
   # =========================================================================
   Step 3 "Local server"
   # =========================================================================
+  # DPI awareness has to be set BEFORE anything asks how big the screen is. This
+  # handheld runs 1920x1080 at 150%, so a DPI-unaware process is told the screen
+  # is 1280x720 and a screen capture silently returns the top-left corner of it.
+  # Must happen once, early, and before /__screenshot is ever served.
+  try {
+    Add-Type -Namespace Neptune -Name Dpi -MemberDefinition '
+      [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();' -ErrorAction Stop
+    [void][Neptune.Dpi]::SetProcessDPIAware()
+  } catch {
+    Info "could not set DPI awareness - screenshots may be cropped on a scaled display"
+  }
+
   # Concurrent: browsers open half a dozen sockets at once (and speculative ones
   # that send nothing at all). The old single-threaded accept+3s-blocking-read
   # served one at a time and stalled the whole dashboard on any silent socket.
@@ -269,6 +281,33 @@ try {
         $shared.quit = $true
         $body = [System.Text.Encoding]::UTF8.GetBytes("bye")
         $head = "HTTP/1.1 200 OK`r`nContent-Type: text/plain`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n"
+        $hb = [System.Text.Encoding]::ASCII.GetBytes($head)
+        $stream.Write($hb, 0, $hb.Length); $stream.Write($body, 0, $body.Length); $stream.Flush()
+        return
+      }
+
+      # A REAL screenshot. The page cannot take one of itself: a canvas only knows
+      # about the video and the map, never the top bar, the control rail or any
+      # other DOM around them - and the satellite tiles taint it anyway. This is
+      # the same capture PrintScreen does. The listener is loopback-only, so
+      # nothing off this machine can ask for it.
+      if ($path -eq "/__screenshot") {
+        try {
+          Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+          Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+          $gfx = [System.Drawing.Graphics]::FromImage($bmp)
+          $gfx.CopyFromScreen($bounds.X, $bounds.Y, 0, 0, $bmp.Size)
+          $ms  = New-Object System.IO.MemoryStream
+          $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+          $body = $ms.ToArray()
+          $ms.Dispose(); $gfx.Dispose(); $bmp.Dispose()
+          $head = "HTTP/1.1 200 OK`r`nContent-Type: image/png`r`nContent-Length: $($body.Length)`r`nCache-Control: no-store`r`nX-Screen: $($bounds.Width)x$($bounds.Height)`r`nConnection: close`r`n`r`n"
+        } catch {
+          $body = [System.Text.Encoding]::UTF8.GetBytes("screenshot failed: $($_.Exception.Message)")
+          $head = "HTTP/1.1 500 Internal Server Error`r`nContent-Type: text/plain; charset=utf-8`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n"
+        }
         $hb = [System.Text.Encoding]::ASCII.GetBytes($head)
         $stream.Write($hb, 0, $hb.Length); $stream.Write($body, 0, $body.Length); $stream.Flush()
         return

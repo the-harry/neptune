@@ -187,13 +187,19 @@ camera I cannot recover, or never had, does not mean I have no picture.
 2. THE topside still and the camera's own SD copy SHALL be independent: either failing
    SHALL NOT prevent the other, AND the result of each SHALL be reported separately.
 3. THE console SHALL NOT report a copy it did not make.
-4. WHEN there is no live feed, THEN the still SHALL be of the view actually in use (the map),
-   NOT a blank video frame.
-5. WHEN there is no camera at all (bench or simulation), THEN PIC SHALL still produce a real
+4. THE topside still SHALL be a capture of the WHOLE SCREEN as the operator sees it —
+   including the instrument bar, the controls and the map basemap — not of one layer.
+5. THE screen capture SHALL NOT be annotated or altered.
+6. WHEN a whole-screen capture is unavailable, THEN a still SHALL still be produced from
+   whatever the console can reach, AND it SHALL say what it is.
+7. WHEN there is no live feed, THEN the fallback still SHALL be of the view actually in use
+   (the map), NOT a blank video frame.
+8. WHEN there is no camera at all (bench or simulation), THEN PIC SHALL still produce a real
    image, so the path can be exercised without hardware.
-6. Each still SHALL carry the telemetry needed to place it in the dive afterwards.
-7. Two stills taken in quick succession SHALL BOTH be kept.
-8. PIC SHALL NOT be disabled because the camera is unavailable.
+9. Each still SHALL carry the telemetry needed to place it in the dive afterwards.
+10. Two stills taken in quick succession SHALL BOTH be kept.
+11. PIC SHALL NOT be disabled because the camera is unavailable.
+12. A capture that is slow or unavailable SHALL NOT block PIC.
 
 ### R5.2 — Blind navigation
 **As an** operator, **I want** the map to take over when the camera dies, **so that** I can

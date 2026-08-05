@@ -255,6 +255,21 @@ a holiday snap; the point is being able to place it in the dive afterwards.
 The id carries milliseconds because it is the IndexedDB key: at second resolution, two
 presses inside the same second silently overwrote each other.
 
+**PIC takes a REAL screenshot.** A page cannot screenshot itself: a canvas composite
+only ever knows about the video and the map, never the top bar, the control rail or the
+banners around them. So PIC asks the **launcher** — which already serves this page from
+localhost — for a genuine screen capture, the same thing PrintScreen does. It arrives
+same-origin, so it does not taint the canvas, which means the satellite basemap survives
+too. `GET /__screenshot` (loopback-only listener; nothing off the machine can ask).
+
+That capture is left **unmodified** — no caption. The top bar is already in frame and the
+filename carries the timestamp; a strip along the bottom would cover the control rail.
+
+Everything below is the **fallback**, used when the page is not being served by the
+launcher (from the Pi, a plain static server, or a test harness) or the capture fails. It
+composites what it can reach and *does* get a caption, because there the surrounding UI is
+genuinely absent from the image.
+
 **The map canvas is tainted, on purpose.** Satellite tiles are loaded without
 `crossOrigin` and the offline archive stores them as *opaque* responses — requiring CORS
 would break the map in the field, which matters far more than a screenshot. The cost is

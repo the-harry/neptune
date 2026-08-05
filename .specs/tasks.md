@@ -58,6 +58,21 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
   every branch settles, a timeout backstops the rest, and `onversionchange` means this window
   never blocks the next upgrade. Losing the database now costs persistence, not the dashboard.
 
+- 🧪 **Make PIC take an actual screenshot, which is what was asked for.**
+  Two rounds of fixing the wrong thing. A canvas composite can only ever reach the video and
+  the map — it cannot see the instrument bar, the control rail or the banners, and the
+  basemap taints it — so no amount of work on that path produces "the screen as I see it".
+  The launcher already serves the page from localhost, so it takes the capture instead:
+  `GET /__screenshot` returns a real `CopyFromScreen` PNG. Same-origin, so it does not taint
+  the canvas, which incidentally brings the basemap back too. Stored unmodified — no caption
+  over a screenshot.
+  `SetProcessDPIAware()` is called first: at 1920×1080 / 150% a DPI-unaware process is told
+  the screen is 1280×720 and captures only its top-left corner.
+  *Verified end to end against the launcher's REAL handler (extracted from `neptune.ps1`, not
+  copied): 200, `image/png`, `X-Screen: 1920x1080`, decodes at 1920×1080. Client side, 11/11
+  with the pixels proven to come from the endpoint, plus the 404 / 500 / wedged-endpoint
+  fallbacks — the last bounded at 4 s so PIC never hangs.*
+
 - 🧪 **Make PIC work on the map, which is where it actually failed.**
   Shipped broken: the first version captured fine in a headless test because no satellite
   tiles had loaded, so the map canvas was clean. On the real handheld, with imagery on

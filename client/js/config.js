@@ -103,7 +103,12 @@ const CONFIG = {
     stream:       'sub',                   // go2rtc stream name (go2rtc.yaml)
     statusPollMs: 5000,                    // REST /api/status poll (backup to the WS)
     videoRetryMs: 2500,                    // WebRTC reconnect backoff floor (§7.4 self-heal)
-    stillQuality: 0.92                     // topside PIC copy: JPEG quality (0-1)
+    stillQuality: 0.92,                    // topside PIC copy: JPEG quality (0-1)
+    // A page cannot screenshot itself, so PIC asks the LAUNCHER (which serves this
+    // page from localhost) for a real screen capture - metrics, control rail,
+    // basemap and all. Set to '' to always use the in-page canvas composite.
+    screenshotEndpoint: '/__screenshot',
+    screenshotTimeoutMs: 4000              // never let a wedged launcher block PIC
   },
 
   /* ---- BLACKBOX client recorder (logging addendum) ----------------------- */

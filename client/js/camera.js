@@ -193,6 +193,37 @@ function canvasTainted(cv){
   catch(e){ return true; }
 }
 
+/* THE REAL SCREENSHOT.
+
+   A page cannot screenshot itself. A canvas composite only ever knows about the
+   video and the map — it cannot see the top bar, the control rail, the banners or
+   anything else the operator is actually looking at, and the satellite basemap
+   taints it on top of that. So the launcher, which already serves this page from
+   localhost, takes the capture instead: the same thing PrintScreen does.
+
+   Same-origin, so the PNG does NOT taint the canvas we draw it into — which is
+   what lets the basemap survive. Falls back to the canvas composite when the page
+   is not being served by the launcher (served from the Pi, from a plain static
+   server, or a test harness). */
+async function grabScreenshot(){
+  if(!CONFIG.camera.screenshotEndpoint) return null;
+  const ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  // PIC must stay responsive: a launcher that is wedged or an endpoint that is not
+  // there must cost a moment, not the capture.
+  const killer = ctl ? setTimeout(()=>{ try{ ctl.abort(); }catch(e){} },
+                                  CONFIG.camera.screenshotTimeoutMs || 4000) : null;
+  try{
+    const r = await fetch(CONFIG.camera.screenshotEndpoint, ctl ? {signal:ctl.signal} : undefined);
+    if(!r.ok) return null;                       // 404 = not the launcher; 500 = it tried and failed
+    const type = r.headers.get('content-type') || '';
+    if(type.indexOf('image') !== 0) return null;
+    const blob = await r.blob();
+    const bmp = await createImageBitmap(blob);
+    return { bmp, w: bmp.width, h: bmp.height };
+  }catch(e){ return null; }
+  finally{ if(killer) clearTimeout(killer); }
+}
+
 /* A downloaded JPEG leaves the app and loses the record around it, so burn the
    essentials into the pixels. The camera does the same thing for the same reason
    (Camera.Preview.MJPEG.TimeStamp is kept ACTIVE precisely so footage can be lined
@@ -244,8 +275,28 @@ function stampCaption(cx, w, h, t, source, basemap){
 }
 
 async function captureLocalStill(t){
+  // A true screen capture first — it is the whole point: the operator wants what
+  // is on the screen, metrics and basemap included, not the video layer alone.
+  const shot = await grabScreenshot();
+  if(shot){
+    try{
+      const cv = document.createElement('canvas');
+      cv.width = shot.w; cv.height = shot.h;
+      const cx = cv.getContext('2d');
+      cx.drawImage(shot.bmp, 0, 0);
+      try{ shot.bmp.close(); }catch(e){}
+      // NO caption here on purpose. This is "the screen as I see it" - the top bar
+      // is already in the frame with the time-relevant telemetry, the filename
+      // carries the timestamp, and a strip along the bottom would cover the
+      // control rail. The composite fallbacks below DO get one, because there the
+      // surrounding UI is genuinely absent from the image.
+      const blob = await new Promise(res => cv.toBlob(res, 'image/jpeg', CONFIG.camera.stillQuality || 0.92));
+      if(blob) return await storeStill(t, blob, {source:'screen', w:shot.w, h:shot.h, basemap:null, degraded:''});
+    }catch(e){ /* fall through to the canvas composite below */ }
+  }
+
   const src = grabSource();
-  if(!src) return { ok:false, why:'nothing to capture (no live feed, no map)' };
+  if(!src) return { ok:false, why:'nothing to capture (no screen capture, no live feed, no map)' };
   let blob, basemap = null, degraded = '';
   try{
     const cv = document.createElement('canvas');
@@ -267,11 +318,17 @@ async function captureLocalStill(t){
   }catch(e){ return { ok:false, why:'could not read the frame: '+(e.message||e) }; }
   if(!blob) return { ok:false, why:'encoder returned nothing' };
 
+  return await storeStill(t, blob, {source:src.source, w:src.w, h:src.h, basemap, degraded});
+}
+
+const _SUFFIX = { screen:'screen', map:'map', video:'cam' };
+
+async function storeStill(t, blob, meta){
   // Telemetry travels WITH the image. A still with no depth or heading is a
   // holiday snap; the point is being able to place it in the dive afterwards.
   const rec = {
-    id: stampName(t) + '-' + (src.source === 'map' ? 'map' : 'cam'),
-    t, source: src.source, w: src.w, h: src.h, blob, basemap,
+    id: stampName(t) + '-' + (_SUFFIX[meta.source] || 'cam'),
+    t, source: meta.source, w: meta.w, h: meta.h, blob, basemap: meta.basemap,
     sim: (typeof commandsBlocked === 'function') ? commandsBlocked() : null,
     depth: state.depth, heading: state.heading, pressure: state.pressure,
     ballast: state.ballastLevel, batteryV: state.batteryV,
@@ -294,7 +351,7 @@ async function captureLocalStill(t){
     downloaded = true;
   }catch(e){ /* stays in IndexedDB only */ }
 
-  return { ok: stored || downloaded, rec, stored, downloaded, degraded,
+  return { ok: stored || downloaded, rec, stored, downloaded, degraded: meta.degraded || '',
            why: (!stored && !downloaded) ? 'could not store or download the image' : '' };
 }
 
