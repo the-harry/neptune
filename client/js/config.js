@@ -41,7 +41,13 @@ const CONFIG = {
   map: {
     navWs:          '/ws/nav',   // backend nav telemetry (x/y/heading/depth); client integrates if absent
     redrawHz:       10,          // radar redraw cap (§4 — decoupled from telemetry, never starves video)
-    metersPerPixel: 0.6,         // initial zoom (0.6 m/px). +/- buttons + wheel adjust.
+    metersPerPixel: 0.6,         // initial zoom for the FULL-SCREEN views (+/- buttons + wheel)
+    // The radar circle has its own, tighter zoom and never follows the big map's.
+    // 0.6 m/px over a 200 px circle is 120 m across - at the sub's ~1 m/s that is two
+    // minutes of full throttle to draw one circle-width of track, which reads as "the
+    // trace is not working". 0.25 m/px gives ~50 m across: movement is visible within
+    // seconds, which is the entire point of a glance instrument.
+    radarMetersPerPixel: 0.25,
     subMaxSpeedMs:  1.0,         // client-side integrator speed at full throttle (disk/SIM fallback)
     maxDepthColorM: 6.0,         // depth at which the track colour saturates (shallow→deep)
     maxTrackPoints: 4000,        // full-res track cap; decimated further for display (§4)
@@ -65,6 +71,11 @@ const CONFIG = {
     // DRIVING view — heading-up, following the sub, throttle live.
     blindNav:       true,
     blindAfterMs:   4000,        // how long the feed must be down before switching (debounce)
+    // Ground distance the blind-nav view spans across the SHORTER screen edge. Set as
+    // metres, not m/px, so it means the same thing on any display: the scale is derived
+    // from the actual canvas on entry. 0.6 m/px inherited from the big map worked out at
+    // ~768 m across - useless for driving a 1 m/s vehicle.
+    blindSpanM:     60,
     blindBackMs:    1500,        // how long it must be back before switching away again
     // --- satellite basemap (§3) — raster XYZ tiles drawn straight to the radar canvas (zero-dep) ---
     tileProvider:   'esri',      // 'esri' (World Imagery) — see tileProviders below

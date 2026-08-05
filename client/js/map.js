@@ -48,7 +48,7 @@ function initMap(){
   // one. Sharing a single value meant zooming the big map silently rescaled the radar -
   // and after blind nav gained zoom controls, that happened constantly.
   MAP.scale = CONFIG.map.metersPerPixel;        // expanded / blind nav (zoomable)
-  MAP.radarScale = CONFIG.map.metersPerPixel;   // collapsed radar (fixed glance zoom)
+  MAP.radarScale = CONFIG.map.radarMetersPerPixel || CONFIG.map.metersPerPixel;  // collapsed radar (fixed glance zoom)
   MAP.headingUp = CONFIG.map.headingUp;
   document.documentElement.style.setProperty('--radar-px', (CONFIG.map.radarPx||200)+'px');
   resizeMap(); window.addEventListener('resize', resizeMap);
@@ -140,6 +140,17 @@ function enterBlindNav(){
   MAP.blind = true; MAP.blindSince = Date.now(); MAP.follow = true;
   document.body.classList.add('map-blind');
   afterResize();
+  // Pick a DRIVING zoom rather than inheriting the big map's. Derived from the real
+  // canvas so it spans the same ground distance on any display; the operator can zoom
+  // from there and it is re-derived on the next entry.
+  requestAnimationFrame(()=>{
+    try{
+      const r = MAP.panel.getBoundingClientRect();
+      const shortEdge = Math.max(1, Math.min(r.width, r.height));
+      MAP.scale = Math.max(0.02, (CONFIG.map.blindSpanM || 60) / shortEdge);
+      LOG.map('blind nav zoom: '+MAP.scale.toFixed(3)+' m/px ('+(CONFIG.map.blindSpanM||60)+' m across)');
+    }catch(e){}
+  });
   vibrate(30);
   LOG.map('BLIND NAV engaged — no camera, map is the driving view');
   if(window.REC && REC.enabled) REC.log('blind_nav', {on:true});
@@ -391,10 +402,20 @@ function mapTick(){
 
 function resizeMap(){
   if(!MAP.canvas||!MAP.panel) return;
-  const r=MAP.panel.getBoundingClientRect();
+  // offsetWidth/Height, NOT getBoundingClientRect().
+  //
+  // The rect includes any CSS transform, and both the expanded and blind-nav layouts
+  // run `animation: mapExpandIn`, which starts at scale(.94). Measuring mid-animation
+  // sized the canvas to 94% of the panel and left it there - 1280 wide became 1203 -
+  // so the map's centre sat ~39 px away from the dial's centre. The sub (drawn at the
+  // canvas centre) and the dial's input vector (drawn at the viewport centre) then
+  // appeared as two parallel, offset lines. offsetWidth is the untransformed layout
+  // size, so it is correct whenever it is read.
+  const w = MAP.panel.offsetWidth  || MAP.panel.getBoundingClientRect().width;
+  const h = MAP.panel.offsetHeight || MAP.panel.getBoundingClientRect().height;
   MAP.dpr=window.devicePixelRatio||1;
-  MAP.canvas.width=Math.max(1,Math.floor(r.width*MAP.dpr)); MAP.canvas.height=Math.max(1,Math.floor(r.height*MAP.dpr));
-  MAP.canvas.style.width=r.width+'px'; MAP.canvas.style.height=r.height+'px';
+  MAP.canvas.width=Math.max(1,Math.floor(w*MAP.dpr)); MAP.canvas.height=Math.max(1,Math.floor(h*MAP.dpr));
+  MAP.canvas.style.width=w+'px'; MAP.canvas.style.height=h+'px';
 }
 /* Trajectory colour encodes DEPTH as a hue sweep: fully emerged → neon yellow,
    fully submerged → dark neon blue, every depth in between a proportional blend —
