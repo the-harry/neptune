@@ -178,6 +178,24 @@ const CONFIG = {
   surfaceComboKeys:   ['F9','F10'],
   surfaceComboHoldMs: 3000,
 
+  /* ---- TETHER — the cable is a hard physical limit, so plan against it -----
+     Range is the STRAIGHT-LINE distance from the launch point (the local frame's
+     0,0), taken in 3D: depth eats into how far you can reach horizontally, which
+     is exactly the trade-off worth seeing before committing to a departure point.
+
+     SIM clamps to it. A dive you cannot physically reach must not look reachable
+     on the bench — that is the whole point of planning one there.
+
+     REAL never clamps, only warns. The launch point moves: pay out more cable,
+     walk the bank, drift the boat, and a "limit" the console enforced would be
+     both wrong and dangerous. The operator is the one who knows.                */
+  tether: {
+    lengthM:    100,     // cable you actually have
+    warnFromM:  80,      // amber from here
+    clampInSim: true,    // SIM cannot exceed lengthM
+    showRing:   true     // draw the reachable circle around the origin
+  },
+
   /* ---- SIMULATION (used only when NO real telemetry is arriving) ---------
      These shape the fake telemetry so every gauge animates offline. They have
      no effect once the server is sending real telemetry.                     */

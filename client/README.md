@@ -192,6 +192,40 @@ A held marker and a working-but-stationary one look identical, which is why the 
 is not optional. This is also why a Pi with nothing wired is worth flying: it reports
 `mock:true`, the map stays honest and still, and the dial still shows you steering.
 
+### The tether is 100 m, and the console plans against it
+
+`CONFIG.tether.lengthM` is the cable you actually have. **TETHER** reads out next to
+THROTTLE/STEER as the straight-line range from the launch point — the local frame's
+`0,0`, so it works with or without a geographic origin — and a dashed **reachable
+circle** is drawn around the origin on the map. That circle is the answer to *"is this
+a good place to put in, and is this mission doable from here"*.
+
+Range is taken in **3D**: the cable has to reach down as well as out, so descending
+shrinks the circle by `√(L² − depth²)`. At 60 m down a 100 m tether reaches 80 m out.
+
+The two modes deliberately differ:
+
+| | Behaviour | Why |
+|---|---|---|
+| **SIM** | **clamped** at the limit — the sub cannot go further | A dive the cable can't reach must not look reachable on the bench, or planning against it is theatre. `TETHER END 100 m`. |
+| **REAL** | **warning only**, never enforced | The launch point moves — you pay out more cable, walk the bank, the boat drifts. A limit the console enforced would be both wrong and dangerous. `TETHER OVER 137/100 m`. |
+
+Amber from `warnFromM` (80 m), red at or past the limit. The clamp only ever pulls the
+sub **back toward** the launch point, never pushes it, so a sub at the end of its cable
+can always drive home.
+
+### Blind nav shows what you're flying on
+
+`.sonar-readout` was technically visible in BLIND NAV but useless: with `#radar` pulled
+to `position:fixed`, the wrap collapses to ~50 px in the bottom-left corner, so the
+numbers sat tiny and off to one side while the dial filled the middle of the screen.
+In a driving view they belong **with** the instrument, so THROTTLE / STEER / TETHER now
+sit in a row under the dial at 22 px.
+
+That readout is also how you **tune the simulator against the real vehicle**: run the
+same throttle on both and compare the distance covered, then set
+`CONFIG.map.subMaxSpeedMs` to match.
+
 ### A submarine can't be paused (§3)
 
 GTA freezes the world when the map opens; a sub keeps drifting. So expanding the

@@ -413,6 +413,47 @@ function pushTrack(x,y,depth){
   if(t.length>CONFIG.map.maxTrackPoints){ const keep=[]; for(let i=0;i<t.length;i++){ if(i>t.length/2||i%2===0) keep.push(t[i]); } MAP.track=keep; }
 }
 
+/* Straight-line range from the LAUNCH POINT, in 3D.
+
+   The local frame's 0,0 IS the launch point, so this works with or without a
+   geographic origin. Depth is included because the cable has to reach down as well
+   as out: at 6 m down, a 100 m tether only buys 99.8 m of ground — small here, but
+   it is the honest number and it is what makes the reachable circle shrink as you
+   descend. */
+function tetherRangeM(){ return Math.hypot(MAP.x, MAP.y, MAP.depth||0); }
+
+/* Horizontal reach still available at the current depth. */
+function tetherHorizLimitM(){
+  const L=(CONFIG.tether&&CONFIG.tether.lengthM)||0, d=Math.abs(MAP.depth||0);
+  return L>d ? Math.sqrt(L*L - d*d) : 0;
+}
+
+/* THROTTLE/STEER live in renderUI at frame rate; this is map-derived, so it runs at
+   the map's 10 Hz. Colour and wording carry the mode distinction the operator asked
+   for: SIM is CLAMPED at the limit, REAL is only ever WARNED. */
+function renderTether(){
+  const T=CONFIG.tether; if(!T) return;
+  const el=$('sonar-teth'), warn=$('tether-warn');
+  const r=tetherRangeM(), over=r>=T.lengthM-0.05, near=r>=T.warnFromM;
+  if(el){
+    el.textContent=(r<10? r.toFixed(1) : Math.round(r))+' m';
+    el.classList.toggle('warn', near && !over);
+    el.classList.toggle('over', over);
+  }
+  if(warn){
+    const linked = typeof vehicleLinked==='function' && vehicleLinked();
+    warn.classList.toggle('on', near);
+    warn.classList.toggle('over', over);
+    warn.textContent = !near ? 'TETHER'
+      : over ? (linked ? 'TETHER OVER '+Math.round(r)+'/'+T.lengthM+' m'
+                       : 'TETHER END '+T.lengthM+' m')
+             : 'TETHER '+Math.round(r)+'/'+T.lengthM+' m';
+    warn.title = linked
+      ? 'Straight-line range from the launch point. Not enforced on a real link — the launch point can move.'
+      : 'SIM is clamped to the cable length, so an unreachable dive cannot look reachable.';
+  }
+}
+
 function mapTick(){
   const now=performance.now(); let dt=(now-MAP.lastTick)/1000; if(dt>0.5)dt=0.5; MAP.lastTick=now;
   // Client integrator — SIM ONLY, and only with no vehicle on the link at all.
@@ -424,8 +465,19 @@ function mapTick(){
   // information, and NO NAV says why (see updateEmptyState).
   if(!MAP.replay && !vehicleLinked()){
     MAP.hdg=state.heading; const spd=(state.input.throttle||0)*CONFIG.map.subMaxSpeedMs; const h=MAP.hdg*Math.PI/180;
-    MAP.x+=spd*Math.sin(h)*dt; MAP.y+=spd*Math.cos(h)*dt; MAP.depth=state.depth; pushTrack(MAP.x,MAP.y,MAP.depth);
+    MAP.x+=spd*Math.sin(h)*dt; MAP.y+=spd*Math.cos(h)*dt; MAP.depth=state.depth;
+    // The cable is a hard limit and SIM must obey it — a mission the tether cannot
+    // reach has to be un-reachable on the bench too, or planning against it is
+    // theatre. Clamped to the HORIZONTAL budget left at this depth, so descending
+    // visibly costs range. Only ever pulled back toward the launch point, never
+    // pushed, so the sub can always drive home.
+    if(CONFIG.tether && CONFIG.tether.clampInSim){
+      const r=Math.hypot(MAP.x,MAP.y), lim=tetherHorizLimitM();
+      if(r>lim && r>0){ const k=lim/r; MAP.x*=k; MAP.y*=k; }
+    }
+    pushTrack(MAP.x,MAP.y,MAP.depth);
   }
+  renderTether();
   // Whether navigation is arriving changes with time, not just on user actions, so
   // the NO NAV label has to be re-evaluated here — but only touched when it flips.
   const navBits = (vehicleLinked()?1:0) | ((now-MAP.lastNavAt<1500)?2:0) | (vehicleHasSensors()?4:0)
@@ -559,10 +611,27 @@ function drawCentreline(ctx,dpr){
     ctx.strokeStyle=C.deep;           ctx.lineWidth=2*dpr; ctx.stroke();    // core
   }
 }
+/* The reachable circle: everywhere the cable can physically get to from the launch
+   point. Drawn around the ORIGIN, not the sub — the question it answers is "is this
+   a good place to put in", which is a question about the launch point. Radius is the
+   horizontal budget left at the current depth, so it closes in as the sub descends. */
+function drawTetherRing(ctx,dpr,ox,oy,ppm){
+  const T=CONFIG.tether; if(!T || !T.showRing) return;
+  const rpx=tetherHorizLimitM()*ppm;
+  if(!(rpx>4) || rpx>20000) return;                 // off-scale: skip rather than draw a wall
+  const near=tetherRangeM()>=T.warnFromM;
+  ctx.save();
+  ctx.setLineDash([6*dpr,5*dpr]);
+  ctx.lineWidth=(near?2:1.25)*dpr;
+  ctx.strokeStyle= near ? 'rgba(255,140,26,.85)' : 'rgba(255,140,26,.42)';
+  ctx.beginPath(); ctx.arc(ox,oy,rpx,0,Math.PI*2); ctx.stroke();
+  ctx.restore();
+}
 function drawTrackProjected(ctx,dpr,headingUp){
   ctx.setTransform(1,0,0,1,0,0);
   // origin cross
   const oS=lonLatToScreen(MAP.origin.lat,MAP.origin.lon);
+  if(oS) drawTetherRing(ctx,dpr,oS[0],oS[1],dpr/curScale());
   if(oS){ ctx.strokeStyle=C.origin; ctx.lineWidth=2*dpr; ctx.beginPath();
     ctx.moveTo(oS[0]-7*dpr,oS[1]);ctx.lineTo(oS[0]+7*dpr,oS[1]);ctx.moveTo(oS[0],oS[1]-7*dpr);ctx.lineTo(oS[0],oS[1]+7*dpr);ctx.stroke();
     ctx.beginPath();ctx.arc(oS[0],oS[1],10*dpr,0,7);ctx.stroke(); }
@@ -591,7 +660,9 @@ function drawTrackMeterFrame(ctx,cx,cy,ppm,rot,headingUp){
   const dpr=MAP.dpr;
   ctx.save(); ctx.translate(cx,cy); ctx.rotate(rot);
   const L=(wx,wy)=>[ (wx-MAP.x)*ppm, -(wy-MAP.y)*ppm ];
-  const o=L(0,0); ctx.strokeStyle=C.origin; ctx.lineWidth=2*dpr; ctx.beginPath();
+  const o=L(0,0);
+  drawTetherRing(ctx,dpr,o[0],o[1],ppm);
+  ctx.strokeStyle=C.origin; ctx.lineWidth=2*dpr; ctx.beginPath();
   ctx.moveTo(o[0]-7*dpr,o[1]);ctx.lineTo(o[0]+7*dpr,o[1]);ctx.moveTo(o[0],o[1]-7*dpr);ctx.lineTo(o[0],o[1]+7*dpr);ctx.stroke();
   ctx.beginPath();ctx.arc(o[0],o[1],10*dpr,0,7);ctx.stroke();
   const t=MAP.track, step=Math.max(1,Math.floor(t.length/600));

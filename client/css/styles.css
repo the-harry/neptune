@@ -394,8 +394,21 @@ body.map-blind #radar{position:fixed;inset:0;width:auto;height:auto;border-radiu
    rings into ellipses and make the heading needle lie about bearing. */
 body.map-blind #radar-dial{position:absolute;inset:auto;left:50%;top:50%;transform:translate(-50%,-50%);
   width:min(56vh,56vw);height:min(56vh,56vw);z-index:4;opacity:.9}
-/* Throttle/steer readout and the scale stay - they matter more here than anywhere. */
+/* Throttle/steer readout and the scale stay - they matter more here than anywhere.
+   They were STAYING but not arriving: with #radar pulled to position:fixed the wrap
+   collapses to ~50 px in the bottom-left corner, so the numbers you fly on sat tiny
+   and off in a corner while the dial filled the middle of the screen. In a driving
+   view they belong WITH the instrument, so put them in a row under the dial at a
+   size you can read at a glance - this is also the readout used to compare the sim
+   against the real vehicle's speed. min(28vh,28vw) is half the dial's own size. */
 body.map-blind #radar-wrap{z-index:42}
+body.map-blind #radar-wrap .sonar-readout{
+  position:fixed;left:50%;top:calc(50% + min(28vh,28vw) + 12px);transform:translateX(-50%);
+  flex-direction:row;align-items:flex-start;gap:28px;padding:0}
+body.map-blind #radar-wrap .sonar-readout .metric{align-items:center!important}
+body.map-blind #radar-wrap .sonar-readout .m-label{font-size:11px;letter-spacing:.10em}
+body.map-blind #radar-wrap .sonar-readout .m-val{font-size:22px;line-height:1.1}
+body.map-blind #radar-wrap .tether-warn{align-self:center;margin-top:0;font-size:11px;padding:4px 10px}
 /* Do NOT hide #radar with opacity/visibility here: #map-panel is a CHILD of it, so
    that blanks the entire map. The ring is already made invisible above via
    border:0 + background:transparent, which is enough. */
@@ -611,6 +624,16 @@ body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
 .sonar-center{fill:var(--tertiary);opacity:.6}
 .sonar-tick{fill:var(--tertiary);opacity:.55;font-family:var(--font-sans);font-size:11px;font-weight:700;letter-spacing:.08em}
 .sonar-readout{display:flex;flex-direction:column;gap:6px;padding-bottom:8px}
+/* TETHER — range against the cable. Amber approaching the limit, red at or past it.
+   Sits with THROTTLE/STEER because that is where the eye already is while driving. */
+#sonar-teth.warn{color:var(--hazard)}
+#sonar-teth.over{color:var(--error)}
+.tether-warn{display:none;margin-top:2px;padding:2px 6px;border-radius:7px;white-space:nowrap;
+  font-family:var(--font-sans);font-size:9px;font-weight:800;letter-spacing:.08em;
+  color:var(--hazard);border:1px solid var(--hazard);background:color-mix(in srgb,var(--hazard) 14%,rgba(12,1,24,.85))}
+.tether-warn.on{display:block}
+.tether-warn.over{color:var(--error);border-color:var(--error);
+  background:color-mix(in srgb,var(--error) 16%,rgba(12,1,24,.85))}
 
 /* ---- top-bar metric tiles: sized to their CONTENT, label over value ----
    This used to be `flex:1 1 0` - equal columns filling the bar. Twenty metrics in
