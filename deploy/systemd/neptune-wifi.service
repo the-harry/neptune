@@ -1,0 +1,33 @@
+[Unit]
+Description=Disable Wi-Fi power management on the Neptune camera link
+# Raspberry Pi OS enables Wi-Fi power save by default, and on this vehicle wlan0 IS
+# the camera. With power save on, the radio parks between beacons and the RTSP pull
+# stutters or stalls - which presents topside as "the camera went to sleep" and is
+# indistinguishable from the camera's own power-saving timer. Both have to be off.
+#
+# NetworkManager owns the persistent setting (install.sh sets wifi.powersave=2 on the
+# neptune-cam profile). This unit is the belt-and-braces: the driver re-enables power
+# management on RE-ASSOCIATION, and the camera AP drops every time the camera reboots
+# or its battery is swapped, so the profile setting alone is not enough.
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+# Report the starting state once, so the journal says what it was before we changed it.
+ExecStartPre=-/bin/sh -c 'iw dev "${NEPTUNE_CAM_IFACE}" get power_save'
+# iw is present on Raspberry Pi OS; iwconfig (wireless-tools) is the older fallback.
+# Neither failing may take the unit down - a Pi with no wlan0 yet is normal, because
+# the camera is often powered on after the Pi.
+ExecStart=/bin/sh -c 'while true; do \
+  iw dev "${NEPTUNE_CAM_IFACE}" set power_save off 2>/dev/null \
+    || iwconfig "${NEPTUNE_CAM_IFACE}" power off 2>/dev/null \
+    || true; \
+  sleep 60; \
+done'
+Environment=NEPTUNE_CAM_IFACE=wlan0
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

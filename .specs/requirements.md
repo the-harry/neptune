@@ -193,6 +193,30 @@ still drive rather than stare at a black rectangle.
    nothing to show; the feed returning is what restores it.
 8. A stray tap in this view SHALL NOT zero the throttle.
 
+### R5.3 — The camera is configured for the dive, not left at factory
+**As an** operator, **I want** the camera brought to the right settings by itself and kept
+there, **so that** it does not power itself off mid-dive or lose the recording, and so that
+I never have to remember a menu sequence on a handheld at the waterside.
+
+**Acceptance criteria**
+1. WHEN the camera is reachable, THEN the settings needed for a dive SHALL be applied with
+   no operator action.
+2. THE camera SHALL NOT be allowed to power itself down on an idle timer.
+3. Recorded video SHALL be segmented, NOT written as one continuous file — a file still
+   being written when power is cut is unrecoverable.
+4. WHEN a setting is written, THEN it SHALL be verified by re-reading it, AND a write the
+   firmware accepted but ignored SHALL be reported as not applied.
+5. WHEN a setting cannot be applied, THEN the console SHALL say so; it SHALL NOT report
+   success for a setting it did not verify.
+6. WHEN the camera reboots, is power-cycled, or otherwise returns after being unreachable,
+   THEN the settings and the camera clock SHALL be re-applied automatically.
+7. Applying settings SHALL NOT interrupt the video feed while the vehicle may be under way,
+   AND SHALL NOT disturb a recording in progress.
+8. WHERE a setting's meaning or valid values are unverified, THEN it SHALL be left alone and
+   listed as deliberately unset, rather than guessed at.
+9. WHEN enforcement is disabled, THEN the camera state SHALL still be audited and reported.
+10. Neither the camera nor the link to it SHALL be allowed to enter a power-saving state.
+
 ---
 
 ## 6. Navigation and the map

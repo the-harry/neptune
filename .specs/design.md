@@ -231,6 +231,58 @@ nginx raises `proxy_read_timeout` on `/go2rtc/`: the signaling socket goes idle 
 is up, and the default 60 s close killed video mid-session while the client, seeing a live feed,
 did not reconnect.
 
+### Camera defaults (`api/camera/defaults.py`)
+
+The factory state is actively hostile. `PowerSaving=5MIN` powers the camera off mid-dive, and
+topside that is **indistinguishable from a tether fault** — which is exactly how it gets
+misdiagnosed. `VideoClipTime=OFF` writes one continuous `.MOV`, and a file still being written
+when power is cut is unrecoverable, so segmenting is the highest-value setting on the device.
+
+**Nothing is written blind, because a blind write already lied.** `preflight()` reported
+`PowerSaving=OFF (critical) OK` for months on a camera that then slept: it wrote `PowerSaving`,
+read back a property of *that* name rather than `Camera.Menu.PowerSaving`, got `None`, and the
+check `ps == "OFF" or ps is None` scored `None` as a pass. The protocol makes this easy to do —
+names are asymmetric (write `Videores`, read `Camera.Menu.VideoRes`), and an **unknown property
+name is accepted with `0 OK` and silently ignored**.
+
+So each setting carries candidate write names and candidate values in preference order, every
+attempt is verified by re-reading, and the two failure modes are told apart on the wire:
+
+| Response | Means | Do |
+|---|---|---|
+| `722` | the property parsed, the **value** was refused | keep the name, try the next value |
+| `0 OK`, read-back unchanged | the **name** is probably wrong | try the next name |
+
+What worked is cached per `FWversion` in `/var/lib/neptune/camera-caps.json`, so a cold probe
+costs a couple of seconds once. Losing the cache costs a re-probe, nothing more.
+
+Settings are tiered (`critical` / `quality` / `hull`) and carry their own reason, so the report
+explains itself. `defaults.py` also lists what is **deliberately not set** — `LCDPower`, whose
+`OFF` may mean "never blanks" rather than "screen off"; `UpsideDown`, which depends on the
+physical mounting; `Timelapse`, whose `5SEC` may be an interval rather than an engaged mode.
+That list is load-bearing: without it the next reader assumes they were forgotten.
+
+**Hot vs cold.** `Videores`, `Imageres` and the preview bump stall the camera's single-threaded
+server, and RTSP shares it — applying one under way is a second of blind piloting. They are
+connect-time only and are skipped while recording.
+
+**The guard loop is also the keepalive.** The 15 s telemetry poll only runs while a dashboard is
+subscribed, so with nobody watching there is no CGI traffic at all and an idle timer we failed to
+disable has nothing to reset. One menu read every 60 s covers three jobs: keepalive, drift
+correction, and detecting a camera that came back — which needs the whole connect sequence again,
+because a rebooted camera has a wrong clock (it has no RTC, and burns the clock into the image).
+
+**AWB is the one conditional setting.** Water absorbs red first, so with no lamps the warmest
+preset counteracts the blue-green cast, and with the white LEDs on the same preset produces an
+orange one. It follows the vehicle's white-light state, reconciled on the next guard tick.
+
+### Wi-Fi power save on the camera link
+`wlan0` *is* the camera. Raspberry Pi OS enables Wi-Fi power management by default, the radio
+parks between beacons, and the RTSP pull stalls — topside, identical to the camera sleeping.
+Both halves have to be off. NetworkManager owns the persistent setting (`wifi.powersave 2` on
+the `neptune-cam` profile); `neptune-wifi.service` re-asserts it every 60 s because the driver
+re-enables it **on re-association**, and the AP drops every time the camera reboots.
+
 ---
 
 ## 8. Navigation (`api/nav/`)

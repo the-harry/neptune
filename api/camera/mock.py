@@ -50,16 +50,23 @@ class MockCamera:
         self.lock = asyncio.Lock()  # single-threaded server: everything serializes
         self.playback = False
         self.battery = 87
+        # Exactly the FACTORY state observed in the HAR capture (spec §4) — including
+        # the parts that are hostile: PowerSaving=5MIN is what powers the camera off
+        # mid-dive, VideoClipTime=OFF is what makes a power-cut lose the whole file,
+        # and StatusLights reads back "OF", not "OFF".
         self.menu = {
             "Camera.Menu.AWB": "AUTO", "Camera.Menu.DefMode": "VIDEO",
             "Camera.Menu.EV": "EV0", "Camera.Menu.FWversion": "0255",
             "Camera.Menu.Flicker": "50Hz", "Camera.Menu.GSensor": "OFF",
             "Camera.Menu.HDR": "OFF", "Camera.Menu.ImageRes": "20MP",
-            "Camera.Menu.IsStreaming": "YES", "Camera.Menu.LCDPower": "30SEC",
+            "Camera.Menu.IsStreaming": "NO", "Camera.Menu.LCDPower": "30SEC",
             "Camera.Menu.LoopingVideo": "OFF", "Camera.Menu.MTD": "OFF",
+            "Camera.Menu.PhotoBurst": "UNKNOW",
             "Camera.Menu.PowerOffDelay": "OFF", "Camera.Menu.PowerSaving": "5MIN",
+            "Camera.Menu.Q-SHOT": "OFF",
             "Camera.Menu.SD0": "READY", "Camera.Menu.SoundIndicator": "ON",
             "Camera.Menu.SpotMeter": "OFF", "Camera.Menu.StatusLights": "OF",
+            "Camera.Menu.TV": "NONE",
             "Camera.Menu.TVSystem": "PAL", "Camera.Menu.Timelapse": "5SEC",
             "Camera.Menu.UIMode": "VIDEO", "Camera.Menu.UpsideDown": "Normal",
             "Camera.Menu.VideoClipTime": "OFF", "Camera.Menu.VideoRes": "1080P30",
@@ -73,7 +80,9 @@ class MockCamera:
             "Camera.Preview.MJPEG.status.record": "Standby",
             "Camera.Preview.MJPEG.TimeStamp": "ACTIVE",
             "Camera.Preview.MJPEG.WarningMSG": "",  # non-empty => fault (e.g. "NO CARD!")
-            "Camera.Preview.RTSP.av": "4", "Camera.Preview.Source.Totals": "2",
+            "Camera.Preview.RTSP.av": "4", "Camera.Preview.RTSP.keepalive": "60",
+            "Camera.Preview.RTSP.rtcp": "10", "Camera.Preview.RTSP.tran": "100",
+            "Camera.Preview.Source.1.Camid": "front", "Camera.Preview.Source.Totals": "2",
         }
         self.recording = False
         self.remaining = 41230
@@ -96,6 +105,67 @@ class MockCamera:
 
 
 CAM = MockCamera()
+
+
+# --------------------------------------------------------------------------
+# What THIS mock believes about the firmware's write names and value sets.
+#
+# Deliberately NOT imported from config.py. The client's name map is a set of
+# GUESSES; if the mock derived its behaviour from those same guesses, every probe
+# would succeed by construction and the test would prove nothing. This is an
+# independent model of the device.
+# --------------------------------------------------------------------------
+
+# Ground truth — these three come from the camera's own cammenu.xml (spec §3.1),
+# so they work under every policy.
+_OBSERVED_WRITE_NAMES = {
+    "Videores": "Camera.Menu.VideoRes",
+    "Imageres": "Camera.Menu.ImageRes",
+    "AWB": "Camera.Menu.AWB",
+}
+
+# Which naming convention the emulated firmware honours for everything else. The
+# real answer is unknown, which is the whole point of probing:
+#   short  (default) — `PowerSaving`, matching the three observed names
+#   dotted           — `Camera.Menu.PowerSaving`
+#   none             — neither; every menu write is accepted and silently ignored
+MOCK_WRITE_NAMES = os.environ.get("MOCK_WRITE_NAMES", "short")
+
+
+def _write_to_read(prop: str) -> str | None:
+    """The read name a write lands on, or None if the firmware does not know it."""
+    if prop in _OBSERVED_WRITE_NAMES:
+        return _OBSERVED_WRITE_NAMES[prop]
+    if prop in CAM.preview:                      # preview props are written dotted
+        return prop
+    if MOCK_WRITE_NAMES == "short":
+        cand = f"Camera.Menu.{prop}"
+        return cand if cand in CAM.menu else None
+    if MOCK_WRITE_NAMES == "dotted":
+        return prop if prop in CAM.menu else None
+    return None
+
+
+# Valid values. The first three are from cammenu.xml; the rest are UNKNOWN on the
+# real device (spec §7), so these are arbitrary choices that exist to exercise the
+# client's value-walking — NOT assertions about what the firmware accepts.
+# VideoClipTime deliberately refuses 3MIN so the preferred value gets a 722 and the
+# client has to fall back to 5MIN.
+VALUE_SETS = {
+    "Camera.Menu.VideoRes": {"4K30", "2.7K30", "1080P60", "1080P30", "720P120"},
+    "Camera.Menu.ImageRes": {"20MP", "16MP", "12MP", "8MP"},
+    "Camera.Menu.AWB": {"AUTO", "DAYLIGHT", "CLOUDY", "FLUORESCENT1", "FLUORESCENT2",
+                        "FLUORESCENT3", "INCANDESCENT"},
+    "Camera.Menu.VideoClipTime": {"OFF", "5MIN", "10MIN"},
+    "Camera.Menu.PowerSaving": {"OFF", "3MIN", "5MIN", "10MIN"},
+    "Camera.Menu.EV": {"EV0"},
+}
+
+# The camera reports StatusLights as "OF", not "OFF" (spec §4). A client that
+# compares the read-back literally scores a successful write as a silent no-op.
+READBACK_QUIRKS = {
+    "Camera.Menu.StatusLights": lambda v: "OF" if v.strip().upper() == "OFF" else v,
+}
 
 
 def _plain(code: int, text: str, pairs: list[str] | None = None) -> Response:
@@ -208,16 +278,25 @@ async def _handle_set(q) -> Response:
 
     # Menu writes (asymmetric names) + preview tweaks + best-effort Camera.Menu.* writes.
     await CAM.sleep("set")
-    write_to_read = {"Videores": "Camera.Menu.VideoRes", "Imageres": "Camera.Menu.ImageRes", "AWB": "Camera.Menu.AWB"}
-    if prop in write_to_read:
-        CAM.menu[write_to_read[prop]] = val
-        return _plain(0, "OK")
+    read_name = _write_to_read(prop)
+
     if prop in ("Camera.Preview.H264.w", "Camera.Preview.H264.h"):
         # firmware 0255 may ignore the preview bump — emulate: accept but DON'T change
         return _plain(0, "OK")
-    if prop in CAM.menu:                             # best-effort Camera.Menu.* writes
-        CAM.menu[prop] = val
+
+    if read_name is None:
+        # THE FAILURE MODE THAT MATTERS: an unrecognised property name is accepted
+        # with code 0 and silently does nothing. A client that trusts the response
+        # code believes it configured the camera. Anything that writes must verify
+        # by re-reading.
         return _plain(0, "OK")
+
+    allowed = VALUE_SETS.get(read_name)
+    if allowed is not None and val not in allowed:
+        return _plain(722, "Invalid state")          # parsed the property, refused the value
+
+    store = CAM.menu if read_name in CAM.menu else CAM.preview
+    store[read_name] = READBACK_QUIRKS.get(read_name, lambda v: v)(val)
     return _plain(0, "OK")
 
 

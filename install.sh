@@ -131,10 +131,14 @@ if command -v nmcli >/dev/null 2>&1; then
   nmcli connection delete neptune-cam >/dev/null 2>&1 || true
   # Creating the PROFILE is what must persist — it autoconnects whenever the camera AP appears.
   # `autoconnect-retries 0` = retry forever, so a camera powered on later still gets joined.
+  # `wifi.powersave 2` = DISABLE power save. The radio parking between beacons stalls the
+  # RTSP pull, and topside that looks exactly like the camera going to sleep. The driver
+  # re-enables it on re-association, so neptune-wifi.service re-asserts it as well.
   if nmcli connection add type wifi ifname "$CAM_IFACE" con-name neptune-cam \
        ssid "$CAM_SSID" \
        wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$CAM_PSK" \
        ipv4.never-default yes ipv4.ignore-auto-dns yes ipv6.method disabled \
+       wifi.powersave 2 \
        connection.autoconnect yes connection.autoconnect-retries 0 >/dev/null; then
     log "camera Wi-Fi profile saved — auto-joins when '$CAM_SSID' is powered on"
     # Activating NOW is best-effort: it fails harmlessly if the camera AP isn't broadcasting yet.
@@ -267,11 +271,13 @@ nginx -t
 log "installing systemd units…"
 # Copy the repo's units, but rewrite paths/ifaces to the real values here so the
 # units always match this host.
-for unit in neptune-api go2rtc wolfang-route neptune-tether; do
+for unit in neptune-api go2rtc wolfang-route neptune-tether neptune-wifi; do
   install -m 0644 "$INSTALL_DIR/deploy/systemd/${unit}.service" "/etc/systemd/system/${unit}.service"
 done
 # patch the route unit for the configured camera iface/IP
 sed -i "s#192.72.1.1#${CAMERA_IP}#g; s#wlan0#${CAM_IFACE}#g" /etc/systemd/system/wolfang-route.service
+# patch the wifi power-save unit for the configured camera iface
+sed -i "s#NEPTUNE_CAM_IFACE=wlan0#NEPTUNE_CAM_IFACE=${CAM_IFACE}#" /etc/systemd/system/neptune-wifi.service
 # patch the tether unit for the configured iface/address
 sed -i "s#NEPTUNE_TETHER_IFACE=eth0#NEPTUNE_TETHER_IFACE=${TETHER_IFACE}#; \
         s#NEPTUNE_TETHER_CIDR=192.168.42.1/24#NEPTUNE_TETHER_CIDR=${TETHER_CIDR}#" \
@@ -288,10 +294,11 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 # update (enable --now would NOT restart an already-running service).
 log "enabling on boot + (re)starting services…"
 systemctl daemon-reload
-systemctl enable neptune-tether.service wolfang-route.service go2rtc.service neptune-api.service nginx >/dev/null 2>&1 || true
+systemctl enable neptune-tether.service neptune-wifi.service wolfang-route.service go2rtc.service neptune-api.service nginx >/dev/null 2>&1 || true
 # Each subsystem is started independently and a failure in one never aborts the
 # others - the dashboard is built to show them individually up or down.
 systemctl restart neptune-tether.service || warn "neptune-tether failed (tether address may be unstable)"
+systemctl restart neptune-wifi.service   || warn "neptune-wifi failed ($CAM_IFACE power save may stall the video)"
 systemctl restart wolfang-route.service  || warn "wolfang-route failed (is $CAM_IFACE up? camera powered on?)"
 systemctl restart go2rtc.service         || warn "go2rtc failed to start (video only)"
 systemctl restart neptune-api.service    || warn "neptune-api failed to start"

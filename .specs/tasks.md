@@ -23,6 +23,40 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
   *Verified on the Pi:* steer RIGHT `284.0 → 301.9`, steer LEFT `301.9 → 278.5`, straight
   `4.20 m` in `6.1 s`, auto dive log `dive-20260805-014654.jsonl` written unasked.
 
+## Camera configuration
+
+- 🧪 **Set the camera up for a dive, and stop `preflight()` reporting a check it never made.**
+  `preflight()` printed `PowerSaving=OFF (critical) OK` on a camera that then powered itself
+  off mid-dive. It wrote `PowerSaving`, read back a property of *that* name rather than
+  `Camera.Menu.PowerSaving`, got `None`, and the check `ps == "OFF" or ps is None` scored
+  `None` as a pass. Nothing called preflight automatically either, so even the vacuous check
+  rarely ran.
+  Added `api/camera/defaults.py`: a tiered table of what the camera should be, each entry
+  carrying its reason. Nothing is written blind — the write names and valid values are
+  unknown for almost every property, and a wrong *name* is accepted with `0 OK` and silently
+  ignored, so each setting probes candidate names and values and verifies by re-read. A `722`
+  (value refused) and a silent no-op (name wrong) are told apart and drive different retries.
+  Results are cached per `FWversion`.
+  The two settings that matter most: **`PowerSaving=OFF`**, because the factory 5MIN sleep is
+  indistinguishable topside from a tether fault; and **`VideoClipTime` segmented**, because a
+  `.MOV` still being written when power is cut is unrecoverable.
+  Applied on connect, re-applied whenever the camera returns (a rebooted camera has a wrong
+  clock and no RTC), and drift-corrected every 60 s — a loop that doubles as the **keepalive**,
+  since the 15 s telemetry poll only runs while a dashboard is subscribed. Slow settings that
+  blank the feed are connect-time only and skipped while recording. `LCDPower`, `UpsideDown`
+  and `Timelapse` are deliberately left alone and listed as such.
+  *Verified against the mock only — the camera is dead, so none of this has met hardware.*
+  40/40 unit checks and 24/24 boot checks, including: the probe still finds the setting when
+  the emulated firmware uses the opposite naming convention, and reports `ignored` rather than
+  success when it honours neither.
+
+- 🧪 **Stop Wi-Fi power save stalling the camera link.**
+  `wlan0` *is* the camera, and Raspberry Pi OS enables power management on it by default —
+  the radio parks between beacons and the RTSP pull stalls, which topside looks exactly like
+  the camera going to sleep. Nothing anywhere turned it off. Added `wifi.powersave 2` to the
+  `neptune-cam` profile and `neptune-wifi.service` to re-assert it, because the driver
+  re-enables it on **re-association** and the AP drops every time the camera reboots.
+
 ## Map geometry and readability
 
 - 🧪 **`c9d5fd1` — Drop the full-screen NO FEED; blind nav is the fallback in every mode.**

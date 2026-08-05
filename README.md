@@ -148,7 +148,7 @@ Overrides (env): `NEPTUNE_REPO`, `NEPTUNE_BRANCH`, `NEPTUNE_TETHER_IFACE` (`eth0
 `NEPTUNE_CAM_SSID` / `NEPTUNE_CAM_PSK`, `NEPTUNE_CAMERA_IP`, `NEPTUNE_HOSTNAME` (`neptune`).
 
 ```bash
-systemctl status neptune-api go2rtc nginx wolfang-route neptune-tether   # health
+systemctl status neptune-api go2rtc nginx wolfang-route neptune-tether neptune-wifi  # health
 journalctl -u neptune-api -f                                              # logs
 curl -s http://192.168.42.1/api/system | python3 -m json.tool             # real Pi health
 ```
@@ -176,3 +176,9 @@ CPU, RAM, disk and both network interfaces when the vehicle link is down.
 - Vehicle commands **fail fast and never queue**: a command sent while the link is down is
   rejected, not replayed later.
 - Destructive actions (delete area/dive, SD ops) require explicit confirmation.
+- The **camera is configured for the dive automatically** and kept there: the factory
+  `PowerSaving=5MIN` powers it off mid‑dive (topside that is indistinguishable from a tether
+  fault), and `VideoClipTime=OFF` writes one continuous file that is unrecoverable if power is
+  cut. Every setting is verified by re‑reading it — a write the firmware accepted but ignored is
+  reported as *not applied*, never as success. See
+  [`api/camera/README.md`](api/camera/README.md#defaults--the-camera-does-not-stay-configured-by-itself).

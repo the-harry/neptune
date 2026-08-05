@@ -19,7 +19,20 @@ from fastapi import APIRouter, Body, HTTPException, Query, WebSocket, WebSocketD
 from fastapi.responses import JSONResponse, Response
 
 from .cgi import PRIORITY_TELEMETRY, PRIORITY_USER, CgiClient
-from .config import WRITE_TO_READ, cam_settings
+from .config import WRITE_TO_READ, cam_settings, read_name_for
+from .defaults import (
+    CRITICAL,
+    HULL,
+    NOT_SET,
+    REPORT_ONLY,
+    SETTINGS,
+    Capabilities,
+    Setting,
+    awb_setting,
+    load_caps,
+    save_caps,
+)
+from .defaults import same as _same
 from .models import (
     CameraUnavailable,
     CgiError,
@@ -33,9 +46,31 @@ from .models import (
 
 log = logging.getLogger("neptune.cam.svc")
 
+# Cap on set+read pairs spent discovering one unknown property. Bounds a cold probe
+# of the whole table to a few seconds of background CGI traffic; after that the
+# capability cache makes it near-free.
+_MAX_PROBE_ATTEMPTS = 6
+
+
+def _log_defaults(rep: dict) -> None:
+    if not rep.get("ok"):
+        log.warning("camera defaults (%s%s): CRITICAL UNMET %s — counts=%s",
+                    rep.get("reason"), " audit" if rep.get("audit_only") else "",
+                    rep.get("critical_unmet"), rep.get("counts"))
+    else:
+        log.info("camera defaults (%s%s): %s in %sms",
+                 rep.get("reason"), " audit" if rep.get("audit_only") else "",
+                 rep.get("counts"), rep.get("took_ms"))
+    for r in rep.get("results", []):
+        if r["outcome"] == "set":
+            log.info("  %s: %s -> %s (%s)", r["property"], r["before"], r["after"], r["detail"])
+        elif r["outcome"] in ("ignored", "rejected", "unresolved", "unreachable", "unmet"):
+            level = log.warning if r["tier"] == CRITICAL else log.info
+            level("  %s: %s (%s) — %s", r["property"], r["outcome"], r["desired"], r["detail"])
+
 
 class CameraService:
-    def __init__(self) -> None:
+    def __init__(self, get_rov=None) -> None:
         self.cgi = CgiClient()
         self.menu_cache: dict[str, str] = {}     # Camera.Menu.* — read once, updated on write
         self.menu_options: list[MenuOption] = []  # parsed cammenu.xml
@@ -43,6 +78,12 @@ class CameraService:
         self._dl_queue: asyncio.Queue = asyncio.Queue()
         self._tasks: list[asyncio.Task] = []
         self.downloads: dict[str, dict] = {}     # name -> {state, received, total}
+        # Optional accessor for the live vehicle. Only used to read the white-light
+        # state, which decides AWB — see defaults.awb_setting(). None on the bench.
+        self.get_rov = get_rov
+        self.caps = Capabilities()
+        self.defaults_report: dict = {"state": "not applied yet"}
+        self._cam_online = False
 
     async def start(self) -> None:
         await self.cgi.start()
@@ -57,8 +98,10 @@ class CameraService:
         self._tasks = [
             asyncio.create_task(self._telemetry_loop()),
             asyncio.create_task(self._download_worker()),
+            asyncio.create_task(self._defaults_loop()),
         ]
-        log.info("camera service started (base=%s)", cam_settings.base_url)
+        log.info("camera service started (base=%s, apply_defaults=%s)",
+                 cam_settings.base_url, cam_settings.apply_defaults)
 
     async def stop(self) -> None:
         for t in self._tasks:
@@ -123,11 +166,288 @@ class CameraService:
     async def set_property(self, prop: str, value: str) -> str | None:
         """Set + re-read + return the actual value (best-effort; spec §4.4)."""
         await self.cgi.set(prop, value)
-        actual = await self.cgi.read_value(prop)
-        read_name = WRITE_TO_READ.get(prop, prop)
+        read_name = read_name_for(prop)
+        actual = (await self.cgi.get(read_name)).data.get(read_name)
         if actual is not None:
             self.menu_cache[read_name] = actual
         return actual
+
+    # ---- defaults: applied on connect, re-asserted for the rest of the dive --
+    async def connect_sequence(self, priority: int = PRIORITY_USER) -> None:
+        """Spec §5.5 steps 1–4: leave playback, set the clock, cache the menu.
+
+        The camera has NO RTC and burns its clock into the image, so a camera that
+        just rebooted is stamping footage with a wrong time until this runs — which
+        breaks the one thing the timestamp exists for, correlating footage against
+        the blackbox log.
+        """
+        await self.cgi.set("Playback", "exit", priority=priority)
+        await self.cgi.set("TimeSettings", time.strftime("%Y$%m$%d$%H$%M$%S"), priority=priority)
+        await self.refresh_menu(priority=priority)
+        if not self.menu_options:
+            try:
+                await self.load_cammenu()
+            except Exception as exc:  # noqa: BLE001
+                log.info("cammenu.xml unavailable: %s", exc)
+
+    def _white_lights_on(self) -> bool:
+        """The white LEDs decide AWB. Absent a vehicle (bench), assume no lamps —
+        that is the darker assumption and the warmer preset, which is recoverable;
+        the reverse leaves everything blue-green."""
+        try:
+            rov = self.get_rov() if self.get_rov else None
+            hw = getattr(rov, "hw", None)
+            if hw is None:
+                return False
+            on, _level = hw.get_light("white")
+            return bool(on)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _plan(self) -> list[Setting]:
+        plan = list(SETTINGS)
+        plan.append(awb_setting(self._white_lights_on()))
+        if cam_settings.upside_down:
+            plan.append(Setting(
+                "upside_down", "Camera.Menu.UpsideDown",
+                ("UpsideDown", "Camera.Menu.UpsideDown"), (cam_settings.upside_down,), HULL,
+                "Physical mounting, asserted because WOLFANG_UPSIDE_DOWN is set. Getting it "
+                "right in the sensor beats rotating in post.",
+            ))
+        return plan
+
+    async def _apply_one(self, s: Setting, priority: int) -> tuple[str, str | None, str]:
+        """Probe one setting. Returns (outcome, actual, detail).
+
+        Neither the write name nor the valid value set is known for most of these
+        (spec §7), and the two failure modes look different on the wire:
+
+          * `722` means the server parsed the property and refused the VALUE — so
+            the NAME is probably right, and the next value is worth trying.
+          * `0 OK` followed by an unchanged read-back is a SILENT NO-OP, which
+            usually means the name is wrong. Move to the next name rather than
+            burning attempts on values.
+        """
+        writes, values = self.caps.preferred(s)
+        attempts, note, refused = 0, "", False
+        for wname in writes:
+            for vi, value in enumerate(values):
+                if attempts >= _MAX_PROBE_ATTEMPTS:
+                    return "unresolved", None, f"gave up after {attempts} attempts; {note}"
+                attempts += 1
+                try:
+                    await self.cgi.set(wname, value, priority=priority)
+                except CgiError as exc:
+                    refused = True
+                    note = f"set {wname}={value} refused ({exc})"
+                    continue                      # name looks real, value is not
+                actual = (await self.cgi.get(s.read, priority=priority)).data.get(s.read)
+                if _same(actual, value):
+                    self.caps.write_names[s.key] = wname
+                    self.caps.values[s.key] = value
+                    for lst in (self.caps.ignored, self.caps.rejected):
+                        if s.key in lst:
+                            lst.remove(s.key)
+                    return "set", actual, f"via {wname}"
+                note = f"set {wname}={value} returned OK but {s.read} is still {actual!r}"
+                if vi == 0 and len(writes) > 1:
+                    break                          # silent no-op on the first value: suspect the NAME
+        if refused:
+            if s.key not in self.caps.rejected:
+                self.caps.rejected.append(s.key)
+            return "rejected", None, note
+        if s.key not in self.caps.ignored:
+            self.caps.ignored.append(s.key)
+        return "ignored", None, note
+
+    async def apply_defaults(self, *, include_cold: bool = True, reason: str = "manual",
+                             reprobe: bool = False, priority: int = PRIORITY_USER) -> dict:
+        """Bring the camera to the defaults in `defaults.py`, verifying every write.
+
+        Never writes a setting that is already at an acceptable value — that keeps a
+        steady-state pass down to two reads, and avoids pointless wear on the
+        camera's settings flash.
+        """
+        t0 = time.monotonic()
+        # Enforcement off still AUDITS. Returning an empty report here meant preflight
+        # emitted no critical checks at all, so a camera sitting at the factory
+        # PowerSaving=5MIN produced a clean bill of health — the same "reports OK
+        # because it looked at nothing" failure this whole change exists to remove.
+        audit_only = not cam_settings.apply_defaults and not reprobe
+        try:
+            state = dict(await self.refresh_menu(priority=priority))
+            try:
+                state.update((await self.cgi.get("Camera.Preview.*", priority=priority)).data)
+            except CgiError as exc:                # preview block is optional for the menu settings
+                log.info("preview state unreadable (%s) — preview defaults skipped", exc)
+        except (CgiError, CameraUnavailable) as exc:
+            return {"reason": reason, "ok": False, "error": str(exc), "results": [], "counts": {}}
+
+        fw = state.get("Camera.Menu.FWversion", "")
+        if not self.caps.write_names or self.caps.fw != fw:
+            self.caps = load_caps(fw)
+        rec_raw = state.get("Camera.Preview.MJPEG.status.record", "")
+        recording = bool(rec_raw) and rec_raw != "Standby"
+
+        results: list[dict] = []
+
+        def row(s: Setting, before, after, outcome, detail=""):
+            results.append({"key": s.key, "tier": s.tier, "property": s.read,
+                            "desired": s.values[0], "before": before, "after": after,
+                            "outcome": outcome, "detail": detail, "why": s.why})
+
+        for s in self._plan():
+            before = state.get(s.read)
+            if any(_same(before, v) for v in s.values):
+                row(s, before, before, "already")
+                continue
+            if audit_only:
+                row(s, before, before, "unmet",
+                    "WOLFANG_APPLY_DEFAULTS=0 — reported, not corrected")
+                continue
+            if not s.hot:
+                # Slow and/or blanks the picture: every UIMode-class op stalls the
+                # camera's single-threaded server for ~1.1s and RTSP shares it, so
+                # this is a second of blind piloting. Connect-time only, never
+                # while the card is rolling.
+                if not include_cold:
+                    row(s, before, before, "deferred", "slow/blanks the feed — connect-time only")
+                    continue
+                if recording:
+                    row(s, before, before, "deferred", "camera is recording")
+                    continue
+            if not reprobe and s.key in self.caps.ignored:
+                row(s, before, before, "ignored", "cached: this firmware accepts but ignores it")
+                continue
+            if not reprobe and s.key in self.caps.rejected:
+                row(s, before, before, "rejected", "cached: this firmware refused every candidate")
+                continue
+            try:
+                outcome, actual, detail = await self._apply_one(s, priority)
+            except CameraUnavailable as exc:
+                row(s, before, None, "unreachable", str(exc))
+                break                              # the camera is gone; stop hammering it
+            row(s, before, actual, outcome, detail)
+            if actual is not None:
+                state[s.read] = actual
+                if s.read.startswith("Camera.Menu."):
+                    self.menu_cache[s.read] = actual
+
+        self.caps.fw = fw or self.caps.fw
+        saved = False if audit_only else save_caps(self.caps)
+
+        counts: dict[str, int] = {}
+        for r in results:
+            counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
+        critical_bad = [r["key"] for r in results
+                        if r["tier"] == CRITICAL and r["outcome"] not in ("already", "set")]
+        report = {
+            "reason": reason, "ok": not critical_bad, "fw": fw, "audit_only": audit_only,
+            "white_lights": self._white_lights_on(), "recording": recording,
+            "critical_unmet": critical_bad, "counts": counts,
+            "took_ms": round((time.monotonic() - t0) * 1000),
+            "caps_saved": saved, "results": results,
+            # Reported, never written — see defaults.NOT_SET.
+            "observed": {p: state.get(p) for p in REPORT_ONLY if p in state},
+            "not_set": [{"property": p, "why": w} for p, w in NOT_SET],
+        }
+        self.defaults_report = report
+        return report
+
+    async def probe_property(self, write: str, values: list[str], *, read: str | None = None,
+                             dwell_s: float = 0.0, restore: bool = True) -> dict:
+        """Deliberate, operator-driven discovery for a property whose value set or
+        semantics are unknown (spec §7) — e.g. whether `LCDPower=OFF` means the
+        screen never blanks or the screen stays dark.
+
+        Restores the original value by default, so probing does not silently leave
+        the camera somewhere unintended.
+        """
+        read_name = read or read_name_for(write)
+        original = (await self.cgi.get(read_name)).data.get(read_name)
+        if original is None:
+            # Reading nothing means the read name is wrong, not that the property is
+            # empty. Probing on regardless would produce a page of took=false that
+            # says nothing about the camera and everything about our guess.
+            return {"write": write, "read": read_name, "original": None, "tried": [],
+                    "restored": None,
+                    "error": f"{read_name} does not read back — pass an explicit `read` name. "
+                             f"Dump the full property list with GET /api/config first."}
+        tried = []
+        for v in values:
+            entry = {"value": v}
+            try:
+                await self.cgi.set(write, v)
+                if dwell_s:
+                    await asyncio.sleep(dwell_s)   # give the operator time to watch the camera
+                actual = (await self.cgi.get(read_name)).data.get(read_name)
+                entry.update(accepted=True, read_back=actual, took=_same(actual, v))
+            except CgiError as exc:
+                entry.update(accepted=False, error=str(exc))
+            except CameraUnavailable as exc:
+                entry.update(accepted=False, error=str(exc))
+                tried.append(entry)
+                break
+            tried.append(entry)
+        restored = None
+        if restore and original is not None:
+            try:
+                await self.cgi.set(write, original)
+                restored = (await self.cgi.get(read_name)).data.get(read_name)
+            except (CgiError, CameraUnavailable) as exc:
+                restored = f"restore failed: {exc}"
+        return {"write": write, "read": read_name, "original": original,
+                "tried": tried, "restored": restored}
+
+    async def _defaults_loop(self) -> None:
+        """Keep the camera awake, and keep the critical settings actually asserted.
+
+        Three jobs, all of which must happen with NO dashboard connected — the 15 s
+        telemetry poll only runs while someone is subscribed, so with nobody watching
+        there is no CGI traffic at all:
+
+          * **keepalive** — one `get` per tick. If a power-saving timer could not be
+            disabled, this resets it. The tick must stay well inside the factory 5MIN.
+          * **reconnect** — a camera that rebooted (battery swap, sleep, AP drop)
+            comes back with a wrong clock and possibly factory settings. A
+            False→True transition re-runs the whole connect sequence.
+          * **drift** — anything that put a critical setting back gets it undone.
+        """
+        await asyncio.sleep(1.0)                   # let start()'s own menu read land first
+        while True:
+            try:
+                menu = await self.refresh_menu(priority=PRIORITY_TELEMETRY)
+                was_online, self._cam_online = self._cam_online, True
+                if not was_online:
+                    log.info("camera online — running the connect sequence")
+                    await self.connect_sequence(priority=PRIORITY_TELEMETRY)
+                    rep = await self.apply_defaults(reason="camera-online", include_cold=True,
+                                                    priority=PRIORITY_TELEMETRY)
+                    _log_defaults(rep)
+                elif cam_settings.apply_defaults:
+                    # Drift check is free: it reads the menu we just fetched. Cold
+                    # settings are excluded because re-asserting them blanks the
+                    # picture, and preview properties are not in this dump.
+                    drifted = [s.key for s in self._plan()
+                               if s.hot and s.read.startswith("Camera.Menu.")
+                               and s.read in menu
+                               and not any(_same(menu.get(s.read), v) for v in s.values)
+                               and s.key not in self.caps.ignored
+                               and s.key not in self.caps.rejected]
+                    if drifted:
+                        log.warning("camera settings drifted (%s) — re-asserting", ", ".join(drifted))
+                        rep = await self.apply_defaults(reason="drift", include_cold=False,
+                                                        priority=PRIORITY_TELEMETRY)
+                        _log_defaults(rep)
+            except (CgiError, CameraUnavailable) as exc:
+                if self._cam_online:
+                    log.warning("camera unreachable (%s) — defaults will be re-applied when it returns", exc)
+                self._cam_online = False
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                log.warning("defaults guard tick failed: %s", exc)
+            await asyncio.sleep(cam_settings.defaults_recheck_s)
 
     async def record_toggle(self) -> RecordState:
         # spec §4.3: UIMode=VIDEO first, then Video=record (a TOGGLE), then POLL
@@ -180,19 +500,35 @@ class CameraService:
         ok, detail = _check_route()
         add("route: 192.72.1.1 via wlan0", ok, detail)
         try:
-            # 2) exit playback
-            await self.cgi.set("Playback", "exit"); add("Playback=exit", True)
-            # 3) time
-            await self.cgi.set("TimeSettings", time.strftime("%Y$%m$%d$%H$%M$%S")); add("TimeSettings", True)
-            # 4) menu cache
-            await self.refresh_menu(); add("cache Camera.Menu.*", bool(self.menu_cache),
-                                          f"{len(self.menu_cache)} props")
-            # 5) cammenu.xml
-            opts = await self.load_cammenu(); add("parse cammenu.xml", bool(opts), f"{len(opts)} items")
-            # 6) power-saving OFF (critical)
-            ps = await self.set_property("PowerSaving", "OFF")
-            add("PowerSaving=OFF (critical)", ps == "OFF" or ps is None, f"actual={ps}")
-            await self.set_property("LCDPower", "OFF")
+            # 2) exit playback  3) time  4) menu cache  5) cammenu.xml
+            await self.connect_sequence()
+            add("Playback=exit + TimeSettings", True)
+            add("cache Camera.Menu.*", bool(self.menu_cache), f"{len(self.menu_cache)} props")
+            add("parse cammenu.xml", bool(self.menu_options), f"{len(self.menu_options)} items")
+            # 6) the defaults, each verified by re-read (§5.1–5.3, defaults.py).
+            #
+            #    This step used to be two blind writes whose check could not fail:
+            #    it wrote `PowerSaving`, read back a property of that name rather
+            #    than `Camera.Menu.PowerSaving`, got None, and scored None as a
+            #    pass. It reported OK for months on a camera that powered itself
+            #    off mid-dive. The report below distinguishes set / already /
+            #    ignored / rejected, and only `already` and `set` count.
+            rep = await self.apply_defaults(reason="preflight")
+            _log_defaults(rep)
+            for r in rep.get("results", []):
+                if r["tier"] != CRITICAL:
+                    continue
+                actual = r["after"] if r["after"] is not None else r["before"]
+                add(f"{r['property']} (critical)",
+                    r["outcome"] in ("already", "set"),
+                    f"{r['outcome']}: {actual!r}"
+                    + ("" if _same(actual, r["desired"]) else f" (preferred {r['desired']!r})")
+                    + (f" — {r['detail']}" if r["detail"] else ""))
+            non_critical_bad = [r["property"] for r in rep.get("results", [])
+                                if r["tier"] != CRITICAL and r["outcome"] in ("ignored", "rejected", "unresolved")]
+            add("non-critical defaults applied", True,
+                "all applied" if not non_critical_bad
+                else f"firmware would not take: {', '.join(non_critical_bad)}")
             # 7) warning message => fail if non-empty
             prev = (await self.cgi.get("Camera.Preview.MJPEG.WarningMSG")).data.get(
                 "Camera.Preview.MJPEG.WarningMSG", "")
@@ -202,11 +538,13 @@ class CameraService:
             rem = _to_int((await self.cgi.get("Camera.Capture.Remaining")).data.get("Camera.Capture.Remaining"))
             add("SD READY", sd == "READY", f"SD0={sd}")
             add("capacity remaining", (rem or 0) > 10, f"remaining={rem}")
-            # 9) preview bump (best effort)
-            await self.cgi.set("Camera.Preview.H264.w", "1280")
-            await self.cgi.set("Camera.Preview.H264.h", "720")
-            w = (await self.cgi.get("Camera.Preview.H264.w")).data.get("Camera.Preview.H264.w")
-            add("preview 1280x720 (best effort)", True, f"actual w={w}")
+            # 9) the pilot's substream — attempted as part of the defaults above,
+            #    reported here because it is what the operator actually flies on.
+            pv = {r["key"]: r for r in rep.get("results", [])}
+            pw, ph = pv.get("preview_w", {}), pv.get("preview_h", {})
+            add("preview 1280x720 (best effort)", True,
+                f"w={pw.get('after') or pw.get('before')} ({pw.get('outcome')}), "
+                f"h={ph.get('after') or ph.get('before')} ({ph.get('outcome')})")
             # 10) go2rtc stream health
             gok, gdetail = await self._go2rtc_ok()
             add("go2rtc stream healthy", gok, gdetail)
@@ -452,6 +790,43 @@ def build_router(svc: CameraService) -> APIRouter:
             raise HTTPException(400, "refused: SD format requires ?confirm=true")
         await svc.cgi.set("SD0", "format")
         return {"formatting": True}
+
+    @r.get("/api/camera/defaults")
+    async def get_defaults():
+        """What the last enforcement pass actually achieved, per setting, with the
+        reason each setting exists and what is deliberately left alone."""
+        return svc.defaults_report
+
+    @r.post("/api/camera/defaults")
+    async def post_defaults(include_cold: bool = Query(True), reprobe: bool = Query(False)):
+        """Re-apply now. `reprobe=true` ignores the cached 'this firmware ignores it'
+        verdicts and probes every candidate again — worth doing once after a
+        firmware change."""
+        try:
+            return await svc.apply_defaults(reason="manual", include_cold=include_cold,
+                                            reprobe=reprobe)
+        except (CgiError, CameraUnavailable) as e:
+            raise HTTPException(502, str(e))
+
+    @r.post("/api/camera/probe")
+    async def probe(prop: str = Query(...), values: str = Query(...),
+                    read: str | None = Query(None), dwell: float = Query(0.0),
+                    restore: bool = Query(True)):
+        """Discovery for a property whose valid values or semantics are unknown
+        (spec §7) — e.g. whether LCDPower=OFF blanks the screen or stops it blanking.
+        Use `dwell` to hold each value long enough to watch the physical camera."""
+        vals = [v.strip() for v in values.split(",") if v.strip()]
+        if not vals:
+            raise HTTPException(400, "values must be a non-empty comma-separated list")
+        if prop == "SD0":
+            # Returns success immediately and wipes the card in the background, so
+            # it would not look like a mistake until the footage was already gone.
+            raise HTTPException(400, "refused: SD0 is destructive — use /api/config/format-sd")
+        try:
+            return await svc.probe_property(prop, vals, read=read, dwell_s=min(dwell, 30.0),
+                                            restore=restore)
+        except (CgiError, CameraUnavailable) as e:
+            raise HTTPException(502, str(e))
 
     @r.post("/api/preflight", response_model=PreflightResult)
     async def preflight():

@@ -170,7 +170,7 @@ app = FastAPI(title="NEPTUNE Sub API", lifespan=lifespan)
 
 # WOLFANG camera control plane: /api/* + /ws/telemetry (mounted before the static
 # client mount below so the API routes win). started/stopped in the lifespan.
-app.state.camera_svc = create_camera_service()
+app.state.camera_svc = create_camera_service(lambda: getattr(app.state, "rov", None))
 app.include_router(build_camera_router(app.state.camera_svc))
 # Bind navigation to the live vehicle so steering actually moves the map.
 app.state.nav_svc = create_nav_service(lambda: getattr(app.state, "rov", None))

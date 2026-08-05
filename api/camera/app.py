@@ -15,8 +15,11 @@ from fastapi import FastAPI
 from .service import CameraService, build_router
 
 
-def create_camera_service() -> CameraService:
-    return CameraService()
+def create_camera_service(get_rov=None) -> CameraService:
+    """`get_rov` is optional and read-only: the service uses it to see whether the
+    white lights are on, which decides AWB (water absorbs red first, so the right
+    white balance is the opposite depending on whether the lamps are lit)."""
+    return CameraService(get_rov=get_rov)
 
 
 @contextlib.asynccontextmanager

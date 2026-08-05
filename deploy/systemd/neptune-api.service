@@ -19,6 +19,11 @@ Environment=WOLFANG_BASE=http://192.72.1.1
 Environment=ROV_LOG_DIR=/var/log/rov
 # blackbox flight recorder writes here; LogsDirectory creates + owns /var/log/rov
 LogsDirectory=rov
+# Camera capability cache (which write names and values this firmware actually
+# honours). StateDirectory creates + owns /var/lib/neptune for the service user.
+# Losing it is harmless - it only costs a re-probe on the next connect.
+StateDirectory=neptune
+Environment=WOLFANG_CAPS_PATH=/var/lib/neptune/camera-caps.json
 Restart=always
 RestartSec=2
 
