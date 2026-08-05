@@ -25,6 +25,16 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 
 ## Map geometry and readability
 
+- 🧪 **`c9d5fd1` — Drop the full-screen NO FEED; blind nav is the fallback in every mode.**
+  Blind nav had an opt-out: an X, and a tap on the video tile. Both returned the operator to a
+  full-screen black rectangle carrying strictly less information than the map it replaced —
+  including on a **cold start**, where a feed had never existed and the 4 s debounce (there to
+  absorb a WebRTC blip) had nothing to absorb. The opt-out is gone: the X is hidden, the video
+  tile is a status indicator, and the feed *returning* is what restores the camera view.
+  `blindColdMs` (1.2 s) applies until a feed has been live once.
+  *Verified in a fresh profile with no camera:* cold start / after X / after tapping the tile
+  all `blind=true banner=block closeBtn=none`, `ERRS=0`.
+
 - ✅ **`d56d90c` — Size the map canvas from layout, not a mid-animation transform.**
   `getBoundingClientRect()` includes CSS transforms and both full-screen layouts animate from
   `scale(.94)`, so the canvas was sized to 94% (1280 → 1203) permanently. The map centre sat
