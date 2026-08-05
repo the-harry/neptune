@@ -173,6 +173,8 @@
       <button id="map-recenter" class="map-btn" title="Reset to maximum imagery zoom">&#8982;</button>
       <!-- The sub cannot report where it is; the operator can see it. -->
       <button id="map-set-rov" class="map-btn" title="Pinpoint the ROV on the map">&#9678;</button>
+      <!-- Plan from somewhere you are not standing. Toggles back to the live fix. -->
+      <button id="map-mock-me" class="map-btn" title="Plan from a mocked position (dot turns red) — click again for the live fix">&#9873;</button>
       <button id="map-close" class="map-btn" title="Collapse map (Esc)">&#10005;</button>
     </div>
   </div>
@@ -209,6 +211,9 @@
 <!-- Straight-line range from the launch point against the cable you have. SIM is
      clamped to it; on a real link this only warns — the launch point can move. -->
 <div class="metric" style="align-items:flex-start"><span class="m-label">Tether</span><span id="sonar-teth" class="m-val">0 m</span></div>
+<!-- The range is measured from the operator dot, so it is only as honest as that dot:
+     PLANNED when the position is mocked, LAST KNOWN when the fix has gone cold. -->
+<div id="teth-src" class="teth-src"></div>
 <div id="tether-warn" class="tether-warn">TETHER</div>
 </div>
 </div>

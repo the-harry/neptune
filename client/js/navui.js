@@ -302,10 +302,17 @@ function stopLocationWatch(){
 function onLiveFix(p){
   if(typeof MAP==='undefined') return;
   const lat=p.coords.latitude, lon=p.coords.longitude, acc=p.coords.accuracy;
-  MAP.me = { lat, lon, acc, t:Date.now() };        // the marker is live unconditionally
+  MAP.meReal = { lat, lon, acc, t:Date.now() };    // the genuine fix, recorded either way
+
+  // A mocked position is the operator deliberately standing somewhere else to plan.
+  // Real fixes keep arriving underneath it (so clearing the mock lands on something
+  // current) but must not overwrite it, and must not drag the launch point back.
+  if(MAP.me && MAP.me.mock) return;
+
+  MAP.me = { lat, lon, acc, t:MAP.meReal.t };
 
   if(!MAP.hasOrigin) return;                       // nothing to compare against yet
-  if(MAP.track.length > 0) return;                 // DIVING: the datum is frozen, deliberately
+  if(typeof diveUnderway==='function' && diveUnderway()) return;   // DIVING: datum frozen, deliberately
   if(MAP.originTap) return;                        // operator is placing it by hand — don't fight them
 
   const rel = toLocal(lat, lon, MAP.origin.lat, MAP.origin.lon);
@@ -322,11 +329,11 @@ function onLiveFix(p){
   setOrigin({ lat, lon, accuracy:acc, source:'device-live', t:now, _override:true })
     .then(ok=>{
       if(ok===false) return;
-      // RE-BASE the sub into the new frame instead of zeroing it. The operator moved;
-      // the ROV did not. Zeroing would drag the sub along with whoever is holding the
-      // handheld, which is exactly backwards — it is the growing gap between the two
-      // that is the tether, and that gap is what the range readout is measuring.
-      MAP.x -= rel.x; MAP.y -= rel.y;
+      // RE-BASE the frame instead of zeroing the sub. The operator moved; the ROV did
+      // not. Zeroing would drag the sub along with whoever is holding the handheld,
+      // which is exactly backwards — it is the growing gap between the two that is the
+      // tether, and that gap is what the range readout is measuring.
+      rebaseFrame(rel.x, rel.y);
       LOG.map('operator moved '+Math.round(d)+' m — launch point followed, ROV held at '
               +MAP.x.toFixed(1)+','+MAP.y.toFixed(1)+' m');
     });

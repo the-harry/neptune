@@ -27,13 +27,30 @@ const MAP = {
   centreline:null,                           // [[lon,lat],…] waterway overlay (§3.5)
   originTap:false,                           // one-shot: next map tap sets the origin (§2)
   rovTap:false,                              // one-shot: next map tap places the ROV by hand
+  mockMeTap:false, meReal:null,              // mocked operator position; last GENUINE fix
   drag:null, selReadout:null,                // pan drag state; area-selection readout callback (§4)
   replay:false,                              // viewing a saved dive — freeze live integration (§1)
   blind:false, blindSince:0, videoOkSince:0, videoWasLive:false,   // BLIND NAV (map as the driving view)
 };
 const C = { grid:'rgba(180,107,255,0.13)', origin:'#ff8c1a', sub:'#b46bff',
-           me:'#4dffa6',                       // the OPERATOR — green, live, auto-tracked
+           // THE OPERATOR, colour-coded by where the position actually came from. The
+           // tether range is measured from this dot, so "how much do I trust it" has
+           // to be readable at a glance, not looked up.
+           meLive:'#4dffa6',                   // green  — a fresh fix from the handheld
+           meStale:'#ffe14d',                  // yellow — last known fix, going cold
+           meMock:'#ff5c7a',                   // red    — placed by hand: planning, not real
            shallow:'#4dffa6', deep:'#1f9dff' };
+/* Where the displayed operator position came from. Drives the dot colour and the
+   MOCK tag on the tether readout. */
+function meSource(){
+  if(!MAP.me) return null;
+  if(MAP.me.mock) return 'mock';
+  return (Date.now()-(MAP.me.t||0)) > (CONFIG.map.meStaleMs||30000) ? 'stale' : 'live';
+}
+function meColor(){
+  const s=meSource();
+  return s==='mock' ? C.meMock : s==='stale' ? C.meStale : C.meLive;
+}
 
 function navFetch(path, opts){ return fetch((state.httpBase||'') + path, opts); }
 
@@ -98,6 +115,7 @@ function initMap(){
   if(zo) zo.addEventListener('click', (e)=>{ e.stopPropagation(); MAP.scale=Math.min(20,MAP.scale*1.3); });
   if(rc) rc.addEventListener('click', (e)=>{ e.stopPropagation(); MAP.scale=bestScaleNow(); });  // reset = best imagery, not a fixed m/px
   const sr=$('map-set-rov'); if(sr) sr.addEventListener('click', (e)=>{ e.stopPropagation(); armRovTap(); });
+  const mm=$('map-mock-me'); if(mm) mm.addEventListener('click', (e)=>{ e.stopPropagation(); armMockMeTap(); });
   MAP.canvas.addEventListener('wheel', (e)=>{ if(!MAP.expanded && !MAP.blind) return; e.preventDefault(); MAP.scale=Math.max(0.05,Math.min(40,MAP.scale*(e.deltaY>0?1.1:0.9))); }, {passive:false});
   // drag-to-pan + tap (expanded only, canvas-scoped so it never touches piloting input, §5).
   // Pan is computed absolutely from the drag-start centre + total screen delta (no feedback loop),
@@ -255,10 +273,57 @@ function setRovLatLon(lat, lon){
           ' — tether now '+tetherRangeM().toFixed(1)+' m');
   return true;
 }
-/* a non-drag tap in the expanded map: place the origin, or the ROV, when armed (§2) */
+/* STAND SOMEWHERE ELSE — a mocked operator position, for planning.
+
+   "Could I reach that culvert if I put in from the far bank?" is a question about a
+   launch point you are not standing on. This moves the operator dot there so the
+   reachable circle and the range readout answer it — and turns the dot RED, because
+   from that moment the tether range is a hypothesis rather than a measurement.
+
+   Pre-dive it takes the launch point with it (that is the thing being planned). Once a
+   track exists the datum is frozen, exactly as it is for a real fix, so an experiment
+   can never rewrite a dive already under way. */
+function armMockMeTap(){
+  if(MAP.me && MAP.me.mock){ clearMockMe(); return; }        // the button toggles
+  MAP.mockMeTap=true; MAP.originTap=false; MAP.rovTap=false;
+  if(!MAP.expanded && typeof expandMap==='function') expandMap();
+  if(typeof showOriginPrompt==='function')
+    showOriginPrompt('TAP A POSITION TO PLAN FROM',
+      'Your dot moves there and turns red. Range shown from there is a plan, not a measurement.',
+      { label:'CANCEL', run:()=>{ MAP.mockMeTap=false; if(typeof hideOriginPrompt==='function') hideOriginPrompt(); } });
+  LOG.map('armed: next map tap places a MOCK operator position');
+}
+function setMockMe(lat, lon){
+  MAP.me = { lat, lon, acc:0, t:Date.now(), mock:true };
+  // Pre-dive, the launch point is what is being planned, so take it along.
+  if(MAP.hasOrigin && MAP.origin && !diveUnderway() && typeof setOrigin==='function'){
+    const rel = toLocal(lat, lon, MAP.origin.lat, MAP.origin.lon);
+    setOrigin({ lat, lon, accuracy:8, source:'mock_plan', t:Date.now(), _override:true })
+      .then(ok=>{ if(ok!==false) rebaseFrame(rel.x, rel.y); });   // ROV stays put in the world
+  }
+  LOG.map('MOCK operator position set — dot is RED, range is planning only');
+  if(typeof camToast==='function') camToast('Planning from a mocked position', 'warn');
+}
+function clearMockMe(){
+  MAP.mockMeTap=false;
+  if(!MAP.me || !MAP.me.mock) return;
+  // Back to the real world: the last genuine fix if we have one, otherwise nothing.
+  MAP.me = MAP.meReal ? { lat:MAP.meReal.lat, lon:MAP.meReal.lon, acc:MAP.meReal.acc, t:MAP.meReal.t } : null;
+  if(typeof hideOriginPrompt==='function') hideOriginPrompt();
+  LOG.map('mock position cleared — back to '+(MAP.me? 'the live fix' : 'no fix'));
+}
+
+/* a non-drag tap in the expanded map: place the origin, the ROV, or a mocked
+   operator position, whichever is armed (§2) */
 function onMapTap(clientX, clientY){
-  if(!MAP.originTap && !MAP.rovTap) return;
+  if(!MAP.originTap && !MAP.rovTap && !MAP.mockMeTap) return;
   const g=screenToLatLon(MAP.canvas, clientX, clientY); if(!g) return;
+  if(MAP.mockMeTap){
+    MAP.mockMeTap=false;
+    setMockMe(g.lat, g.lon);
+    if(typeof hideOriginPrompt==='function') hideOriginPrompt();
+    return;
+  }
   if(MAP.rovTap){
     MAP.rovTap=false;
     setRovLatLon(g.lat, g.lon);
@@ -368,7 +433,7 @@ function updateEmptyState(){
   const compact=$('radar-empty'); if(compact) compact.innerHTML = !MAP.hasArea ? 'NO&nbsp;MAP' : 'NO&nbsp;ORIGIN';
   const full=$('map-empty'), msg=$('map-empty-msg'), btn=$('map-empty-btn');  // full explanation in the expanded view
   // …but don't dim the imagery while the operator is actively tapping an origin or selecting an area
-  const suppress = MAP.expanded && (MAP.originTap || MAP.rovTap || MAP.selectMode);
+  const suppress = MAP.expanded && (MAP.originTap || MAP.rovTap || MAP.mockMeTap || MAP.selectMode);
   if(full){
     full.classList.toggle('on', empty && !suppress);
     if(!MAP.hasArea){ if(msg)msg.textContent='NO MAP AREA LOADED'; if(btn)btn.textContent='LOAD OR DOWNLOAD'; }
@@ -451,6 +516,24 @@ function scheduleNavWs(){
   _navBackoff = Math.min(20000, _navBackoff ? _navBackoff*1.7 : 2000);
   _navTimer = setTimeout(()=>{ _navTimer=null; connectNavWs(); }, _navBackoff);
 }
+/* Has the sub actually gone anywhere?
+
+   NOT `track.length > 0`. pushTrack records a point the moment an origin exists and
+   then dedupes anything within 0.25 m, so a stationary sub holds at exactly ONE point
+   however long it sits there — that test meant "the map has been running", and it
+   silently disabled the launch point following the operator after the first second.
+   More than one point means the sub moved, which is the only definition of "a dive is
+   under way" that does not depend on somebody remembering to press start. */
+function diveUnderway(){ return MAP.track.length > 1; }
+
+/* Move the whole local frame when the datum moves: the sub and every plotted point
+   shift by the same delta, so nothing changes position in the WORLD. Without this,
+   re-basing the sub alone would leave the track behind in the old frame. */
+function rebaseFrame(rx, ry){
+  MAP.x-=rx; MAP.y-=ry;
+  for(let i=0;i<MAP.track.length;i++){ MAP.track[i].x-=rx; MAP.track[i].y-=ry; }
+}
+
 function pushTrack(x,y,depth){
   if(MAP.replay || !MAP.hasOrigin) return;                // no track without an origin (§6); frozen during replay
   const t=MAP.track, last=t[t.length-1];
@@ -492,12 +575,19 @@ function tetherHorizLimitM(){
    for: SIM is CLAMPED at the limit, REAL is only ever WARNED. */
 function renderTether(){
   const T=CONFIG.tether; if(!T) return;
-  const el=$('sonar-teth'), warn=$('tether-warn');
+  const el=$('sonar-teth'), warn=$('tether-warn'), src=meSource();
   const r=tetherRangeM(), over=r>=T.lengthM-0.05, near=r>=T.warnFromM;
   if(el){
     el.textContent=(r<10? r.toFixed(1) : Math.round(r))+' m';
     el.classList.toggle('warn', near && !over);
     el.classList.toggle('over', over);
+  }
+  // The range is measured FROM the operator dot, so it inherits that dot's honesty.
+  // A mocked anchor makes it a plan; a stale one makes it as old as the last fix.
+  const tag=$('teth-src');
+  if(tag){
+    tag.textContent = src==='mock' ? 'PLANNED' : src==='stale' ? 'LAST KNOWN' : '';
+    tag.className = 'teth-src' + (src==='mock' ? ' mock' : src==='stale' ? ' stale' : '');
   }
   if(warn){
     const linked = typeof vehicleLinked==='function' && vehicleLinked();
@@ -692,8 +782,14 @@ function drawCentreline(ctx,dpr){
    readable. The orange tether ring is the only circle on this map. */
 function drawMeMarker(ctx,dpr,x,y){
   ctx.save();
-  ctx.fillStyle=C.me; ctx.strokeStyle='#0c0118'; ctx.lineWidth=2*dpr;
+  ctx.fillStyle=meColor(); ctx.strokeStyle='#0c0118'; ctx.lineWidth=2*dpr;
   ctx.beginPath(); ctx.arc(x,y,5.5*dpr,0,Math.PI*2); ctx.fill(); ctx.stroke();
+  // A mocked position is a hypothesis, so it is drawn as one — a broken ring around
+  // the dot, readable even to an operator who cannot pick red out of green.
+  if(meSource()==='mock'){
+    ctx.setLineDash([3*dpr,3*dpr]); ctx.strokeStyle=C.meMock; ctx.lineWidth=1.5*dpr;
+    ctx.beginPath(); ctx.arc(x,y,10*dpr,0,Math.PI*2); ctx.stroke();
+  }
   ctx.restore();
 }
 

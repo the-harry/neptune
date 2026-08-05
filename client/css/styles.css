@@ -626,6 +626,12 @@ body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
    Sits with THROTTLE/STEER because that is where the eye already is while driving. */
 #sonar-teth.warn{color:var(--hazard)}
 #sonar-teth.over{color:var(--error)}
+/* Where the tether range is measured FROM. Empty (and invisible) on a live fix —
+   the range only needs qualifying when it stops being a measurement. */
+.teth-src{display:none;margin-top:1px;font-family:var(--font-sans);font-size:8px;
+  font-weight:800;letter-spacing:.10em}
+.teth-src.mock{display:block;color:var(--error)}
+.teth-src.stale{display:block;color:#ffe14d}
 .tether-warn{display:none;margin-top:2px;padding:2px 6px;border-radius:7px;white-space:nowrap;
   font-family:var(--font-sans);font-size:9px;font-weight:800;letter-spacing:.08em;
   color:var(--hazard);border:1px solid var(--hazard);background:color-mix(in srgb,var(--hazard) 14%,rgba(12,1,24,.85))}

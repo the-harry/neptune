@@ -251,14 +251,49 @@ Two things move, and they are **not** the same thing:
 
 | | What it is | Colour | When it moves |
 |---|---|---|---|
-| `MAP.me` | **the operator** — where the handheld is now | green dot | always, automatically |
+| `MAP.me` | **the operator** — where the handheld is now | green / yellow / red, see below | always, automatically |
 | sub marker | **the ROV** | purple arrow | only on the sub's own navigation, or when you pinpoint it |
 | `MAP.origin` | the datum the sub is dead-reckoned **from** | orange cross | only before a dive |
 
-The origin follows the handheld while no track exists — you are still choosing a
-departure point. Once a dive is under way the datum **freezes**: moving it would shift
-every coordinate already plotted, so the sub would appear to jump sideways and the
-recorded track would be a lie.
+**The operator dot is colour-coded by where its position actually came from.** The
+tether range is measured *from* that dot, so how much to trust it has to be readable at
+a glance rather than looked up:
+
+| Colour | `meSource()` | Meaning | Tether tag |
+|---|---|---|---|
+| 🟢 green | `live` | a fresh fix from the handheld | — |
+| 🟡 yellow | `stale` | last known fix, older than `meStaleMs` (30 s) | `LAST KNOWN` |
+| 🔴 red | `mock` | placed by hand — planning, not a measurement | `PLANNED` |
+
+A mocked dot also gets a **dashed ring**, so the state survives a colour-blind operator
+and a sunlit screen.
+
+**Planning from somewhere you are not standing.** *"Could I reach that culvert if I put
+in from the far bank?"* is a question about a launch point you are not on. The **⚑**
+button arms a tap that moves your dot there and turns it red; pressing it again returns
+to the live fix (`NEPTUNE.mockMe()` / `mockMeAt(lat,lon)` / `clearMock()`). Pre-dive it
+takes the launch point with it, because that is the thing being planned. Real fixes keep
+arriving underneath and are recorded in `MAP.meReal` — they just do not overwrite the
+mock or drag the launch point back — so clearing lands you on something current.
+
+This is deliberately allowed on a real link as well as in SIM: the Pi is usually
+connected during bench planning, so forbidding it would make the feature useless exactly
+when it is wanted. Safety comes from the state being *unmistakable* rather than from
+prohibition — red dot, dashed ring, `PLANNED` on the range.
+
+The origin follows the handheld until a dive is under way — you are still choosing a
+departure point. After that the datum **freezes**: moving it would shift every
+coordinate already plotted, so the sub would appear to jump sideways and the recorded
+track would be a lie.
+
+"Under way" is `diveUnderway()`, and it is **`track.length > 1`, not `> 0`**. `pushTrack`
+records a point the moment an origin exists and then dedupes anything within 0.25 m, so
+a stationary sub holds at exactly *one* point however long it sits there. Testing for
+`> 0` therefore meant "the map has been running", which silently disabled the whole
+follow-the-operator behaviour about a second after boot. More than one point means the
+sub actually moved — the only definition that does not depend on remembering to press
+start. When the datum does move, `rebaseFrame()` shifts the sub **and every plotted
+point** by the same delta, so nothing changes position in the world.
 
 When the origin does follow, the sub is **re-based into the new frame**, not zeroed.
 The operator moved; the ROV did not. Zeroing dragged the sub along with whoever was

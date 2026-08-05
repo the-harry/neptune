@@ -79,6 +79,9 @@ const CONFIG = {
     followMe:       true,
     meMinMoveM:     3,           // below this it is GPS jitter, not the operator walking
     meMinGapMs:     5000,        // and never rewrite the stored origin faster than this
+    // Past this, the fix is "last known" rather than live: the dot goes yellow and the
+    // tether range is tagged LAST KNOWN. A red dot means a position placed by hand.
+    meStaleMs:      30000,
     // BLIND NAV — when the camera feed is gone, promote the map to the primary view so
     // the sub can still be driven on instruments instead of a black rectangle. This is
     // NOT the expanded map: that engages all-stop (a planning view), whereas this is a
