@@ -58,6 +58,21 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
   every branch settles, a timeout backstops the rest, and `onversionchange` means this window
   never blocks the next upgrade. Losing the database now costs persistence, not the dashboard.
 
+- 🧪 **Make PIC work on the map, which is where it actually failed.**
+  Shipped broken: the first version captured fine in a headless test because no satellite
+  tiles had loaded, so the map canvas was clean. On the real handheld, with imagery on
+  screen, `toBlob` threw `Tainted canvases may not be exported` — tiles are deliberately
+  loaded without `crossOrigin` and cached as opaque responses so the OFFLINE map works, and
+  the code even said so: *"we never read pixels back, so a tainted canvas is fine"*. That was
+  true until PIC read pixels back.
+  Making the tiles CORS-clean would have fixed the screenshot and broken the offline map in
+  the field, so instead a capture re-renders the frame without the imagery and marks the
+  record `basemap:false`. Every vector layer survives; the video path never taints and was
+  never affected. Also fixed the caption being clipped off the ~198px radar canvas, which was
+  losing exactly the `SIM` / `NO BASEMAP` markers that say what the image is.
+  *Reproduced the taint first with a cross-origin image, then verified: 24/24 checks
+  including a real `MediaStream` for the live-feed path.*
+
 ## Camera configuration
 
 - 🧪 **Set the camera up for a dive, and stop `preflight()` reporting a check it never made.**

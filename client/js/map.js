@@ -445,8 +445,22 @@ function niceMeters(px, ppmCss){
 }
 function fmtMeters(m){ return m>=1000 ? (Math.round(m/100)/10)+' km' : Math.round(m)+' m'; }
 
-function drawCanvas(){
-  const ctx=MAP.ctx,w=MAP.canvas.width,h=MAP.canvas.height,dpr=MAP.dpr;
+/* `target` renders the same frame into a DIFFERENT context — used by PIC.
+   Satellite tiles are deliberately loaded without `crossOrigin` (and cached as
+   opaque responses so the offline archive works), which TAINTS this canvas:
+   `toBlob` refuses to export it. Making the tiles CORS-clean would break the
+   offline map in the field, which matters far more than a screenshot — so a
+   capture re-renders with `noTiles` instead and keeps every vector layer, which
+   is what carries the navigational information anyway.
+
+   Same pixel size and dpr as the live canvas, so the projection state the overlays
+   read (TILES.last) still lines up. Returns whether imagery was drawn. */
+function drawCanvas(target){
+  const ctx  = target ? target.ctx : MAP.ctx;
+  const w    = target ? target.w   : MAP.canvas.width;
+  const h    = target ? target.h   : MAP.canvas.height;
+  const dpr  = target ? target.dpr : MAP.dpr;
+  const live = !target;
   ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle='#0c0118'; ctx.fillRect(0,0,w,h);
   const cx=w/2,cy=h/2, ppm=dpr/curScale();                 // device px per metre
   const headingUp = !MAP.expanded && MAP.headingUp;
@@ -457,7 +471,10 @@ function drawCanvas(){
 
   // 1) satellite imagery (§3)
   let drewTiles=false;
-  if(haveProj){ try{ drewTiles=drawTiles(ctx,w,h,center.lat,center.lon,curScale(),rot,dpr,MAP.activeArea); }catch(e){ LOG.warn('tiles:',e&&e.message); } }
+  if(haveProj && !(target && target.noTiles)){
+    try{ drewTiles=drawTiles(ctx,w,h,center.lat,center.lon,curScale(),rot,dpr,MAP.activeArea); }
+    catch(e){ LOG.warn('tiles:',e&&e.message); }
+  }
 
   // 2) readability tint over imagery (§5) — darker in the radar, lighter expanded
   if(drewTiles){ ctx.setTransform(1,0,0,1,0,0);
@@ -465,7 +482,7 @@ function drawCanvas(){
 
   // scale label (updates with zoom, §4)
   const gm = niceMeters(52, 1/curScale());
-  const sc=$('radar-scale'); if(sc) sc.innerHTML=fmtMeters(gm).replace(' ','&nbsp;');
+  if(live){ const sc=$('radar-scale'); if(sc) sc.innerHTML=fmtMeters(gm).replace(' ','&nbsp;'); }
 
   // 3) reference grid (subordinate) — meter frame, rotated. Fainter over imagery.
   let vx=0,vy=0;
@@ -491,10 +508,11 @@ function drawCanvas(){
   }
 
   // 6) area-selection rectangle + live readout (§4, expanded select mode)
-  if(MAP.expanded && MAP.selectMode){ drawSelectionRect(ctx,dpr); if(MAP.selReadout) MAP.selReadout(mapSelectionBBox()); }
+  if(MAP.expanded && MAP.selectMode){ drawSelectionRect(ctx,dpr); if(live && MAP.selReadout) MAP.selReadout(mapSelectionBBox()); }
 
   // 7) imagery attribution (expanded)
   if(MAP.expanded && drewTiles) drawAttribution(ctx,w,h,dpr);
+  return drewTiles;
 }
 
 /* --- overlay helpers (projected = placed via lonLatToScreen so they sit on imagery) --- */

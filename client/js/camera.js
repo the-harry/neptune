@@ -173,21 +173,96 @@ function stampName(t){
 function grabSource(){
   const v = $('video-feed');
   if(v && v.videoWidth > 0 && v.videoHeight > 0 && state.video === 'live')
-    return { el:v, w:v.videoWidth, h:v.videoHeight, source:'video' };
+    return { kind:'video', el:v, w:v.videoWidth, h:v.videoHeight, source:'video' };
   const c = (typeof MAP !== 'undefined') && MAP.canvas;
   if(c && c.width > 0 && c.height > 0)
-    return { el:c, w:c.width, h:c.height, source:'map' };
+    return { kind:'map', el:c, w:c.width, h:c.height, source:'map' };
   return null;
+}
+
+/* Satellite tiles are loaded WITHOUT `crossOrigin` on purpose — the offline
+   archive stores them as opaque responses, and requiring CORS would break the
+   map in the field. The cost is that the live map canvas is tainted and the
+   browser refuses to export it: "Tainted canvases may not be exported".
+
+   The video is a MediaStream and never taints, so the camera view is unaffected.
+   Only the map fallback needs this, and it is cheaper to ask than to catch: a
+   1px read tells us before we have encoded anything. */
+function canvasTainted(cv){
+  try{ cv.getContext('2d').getImageData(0, 0, 1, 1); return false; }
+  catch(e){ return true; }
+}
+
+/* A downloaded JPEG leaves the app and loses the record around it, so burn the
+   essentials into the pixels. The camera does the same thing for the same reason
+   (Camera.Preview.MJPEG.TimeStamp is kept ACTIVE precisely so footage can be lined
+   up against the blackbox afterwards). One thin strip along the bottom - it must
+   not cover the thing being photographed. */
+function stampCaption(cx, w, h, t, source, basemap){
+  try{
+    const d = new Date(t), p = n => String(n).padStart(2,'0');
+    const clock = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    const full  = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${clock}`;
+    // Ordered by what must survive if the strip is too narrow to hold everything.
+    // SIM ranks above the date: mistaking a simulated frame for a real one is a
+    // worse error than not knowing which day it was, and the filename carries the
+    // date anyway.
+    const bits = [
+      full,
+      isFinite(state.depth)   ? state.depth.toFixed(1)+'m'   : null,
+      isFinite(state.heading) ? Math.round(state.heading)+'°' : null,
+      (typeof commandsBlocked === 'function' && commandsBlocked()) ? 'SIM' : null,
+      source === 'map' ? 'MAP' : 'CAM',
+      basemap === false ? 'NO BASEMAP' : null,
+    ].filter(Boolean);
+
+    // The radar canvas is only ~198px wide, where the full caption overflowed and
+    // was clipped — losing exactly the SIM / NO BASEMAP markers that say what the
+    // image is. Degrade deliberately instead: shrink, then shorten the timestamp,
+    // then drop from the least important end.
+    const SEP = '  ·  ';
+    let fs = Math.max(9, Math.round(h * 0.028));
+    let pad = Math.round(fs * 0.5);
+    const setFont = ()=>{ cx.font = `600 ${fs}px ui-monospace, Consolas, monospace`; };
+    setFont();
+    const tooWide = ()=> cx.measureText(bits.join(SEP)).width > w - pad * 2;
+    while(tooWide() && fs > 8){ fs--; pad = Math.round(fs * 0.5); setFont(); }
+    if(tooWide() && bits[0] === full) bits[0] = clock;
+    while(tooWide() && bits.length > 1) bits.pop();
+
+    const bar = fs + pad * 2;
+    cx.save();
+    cx.setTransform(1,0,0,1,0,0);
+    cx.fillStyle = 'rgba(6,2,16,0.62)';
+    cx.fillRect(0, h - bar, w, bar);
+    cx.fillStyle = '#ece3ff';
+    setFont();
+    cx.textBaseline = 'middle';
+    cx.fillText(bits.join(SEP), pad, h - bar / 2);
+    cx.restore();
+  }catch(e){ /* a caption is never worth losing the image over */ }
 }
 
 async function captureLocalStill(t){
   const src = grabSource();
   if(!src) return { ok:false, why:'nothing to capture (no live feed, no map)' };
-  let blob;
+  let blob, basemap = null, degraded = '';
   try{
     const cv = document.createElement('canvas');
     cv.width = src.w; cv.height = src.h;
-    cv.getContext('2d').drawImage(src.el, 0, 0, src.w, src.h);
+    const cx = cv.getContext('2d');
+    if(src.kind === 'map' && canvasTainted(src.el)){
+      // Re-render the same frame without the imagery. Same pixel size and dpr, so
+      // the track, sub, grid and centreline land exactly where they do on screen —
+      // the imagery is the only thing lost, and every navigational layer survives.
+      basemap = false;
+      degraded = 'no basemap (imagery cannot be exported)';
+      drawCanvas({ ctx:cx, w:cv.width, h:cv.height, dpr:MAP.dpr, noTiles:true });
+    } else {
+      cx.drawImage(src.el, 0, 0, src.w, src.h);
+      if(src.kind === 'map') basemap = true;
+    }
+    stampCaption(cx, cv.width, cv.height, t, src.source, basemap);
     blob = await new Promise(res => cv.toBlob(res, 'image/jpeg', CONFIG.camera.stillQuality || 0.92));
   }catch(e){ return { ok:false, why:'could not read the frame: '+(e.message||e) }; }
   if(!blob) return { ok:false, why:'encoder returned nothing' };
@@ -196,7 +271,7 @@ async function captureLocalStill(t){
   // holiday snap; the point is being able to place it in the dive afterwards.
   const rec = {
     id: stampName(t) + '-' + (src.source === 'map' ? 'map' : 'cam'),
-    t, source: src.source, w: src.w, h: src.h, blob,
+    t, source: src.source, w: src.w, h: src.h, blob, basemap,
     sim: (typeof commandsBlocked === 'function') ? commandsBlocked() : null,
     depth: state.depth, heading: state.heading, pressure: state.pressure,
     ballast: state.ballastLevel, batteryV: state.batteryV,
@@ -219,7 +294,7 @@ async function captureLocalStill(t){
     downloaded = true;
   }catch(e){ /* stays in IndexedDB only */ }
 
-  return { ok: stored || downloaded, rec, stored, downloaded,
+  return { ok: stored || downloaded, rec, stored, downloaded, degraded,
            why: (!stored && !downloaded) ? 'could not store or download the image' : '' };
 }
 
@@ -234,7 +309,9 @@ async function camCapture(){
     let local;
     try{ local = await captureLocalStill(t); }
     catch(e){ local = { ok:false, why:(e.message||String(e)) }; }
-    if(local.ok) notes.push('saved locally' + (local.downloaded ? '' : ' (in-app only)'));
+    if(local.ok) notes.push('saved locally'
+                            + (local.downloaded ? '' : ' (in-app only)')
+                            + (local.degraded ? ' — ' + local.degraded : ''));
     else         notes.push('local save failed: ' + local.why);
     if(local.rec) LOG.cmd('still saved ->', {id:local.rec.id, source:local.rec.source,
                                              stored:local.stored, downloaded:local.downloaded});

@@ -64,10 +64,11 @@ checks backend availability for a dependency it doesn't have.
   so everything keyed on it stays in its piloting form — heading-up, following the sub,
   throttle live, no all-stop. Only the layout changes.
 
-  Debounced both ways so a brief WebRTC hiccup cannot flip the view mid-manoeuvre. The
-  video shrinks to a corner tile rather than disappearing: it is how you notice the feed
-  return, and tapping it goes back to camera view (and stays there until the feed is
-  genuinely restored).
+  Debounced both ways so a brief WebRTC hiccup cannot flip the view mid-manoeuvre, with a
+  shorter window on a cold start (`blindColdMs`) where there is no established feed to blip.
+  The video shrinks to a corner tile rather than disappearing: it is how you notice the feed
+  return. The tile is a **status indicator, not an exit** — there is no full-screen NO FEED
+  state to go back to, and the feed returning is what restores the camera view.
 - **Commands never queue (§4):** a `Command` fails fast and visibly when the
   backend is down — rejected, logged (`cmd_rejected`), never buffered or replayed
   (a late `throttle 100%` is a hazard). Only inert data (telemetry/log records)
@@ -253,6 +254,22 @@ a holiday snap; the point is being able to place it in the dive afterwards.
 
 The id carries milliseconds because it is the IndexedDB key: at second resolution, two
 presses inside the same second silently overwrote each other.
+
+**The map canvas is tainted, on purpose.** Satellite tiles are loaded without
+`crossOrigin` and the offline archive stores them as *opaque* responses — requiring CORS
+would break the map in the field, which matters far more than a screenshot. The cost is
+that the browser refuses to export that canvas (`Tainted canvases may not be exported`),
+so a capture of the map **re-renders the same frame without the imagery** and marks the
+record `basemap:false`. Every vector layer — grid, centreline, track, sub — survives,
+which is what carries the navigational information. The video is a `MediaStream` and
+never taints, so the camera view is unaffected.
+
+A slim caption is burnt along the bottom (time, depth, heading, `SIM`, `MAP`/`CAM`,
+`NO BASEMAP`) because the downloaded file leaves the app and loses the record around it —
+the same reason the camera's own timestamp is kept `ACTIVE`. On a narrow canvas it
+degrades deliberately: shrink, then shorten the timestamp, then drop from the least
+important end. `SIM` outranks the date — mistaking a simulated frame for a real one is a
+worse error than not knowing the day, and the filename carries the date anyway.
 
 ```js
 await NEPTUNE.stills()          // metadata for every still, newest first

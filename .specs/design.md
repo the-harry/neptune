@@ -288,12 +288,24 @@ The frame source is the live video when there is one and **the map otherwise**. 
 the map *is* the view, so capturing a black `<video>` would be actively misleading: it would
 look like the camera worked. This is also what makes PIC exercisable in sim.
 
+**The map canvas cannot be exported.** Tiles are loaded without `crossOrigin` and cached as
+opaque responses so the offline archive works, which taints the canvas — `toBlob` throws
+`Tainted canvases may not be exported`. Making the tiles CORS-clean would fix the screenshot
+and break the offline map in the field, which is the wrong trade on this vehicle. A capture
+therefore re-renders the frame with `noTiles` at the same pixel size and dpr (so the overlays'
+projection state still lines up) and records `basemap:false`. The video is a `MediaStream` and
+never taints, so the camera path — the one that matters — is untouched.
+
 Two details that are not cosmetic:
 - **The local grab happens first.** The camera's capture blocks its single-threaded server for
   ~2 s, so grabbing afterwards would save a frame from well after the moment PIC was pressed.
 - **The id carries milliseconds.** It is the IndexedDB key, and at second resolution two
   presses inside the same second silently overwrote each other — losing an image in the
   feature whose entire purpose is not losing images.
+- **The caption degrades in a chosen order.** The radar canvas is ~198px wide, where the full
+  caption was clipped — taking the `SIM` and `NO BASEMAP` markers with it, so the image no
+  longer said what it was. It now shrinks, then shortens the timestamp, then drops from the
+  least important end, with `SIM` ranked above the date.
 
 ### The store must never hang the boot
 `boot()` awaits `STORE.init()`, so a path that does not settle is a console that never starts.
