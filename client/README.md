@@ -231,6 +231,63 @@ instruments — thrust, steering, video — fully live**. The map never captures
 gamepad/keyboard piloting input (handlers are scoped to the canvas; MapLibre, if ever
 vendored, is `keyboard:false`).
 
+## Everything a session produces
+
+```
+client/navigation_logs/
+  images/   {mode}_{iso}.png   PIC stills (.jpg for the composite fallback)
+  videos/   {mode}_{iso}.mp4   screen recordings
+  logs/     {mode}_{iso}.log   the session log, NDJSON, written as it happens
+```
+
+One naming scheme for all three: **`{mode}_{iso}`**, where mode is what the console was
+actually doing (`sim` / `real` / `stale`). A folder therefore sorts by time *and* still
+says which files were real dives. ISO colons are stripped — Windows will not have them in
+a filename, and that is the kind of thing that only fails once there is real data.
+
+The launcher creates a **Neptune Recordings** desktop shortcut pointing at that folder, on
+the same run that creates the Neptune one. Files this deep in an install tree are otherwise
+unfindable.
+
+### Screen recording
+
+REC drives **two recorders**: the camera's own card, and the handheld's screen. Either can
+be unavailable — no camera on the bench, no ffmpeg on a fresh machine — and neither absence
+stops the other. The toast reports each separately.
+
+The screen half is ffmpeg, run by the launcher:
+
+```
+ffmpeg -f gdigrab -framerate 30 -i desktop -an        -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -movflags +faststart out.mp4
+```
+
+Same trade as re-encoding a Mac screen recording with `-vcodec h264` afterwards — done once,
+live, instead. `-an` because there is nothing to hear and audio only costs bytes. Measured
+at ~**1.4 MB/min** on a mostly-static screen (more with live video in frame).
+
+Stopping sends `q` to ffmpeg's stdin rather than killing it, so the moov atom gets written —
+a hard-killed MP4 is unplayable, the same class of loss as the camera's unsegmented `.MOV`.
+
+`h264_amf` (the AMD GPU encoder) would be lighter on CPU and is deliberately **not** the
+default: this handheld has an unresolved kernel fault under sustained GPU load
+(`DPC_WATCHDOG_VIOLATION` / `VIDEO_ENGINE_TIMEOUT_DETECTED`), and a recorder that can take
+the machine down mid-dive is worse than one that uses more CPU.
+
+ffmpeg is installed by `tether-setup.ps1` (winget). Without it, stills and logs are
+unaffected and only recording is unavailable — the launcher says so at startup.
+
+### The session log writes itself
+
+There is no EXPORT LOG button any more. A log you have to remember to save is a log you find
+missing exactly when you needed it — the same reasoning that made dive logging automatic. It
+starts with the session, appends to disk **every 5 s as it happens**, and ends when the
+console does.
+
+Flushed on a timer rather than at shutdown on purpose: this handheld has a kernel fault that
+takes the whole machine down with no unload event, so a log held in memory until exit is lost
+precisely in the sessions worth reading. `NEPTUNE.sessionLog()` reports where it is going and
+how much has landed.
+
 ## PIC takes two copies
 
 The camera's own JPEG goes to the SD card — which is inside the vehicle, in the water,
@@ -329,7 +386,7 @@ healthy = tether, not camera; a bad manoeuvre made on stale data).
   downloads the whole ring as JSONL even with the link fully down; **MARK EVENT**
   drops a bookmark.
 
-Console: `NEPTUNE.mark('note')`, `NEPTUNE.exportLog()`, `NEPTUNE.REC`.
+Console: `NEPTUNE.mark('note')`, `NEPTUNE.sessionLog()`, `NEPTUNE.REC`.
 
 ### Analysis — `rovlog`
 

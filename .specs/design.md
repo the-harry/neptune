@@ -358,6 +358,50 @@ repeating what the tile's own label and colour already said, and a header that r
 EXIT button. Measured at 1280px: 20 tiles, one row, zero collisions, with the worst-case values
 for every field simultaneously. If it ever does run out of width it wraps rather than overlaps.
 
+### Session artefacts (`client/navigation_logs/`)
+Stills, screen recordings and the session log land in `images/`, `videos/` and `logs/` under
+one folder, all named `{mode}_{iso}` - mode being what the console was actually doing, so a
+directory listing sorts by time and still says which files were real dives. ISO colons are
+stripped: Windows will not have them in a filename, which fails only once there is real data.
+The launcher adds a **Neptune Recordings** desktop shortcut, because files this deep in an
+install tree are otherwise unfindable.
+
+The launcher writes all of them (`/__save`, `/__record`, `/__screenshot`). That is not
+tidiness: the browser can only write through a download, and Chrome blocks every automatic
+download after the first. Anything the page sends is sanitised to a bare filename before it
+reaches the filesystem.
+
+### Screen recording (`/__record`)
+REC drives two recorders - the camera's card and the handheld's screen - reported separately,
+because either can be absent (no camera on the bench, no ffmpeg on a fresh machine) and
+neither absence should stop the other.
+
+`gdigrab -> libx264 -crf 23 -preset veryfast -an`, which is the same trade as re-encoding a
+screen recording with `-vcodec h264` afterwards, done once and live. ~1.4 MB/min measured on a
+mostly-static screen.
+
+Two decisions worth keeping:
+- **Stopping writes `q` to ffmpeg's stdin**, it does not kill the process. A hard-killed MP4
+  has no moov atom and will not play - the same class of loss as the camera's unsegmented
+  `.MOV`, and just as silent.
+- **The GPU encoder (`h264_amf`) is deliberately not used.** It would be lighter on CPU, and
+  this handheld has an unresolved kernel fault under sustained GPU load (10). A recorder that
+  can take the machine down mid-dive is worse than one that costs CPU.
+
+### The session log writes itself (`client/js/recorder.js`)
+The EXPORT LOG button is gone. A log that needs remembering is missing exactly when it is
+wanted - the same reasoning as R2.4's automatic dive logging.
+
+Events are **teed at `REC.log()`** into a separate disk queue rather than read back out of the
+IndexedDB ring, because the Pi upload deletes from that ring: a disk writer reading the same
+rows would race the uploader and lose whichever it got to first.
+
+Flushed on a 5 s timer, not at shutdown. This handheld's kernel fault takes the machine down
+with no unload event, so a log held in memory until exit is lost precisely in the sessions
+worth reading. The queue is bounded and drops oldest-first, so an absent launcher costs the
+tail of the log rather than the browser's memory. `pagehide`/`beforeunload` send the remainder
+with `sendBeacon`, which survives unload where `fetch` does not.
+
 ### Wi-Fi power save on the camera link
 `wlan0` *is* the camera. Raspberry Pi OS enables Wi-Fi power management by default, the radio
 parks between beacons, and the RTSP pull stalls — topside, identical to the camera sleeping.

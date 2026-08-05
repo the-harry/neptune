@@ -14,6 +14,17 @@ __pycache__/
 data/
 *.jsonl
 
+# Everything a topside session produces: stills, screen recordings, session logs.
+# The FOLDERS are part of the layout; their contents are the operator's, not the
+# repo's - a single dive can be hundreds of MB of video.
+client/navigation_logs/**
+!client/navigation_logs/
+!client/navigation_logs/*/
+!client/navigation_logs/**/.gitkeep
+
+# ffmpeg, if it is vendored next to the launcher instead of installed
+client/launch/bin/
+
 # OS noise
 Thumbs.db
 .DS_Store

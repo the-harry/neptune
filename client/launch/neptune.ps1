@@ -122,7 +122,20 @@ if (-not $createdNew) {
 # whenever Chromium hands the command line to an existing instance for that profile.
 $listener   = $null
 $pool       = $null
-$shared     = [hashtable]::Synchronized(@{ quit = $false })
+# Shared with the request handlers, which run on pool runspaces and can see NOTHING
+# from this scope except what is passed in. `rec` holds the live ffmpeg process so a
+# later /__record?action=stop can find the one an earlier request started.
+$shared     = [hashtable]::Synchronized(@{ quit = $false; ffmpeg = ""; rec = $null; recFile = ""; recStarted = $null })
+
+# Everything the session produces, in one place the operator can actually find.
+#   navigation_logs/images  PIC stills
+#   navigation_logs/videos  screen recordings
+#   navigation_logs/logs    the session log, written as it happens
+$artifactRoot = Join-Path $root "navigation_logs"
+foreach ($sub in @("images", "videos", "logs")) {
+  $d = Join-Path $artifactRoot $sub
+  if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+}
 
 try {
   Write-Host "`n========  NEPTUNE  ========" -ForegroundColor Magenta
@@ -203,6 +216,42 @@ try {
     } catch { Nope "could not create the shortcut ($($_.Exception.Message))" }
   }
 
+  # A second shortcut straight to the session's output. Stills, recordings and the
+  # log are no use if the operator has to remember where under the install tree they
+  # landed - and they are deep enough that nobody would guess.
+  $logsLnk = Join-Path ([Environment]::GetFolderPath("Desktop")) "Neptune Recordings.lnk"
+  if (Test-Path $logsLnk) {
+    Info "recordings shortcut already there"
+  } else {
+    try {
+      $ws2 = New-Object -ComObject WScript.Shell
+      $l2  = $ws2.CreateShortcut($logsLnk)
+      $l2.TargetPath       = $artifactRoot
+      $l2.WorkingDirectory = $artifactRoot
+      $l2.Description      = "Neptune stills, screen recordings and session logs"
+      $l2.Save()
+      OK "created $logsLnk"
+    } catch { Nope "could not create the recordings shortcut ($($_.Exception.Message))" }
+  }
+
+  # ffmpeg does the screen recording. Looked up ONCE here rather than per request:
+  # the handlers run on pool runspaces and cannot see this scope, so the resolved
+  # path travels in $shared. Absent is a normal, reportable state - stills and logs
+  # do not depend on it, and the dashboard says so rather than failing silently.
+  $ffCandidates = @(
+    (Join-Path $PSScriptRoot "bin\ffmpeg.exe"),
+    (Join-Path $PSScriptRoot "ffmpeg.exe")
+  )
+  $ff = $null
+  foreach ($c in $ffCandidates) { if (Test-Path $c) { $ff = $c; break } }
+  if (-not $ff) {
+    $cmd = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
+    if ($cmd) { $ff = $cmd.Source }
+  }
+  if ($ff) { $shared.ffmpeg = $ff; OK "screen recording available ($ff)" }
+  else     { Info "ffmpeg not found - screen RECORDING disabled (stills and logs are unaffected)"
+             Info "  install it with: winget install Gyan.FFmpeg    then relaunch" }
+
   if ($Setup) {
     Write-Host "`nSetup complete. Use the Neptune desktop icon to launch.`n" -ForegroundColor Magenta
     return
@@ -258,13 +307,19 @@ try {
       $stream.ReadTimeout    = 5000
 
       # Read until end of headers (a request can arrive split across packets).
+      # The RAW bytes are kept alongside the text: POST bodies are binary (a JPEG),
+      # and ASCII-decoding them would replace every byte above 127 with '?'. ASCII
+      # decoding is still exactly one char per byte, so offsets into $sb and $raw
+      # line up and the header length can be measured on the text.
       $buf = New-Object byte[] 16384
       $sb  = New-Object System.Text.StringBuilder
+      $raw = New-Object System.Collections.Generic.List[byte]
       $total = 0
       while ($true) {
         $n = $stream.Read($buf, 0, $buf.Length)
         if ($n -le 0) { break }
         $total += $n
+        $raw.AddRange([byte[]]$buf[0..($n - 1)])
         [void]$sb.Append([System.Text.Encoding]::ASCII.GetString($buf, 0, $n))
         if ($sb.ToString().Contains("`r`n`r`n") -or $total -gt 262144) { break }
       }
@@ -282,6 +337,138 @@ try {
         $shared.quit = $true
         $body = [System.Text.Encoding]::UTF8.GetBytes("bye")
         $head = "HTTP/1.1 200 OK`r`nContent-Type: text/plain`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n"
+        $hb = [System.Text.Encoding]::ASCII.GetBytes($head)
+        $stream.Write($hb, 0, $hb.Length); $stream.Write($body, 0, $body.Length); $stream.Flush()
+        return
+      }
+
+      # ---- shared bits for the artefact endpoints -------------------------
+      # Inline rather than factored out: pool runspaces cannot see the functions
+      # defined in the launcher's own scope, only what is passed as arguments.
+      $qs = @{}
+      foreach ($kv in ($query -split '&')) {
+        $pair = $kv -split '=', 2
+        if ($pair.Length -eq 2) { $qs[$pair[0]] = [System.Uri]::UnescapeDataString($pair[1]) }
+      }
+      # Anything the page sends is untrusted. Strip to a bare filename so no request
+      # can steer a write out of the artefact folder.
+      # `save` is the screenshot endpoint's older spelling; accept both so the two
+      # endpoints cannot drift apart again.
+      $rawName = $qs["name"]
+      if (-not $rawName) { $rawName = $qs["save"] }
+      $safeName = ($rawName -replace '[^A-Za-z0-9._-]', '')
+      if ($safeName.Length -gt 120) { $safeName = $safeName.Substring(0, 120) }
+      $kind = $qs["kind"]
+      if ($kind -ne "images" -and $kind -ne "videos" -and $kind -ne "logs") { $kind = "images" }
+      $artRoot = Join-Path $root "navigation_logs"
+      $kindDir = Join-Path $artRoot $kind
+
+      # Whatever the console produced but could not write itself: the composite
+      # still when a real screen capture was unavailable, and the session log.
+      # Keeps every artefact in one place instead of scattering half of them into
+      # the browser's download folder.
+      if ($path -eq "/__save") {
+        $out = "saved"
+        $code = "200 OK"
+        try {
+          if (-not $safeName) { throw "no name" }
+          if (-not (Test-Path $kindDir)) { New-Item -ItemType Directory -Path $kindDir -Force | Out-Null }
+          $file = Join-Path $kindDir $safeName
+          $text = $sb.ToString()
+          $sep = $text.IndexOf("`r`n`r`n")
+          if ($sep -lt 0) { throw "no header terminator" }
+          $len = 0
+          foreach ($line in ($text -split "`r`n")) {
+            if ($line -match '^(?i)content-length:\s*(\d+)') { $len = [int]$matches[1] }
+          }
+          # One ASCII char per byte, so this index is exact in $raw too.
+          $bodyStart = $sep + 4
+          $bodyBytes = New-Object System.Collections.Generic.List[byte]
+          if ($raw.Count -gt $bodyStart) {
+            $bodyBytes.AddRange($raw.GetRange($bodyStart, $raw.Count - $bodyStart))
+          }
+          while ($bodyBytes.Count -lt $len) {
+            $chunk = New-Object byte[] 65536
+            $n = $stream.Read($chunk, 0, $chunk.Length)
+            if ($n -le 0) { break }
+            $bodyBytes.AddRange([byte[]]$chunk[0..($n - 1)])
+          }
+          $bytes = $bodyBytes.ToArray()
+          if ($qs["append"] -eq "1") {
+            $fs = New-Object System.IO.FileStream($file, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+            $fs.Write($bytes, 0, $bytes.Length); $fs.Flush(); $fs.Close()
+          } else {
+            [System.IO.File]::WriteAllBytes($file, $bytes)
+          }
+          $out = $file
+        } catch { $out = "save failed: $($_.Exception.Message)"; $code = "500 Internal Server Error" }
+        $body = [System.Text.Encoding]::UTF8.GetBytes($out)
+        $head = "HTTP/1.1 $code`r`nContent-Type: text/plain; charset=utf-8`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n"
+        $hb = [System.Text.Encoding]::ASCII.GetBytes($head)
+        $stream.Write($hb, 0, $hb.Length); $stream.Write($body, 0, $body.Length); $stream.Flush()
+        return
+      }
+
+      # Screen recording. gdigrab takes the whole desktop, exactly like the stills,
+      # and libx264 keeps the file small enough to keep around - the equivalent of
+      # re-encoding a Mac screen recording with `-vcodec h264`, done once, live,
+      # instead of afterwards. No audio: -an. See launch/README.md for why the GPU
+      # encoder is NOT the default on this handheld.
+      if ($path -eq "/__record") {
+        $action = $qs["action"]
+        $msg = ""
+        $code = "200 OK"
+        try {
+          if ($action -eq "start") {
+            if ($shared.rec -and -not $shared.rec.HasExited) { throw "already recording" }
+            if (-not $shared.ffmpeg) { throw "ffmpeg not installed" }
+            if (-not $safeName) { throw "no name" }
+            # A recording is a video, whatever the caller passed for `kind`. Deriving
+            # the folder from the request put a .mp4 in images/ the first time it ran.
+            $vidDir = Join-Path $artRoot "videos"
+            if (-not (Test-Path $vidDir)) { New-Item -ItemType Directory -Path $vidDir -Force | Out-Null }
+            $outFile = Join-Path $vidDir $safeName
+            $fps = if ($qs["fps"]) { [int]$qs["fps"] } else { 30 }
+            if ($fps -lt 5 -or $fps -gt 60) { $fps = 30 }
+            $crf = if ($qs["crf"]) { [int]$qs["crf"] } else { 23 }
+            if ($crf -lt 14 -or $crf -gt 40) { $crf = 23 }
+            $args = "-hide_banner -loglevel error -y -f gdigrab -framerate $fps -i desktop " +
+                    "-an -c:v libx264 -preset veryfast -crf $crf -pix_fmt yuv420p " +
+                    "-movflags +faststart `"$outFile`""
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $shared.ffmpeg
+            $psi.Arguments = $args
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            # stdin stays open so the recording can be stopped with "q", which lets
+            # ffmpeg write the moov atom. Killing the process leaves an unplayable
+            # file - the same class of loss as the camera's unsegmented .MOV.
+            $psi.RedirectStandardInput = $true
+            $p = [System.Diagnostics.Process]::Start($psi)
+            Start-Sleep -Milliseconds 400
+            if ($p.HasExited) { throw "ffmpeg exited immediately (exit $($p.ExitCode))" }
+            $shared.rec = $p
+            $shared.recFile = $outFile
+            $shared.recStarted = (Get-Date).ToUniversalTime().ToString("o")
+            $msg = $outFile
+          }
+          elseif ($action -eq "stop") {
+            if (-not $shared.rec) { throw "not recording" }
+            $p = $shared.rec
+            if (-not $p.HasExited) {
+              try { $p.StandardInput.Write("q"); $p.StandardInput.Flush() } catch { }
+              if (-not $p.WaitForExit(8000)) { try { $p.Kill() } catch { } }
+            }
+            $msg = $shared.recFile
+            $shared.rec = $null; $shared.recFile = ""; $shared.recStarted = $null
+          }
+          else {
+            $live = ($shared.rec -and -not $shared.rec.HasExited)
+            $msg = "recording=$live file=$($shared.recFile) since=$($shared.recStarted) ffmpeg=$([bool]$shared.ffmpeg)"
+          }
+        } catch { $msg = "record $action failed: $($_.Exception.Message)"; $code = "500 Internal Server Error" }
+        $body = [System.Text.Encoding]::UTF8.GetBytes($msg)
+        $head = "HTTP/1.1 $code`r`nContent-Type: text/plain; charset=utf-8`r`nContent-Length: $($body.Length)`r`nCache-Control: no-store`r`nConnection: close`r`n`r`n"
         $hb = [System.Text.Encoding]::ASCII.GetBytes($head)
         $stream.Write($hb, 0, $hb.Length); $stream.Write($body, 0, $body.Length); $stream.Flush()
         return
@@ -307,31 +494,17 @@ try {
 
           # WE write the file, not the browser. Chrome allows ONE automatic download
           # per origin and then blocks the rest - it had already recorded
-          # automatic_downloads=2 (block) for http://localhost:8080 - so the operator
-          # got exactly one still and then silence. Writing it here removes the
-          # browser from the path entirely.
+          # automatic_downloads=2 for http://localhost:8080 - so the operator got
+          # exactly one still and then silence. Writing it here removes the browser
+          # from the path entirely, and puts it with everything else the session
+          # produced instead of loose in the downloads folder.
           $savedPath = ""
-          $saveName = ""
-          foreach ($kv in ($query -split '&')) {
-            $pair = $kv -split '=', 2
-            if ($pair.Length -eq 2 -and $pair[0] -eq 'save') {
-              $saveName = [System.Uri]::UnescapeDataString($pair[1])
-            }
-          }
-          # Anything the page sends is untrusted: strip it to a bare filename so no
-          # request can steer this write out of the downloads folder.
-          $saveName = ($saveName -replace '[^A-Za-z0-9._-]', '')
-          if ($saveName.Length -gt 80) { $saveName = $saveName.Substring(0, 80) }
-          if ($saveName) {
+          if ($safeName) {
             try {
-              $dl = $null
-              try {
-                $sf = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders" -ErrorAction Stop
-                $dl = $sf."{374DE290-123F-4565-9164-39C4925E467B}"
-              } catch { }
-              if (-not $dl -or -not (Test-Path $dl)) { $dl = Join-Path $env:USERPROFILE "Downloads" }
-              if (-not (Test-Path $dl)) { New-Item -ItemType Directory -Path $dl -Force | Out-Null }
-              $file = Join-Path $dl ($saveName + ".png")
+              $imgDir = Join-Path $artRoot "images"
+              if (-not (Test-Path $imgDir)) { New-Item -ItemType Directory -Path $imgDir -Force | Out-Null }
+              $file = Join-Path $imgDir $safeName
+              if (-not [System.IO.Path]::GetExtension($file)) { $file = $file + ".png" }
               [System.IO.File]::WriteAllBytes($file, $body)
               $savedPath = $file
             } catch { $savedPath = "" }

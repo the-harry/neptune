@@ -100,6 +100,10 @@ REC.log = function(e, d, c_id){
     if(d!==undefined) rec.d=d;
     if(REC.db){ _idbAdd(rec).then(ok=>{ if(ok){ REC.count++; if(REC.count%256===0) _idbTrim(); } }); }
     else { REC.mem.push(rec); if(REC.mem.length>CONFIG.recorder.maxEvents) REC.mem.shift(); }
+    // Tee to the on-disk session log. Deliberately NOT read back out of the ring
+    // above: the Pi upload deletes from it, so a disk writer reading the same rows
+    // would race it and lose whichever the upload got to first.
+    REC.queueForDisk(rec);
   }catch(err){/* recording must never throw into the app */}
 };
 
@@ -258,17 +262,51 @@ function _sampleGamepad(){
     buttons:gp.buttons.map(b=>b.pressed?1:0).join('') });
 }
 
-/* ---- manual export (§5): download the whole ring as JSONL, even with the link down ---- */
-REC.exportLog = async function(){
-  try{
-    const rows = REC.db ? (await _idbAll()) : REC.mem.slice();
-    const lines = rows.map(v=>JSON.stringify(REC.db? {t:v.t,e:v.e,...(v.c_id?{c_id:v.c_id}:{}),...(v.d!==undefined?{d:v.d}:{})} : v));
-    const blob=new Blob([lines.join('\n')+'\n'], {type:'application/x-ndjson'});
-    const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
-    a.download='client_'+(REC.session_id||'session')+'.jsonl'; a.click();
-    setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
-    LOG.state('blackbox exported', rows.length, 'events');
-  }catch(e){ LOG.warn('export failed:', e && e.message); }
+/* ---- the session log writes itself (§5) --------------------------------
+   There used to be an EXPORT LOG button. A log you have to remember to save is a
+   log you find missing exactly when you needed it - the same reasoning that made
+   dive logging automatic (R2.4). The session log now starts with the session and
+   is written to disk AS IT HAPPENS, ending when the console goes away.
+
+   The queue is teed off REC.log rather than read back out of the IndexedDB ring:
+   the ring is drained by the Pi upload, so anything read from there could already
+   have been deleted before it reached the disk.
+
+   Flushed on a timer, not at shutdown. This handheld has an unresolved kernel
+   fault that takes the whole machine down with no unload event, and a log held in
+   memory until exit is lost precisely in the sessions worth reading. */
+REC.diskQueue = [];
+REC.diskFile = '';
+REC.diskWritten = 0;
+REC.diskDropped = 0;
+
+function _diskLine(v){
+  return JSON.stringify({t:v.t, e:v.e, ...(v.c_id?{c_id:v.c_id}:{}), ...(v.d!==undefined?{d:v.d}:{})});
+}
+REC.queueForDisk = function(v){
+  if(!REC.diskFile) return;
+  // Bounded: if the launcher is not there, this must not grow without limit.
+  // Dropping the OLDEST keeps the most recent events, which are the ones that
+  // explain whatever just happened.
+  const cap = (CONFIG.recorder.diskQueueMax || 5000);
+  if(REC.diskQueue.length >= cap){ REC.diskQueue.shift(); REC.diskDropped++; }
+  REC.diskQueue.push(v);
+};
+REC.flushDisk = async function(){
+  if(!REC.diskFile || !REC.diskQueue.length) return;
+  if(typeof saveArtifact !== 'function') return;          // launcher helper not loaded
+  const batch = REC.diskQueue.splice(0, REC.diskQueue.length);
+  const text = batch.map(_diskLine).join('\n') + '\n';
+  const path = await saveArtifact('logs', REC.diskFile, new Blob([text], {type:'application/x-ndjson'}), true);
+  if(path){ REC.diskWritten += batch.length; REC.diskPath = path; }
+  else {
+    // Put them back at the FRONT so order survives a launcher that is briefly away.
+    REC.diskQueue = batch.concat(REC.diskQueue);
+    if(REC.diskQueue.length > (CONFIG.recorder.diskQueueMax || 5000)){
+      const over = REC.diskQueue.length - (CONFIG.recorder.diskQueueMax || 5000);
+      REC.diskQueue.splice(0, over); REC.diskDropped += over;
+    }
+  }
 };
 REC.mark = function(note){ REC.log('mark', {note:note||null}); vibrate(20); LOG.state('MARK logged'); };
 
@@ -276,6 +314,9 @@ REC.mark = function(note){ REC.log('mark', {note:note||null}); vibrate(20); LOG.
 REC.init = async function(){
   if(!CONFIG.recorder.enabled){ return; }
   REC.enabled=true;
+  // Named once, at the start, so the whole session appends to one file. The mode
+  // can change mid-session (sim -> real); the name records what it started as.
+  if(typeof stampName === 'function') REC.diskFile = stampName(Date.now()) + '.log';
   REC.db=await _openDB();
   // Adopt what is already on disk, then enforce the cap immediately — otherwise a
   // device that has been flying for weeks starts every session believing the ring
@@ -294,14 +335,32 @@ REC.init = async function(){
   window.addEventListener('focus',   ()=>REC.log('focus', {focused:true}));
   window.addEventListener('error', (e)=>REC.log('window_error', {msg:e.message, src:e.filename, line:e.lineno, stack:(e.error&&e.error.stack||'').slice(0,600)}));
   window.addEventListener('unhandledrejection', (e)=>REC.log('unhandled_rejection', {reason:String(e.reason).slice(0,400)}));
-  window.addEventListener('beforeunload', ()=>{ REC.log('beforeunload', {}); _beaconFlush(); });
+  window.addEventListener('beforeunload', ()=>{ REC.log('session_end', {}); _beaconFlush(); _diskBeacon(); });
+  window.addEventListener('pagehide',     ()=>{ _diskBeacon(); });
   // samplers
   setInterval(_sampleWebRTC, Math.round(1000/CONFIG.recorder.webrtcHz));
   setInterval(_sampleGamepad, Math.round(1000/CONFIG.recorder.gamepadHz));
+  setInterval(()=>{ REC.flushDisk(); }, CONFIG.recorder.diskFlushMs || 5000);
   _scheduleUpload();
   REC.ready=true;
-  LOG.state('blackbox recorder ready ('+(REC.db?'IndexedDB':'in-memory fallback')+')');
+  LOG.state('blackbox recorder ready ('+(REC.db?'IndexedDB':'in-memory fallback')+')'
+            + (REC.diskFile ? ', session log ' + REC.diskFile : ''));
 };
+
+/* The timer flush is asynchronous and unload kills it, so the tail goes out with a
+   beacon instead - the browser delivers those after the page is gone. */
+function _diskBeacon(){
+  try{
+    if(!REC.diskFile || !REC.diskQueue.length) return;
+    if(!CONFIG.camera || !CONFIG.camera.saveEndpoint) return;
+    const text = REC.diskQueue.map(_diskLine).join('\n') + '\n';
+    REC.diskQueue = [];
+    const url = CONFIG.camera.saveEndpoint
+              + '?kind=logs&name=' + encodeURIComponent(REC.diskFile) + '&append=1';
+    if(navigator.sendBeacon) navigator.sendBeacon(url, new Blob([text], {type:'application/x-ndjson'}));
+    else fetch(url, {method:'POST', body:text, keepalive:true});
+  }catch(e){/* ignore */}
+}
 
 /* final best-effort flush on unload (§5) */
 function _beaconFlush(){

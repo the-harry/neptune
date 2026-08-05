@@ -77,6 +77,7 @@ const state = {
         remaining:null, isStreaming:'', degraded:false, menu:[],
         videoRes:'', awb:'', imageRes:'', ev:'' },   // live camera settings
   camWs:null, surfaced:false,   // surfaced = config/file ops unlocked (§7.4 gate)
+  screenRec:{ active:false, file:'' },   // handheld screen recording (launcher + ffmpeg)
   // Per-subsystem liveness stamps (§3). Each subsystem proves itself independently,
   // so one going quiet greys only its own controls. See status.js.
   camOkAt:0,                    // last successful camera control-plane response

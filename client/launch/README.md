@@ -106,3 +106,30 @@ Returns a PNG of the primary screen (`CopyFromScreen`, the same thing PrintScree
 The listener is **loopback-only**, so only this machine can ask. `SetProcessDPIAware()` is
 called at startup because a DPI-unaware process on this 1920x1080-at-150% handheld is told the
 screen is 1280x720 and captures only its top-left corner.
+
+## `/__save` and `/__record`
+
+The dashboard has no way to write a file: the browser can only offer a download, and Chrome
+blocks every automatic download after the first. So the launcher writes everything a session
+produces, into `client/navigation_logs/`:
+
+| Endpoint | Writes |
+|---|---|
+| `POST /__save?kind=images\|videos\|logs&name=<n>[&append=1]` | composite stills, the session log |
+| `POST /__record?action=start\|stop\|status&name=<n>` | screen recording via ffmpeg |
+| `GET /__screenshot?name=<n>` | full-screen PNG into `images/` |
+
+Names are sanitised to a bare filename before they touch the filesystem - the page is not
+trusted to stay inside the folder.
+
+Recording is `gdigrab -> libx264 -crf 23 -preset veryfast -an` (no audio), about 1.4 MB/min on
+a mostly-static screen. Stopping writes `q` to ffmpeg's stdin instead of killing it, so the
+moov atom is written and the file actually plays.
+
+The AMD GPU encoder (`h264_amf`) would use less CPU and is deliberately not used: this
+handheld has an unresolved kernel fault under sustained GPU load, and a recorder that can take
+the machine down mid-dive is worse than one that costs CPU.
+
+ffmpeg is installed by `tether-setup.ps1`, or drop `ffmpeg.exe` in `client/launch/bin/`.
+Without it stills and logs are unaffected and only recording is unavailable - the launcher
+says which at startup.

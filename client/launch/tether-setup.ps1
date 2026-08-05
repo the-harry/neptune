@@ -226,6 +226,42 @@ if ($n) { OK "Chrome will allow repeat downloads from localhost:8080-8091 (PIC s
 [void](Set-UrlListPolicy "$edgePol\AutomaticDownloadsAllowedForUrls" "the Edge downloads policy")
 Info "same policies applied to Edge (fallback browser)"
 
+# ---------------------------------------------------------------------------
+# ffmpeg - screen recording
+# ---------------------------------------------------------------------------
+# The launcher records the screen with gdigrab + libx264. Nothing else needs
+# ffmpeg, so a machine without it still takes stills and writes logs; only
+# RECORDING is unavailable, and the dashboard says so rather than failing quietly.
+$ffTarget = Join-Path $PSScriptRoot "bin\ffmpeg.exe"
+if ((Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or (Test-Path $ffTarget)) {
+  OK "ffmpeg already available - screen recording will work"
+} else {
+  Info "ffmpeg not found - trying winget (screen recording needs it)"
+  $installed = $false
+  try {
+    if (Get-Command winget.exe -ErrorAction SilentlyContinue) {
+      winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements --silent | Out-Null
+      # winget puts it on PATH only for NEW shells, so re-resolve from the links dir.
+      $installed = [bool](Get-Command ffmpeg.exe -ErrorAction SilentlyContinue)
+      if (-not $installed) {
+        $guess = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Recurse -Filter ffmpeg.exe -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+        if ($guess) {
+          New-Item -ItemType Directory -Path (Split-Path $ffTarget) -Force | Out-Null
+          Copy-Item $guess.FullName $ffTarget -Force
+          # the exe needs its siblings only for some builds; the static Gyan build is self-contained
+          $installed = Test-Path $ffTarget
+        }
+      }
+    } else { Info "winget not available on this machine" }
+  } catch { Info "winget install did not complete ($($_.Exception.Message))" }
+  if ($installed) { OK "ffmpeg installed - screen recording will work" }
+  else {
+    Nope "ffmpeg NOT installed - stills and logs still work, RECORDING will not"
+    Info "  install it by hand, or drop ffmpeg.exe in: $(Split-Path $ffTarget)"
+  }
+}
+
 Write-Host "`n---- result ----" -ForegroundColor Magenta
 if ($nic) {
   Get-NetIPAddress -InterfaceAlias $Adapter -AddressFamily IPv4 -ErrorAction SilentlyContinue |

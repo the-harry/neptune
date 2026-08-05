@@ -202,6 +202,50 @@ camera I cannot recover, or never had, does not mean I have no picture.
 12. A capture that is slow or unavailable SHALL NOT block PIC.
 13. EVERY press SHALL write a file, not just the first of a session.
 
+### R5.5 - The dive is recorded on both ends
+**As an** operator, **I want** the handheld screen recorded alongside the camera, **so that**
+a dive has a topside account of itself - instruments included - even if the camera card never
+comes back.
+
+**Acceptance criteria**
+1. ONE control SHALL start and stop both the camera recording and the screen recording.
+2. Either recorder being unavailable SHALL NOT prevent the other, AND each outcome SHALL be
+   reported separately.
+3. THE screen recording SHALL cover the whole screen, carry no audio, and be H.264 in a
+   container that plays without conversion.
+4. A recording SHALL be playable even though the operator ended it, rather than the encoder
+   reaching an end of input.
+5. THE recording SHALL NOT be left running when the console exits.
+6. WHERE screen recording is unavailable, THEN stills and logs SHALL be unaffected and the
+   console SHALL say which is missing.
+7. Screen recording SHALL NOT be given a job that risks the known GPU fault on this handheld.
+
+### R5.6 - Session artefacts are findable
+**As an** operator, **I want** everything a session produced in one predictable place with
+predictable names, **so that** I can find a dive afterwards without hunting.
+
+**Acceptance criteria**
+1. Stills, recordings and logs SHALL be written under one folder, separated by kind.
+2. Every artefact SHALL be named `{mode}_{timestamp}`, where mode is what the console was
+   actually doing, so files sort by time and declare whether they were a real dive.
+3. Names SHALL be legal filenames on the operator's platform.
+4. THE launcher SHALL provide a desktop shortcut to that folder if one does not exist.
+5. Artefacts SHALL NOT be scattered into the browser's download folder when the launcher is
+   available to write them.
+
+### R5.7 - The session log needs no operator action
+**As an** operator, **I want** the log to start and finish by itself, **so that** the session
+I needed to review is never the one I forgot to export.
+
+**Acceptance criteria**
+1. THE session log SHALL start with the session, with no operator action.
+2. THERE SHALL be no manual export control.
+3. Events SHALL reach disk AS THEY HAPPEN, not only at shutdown.
+4. WHEN the machine dies without an orderly shutdown, THEN everything logged up to that point
+   SHALL already be on disk.
+5. WHEN the log cannot be written, THEN piloting SHALL continue unaffected, AND the buffered
+   backlog SHALL be bounded rather than growing without limit.
+
 ### R5.2 — Blind navigation
 **As an** operator, **I want** the map to take over when the camera dies, **so that** I can
 still drive rather than stare at a black rectangle.

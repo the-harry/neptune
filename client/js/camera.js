@@ -94,8 +94,19 @@ function applyCamStatus(s){
 function renderCam(){
   const c = state.cam;
   // Recording state lives in the REC button now (ON/OFF + red pulse), not the top bar.
+  // REC drives two recorders now, so the button reflects EITHER being live -
+  // showing OFF while the screen was still being captured would be a lie.
   const btn = $('cam-rec');
-  if(btn){ btn.classList.toggle('recording', c.recording); const t=btn.querySelector('.cam-rec-txt'); if(t) t.textContent = c.recording ? 'ON' : 'OFF'; }
+  const anyRec = c.recording || state.screenRec.active;
+  if(btn){
+    btn.classList.toggle('recording', anyRec);
+    const t=btn.querySelector('.cam-rec-txt');
+    if(t) t.textContent = anyRec ? 'ON' : 'OFF';
+    btn.title = anyRec
+      ? 'Recording: ' + [c.recording ? 'camera card' : null,
+                         state.screenRec.active ? 'handheld screen' : null].filter(Boolean).join(' + ')
+      : 'Record the camera card and the handheld screen';
+  }
   // camera battery
   const b = $('cam-battery'); if(b) b.textContent = (c.battery!=null ? c.battery+'%' : '--');
   // SD (color-coded, keep the tile value class)
@@ -128,20 +139,83 @@ function shortAwb(v){
   return AWB_SHORT[String(v).toUpperCase()] || v;
 }
 
-/* ---- commands (in-dive allowed): record toggle + capture ---------------- */
+/* ---- screen recording (the handheld's half of "record both") ------------
+   The camera records what it sees, onto a card inside the vehicle. This records
+   what the OPERATOR sees - instruments, map and all - onto the handheld, so a
+   dive has a topside account of itself even if the card never comes back.
+
+   ffmpeg does it via gdigrab -> libx264, which is the same trade as re-encoding a
+   screen recording afterwards, done once and live instead. No audio (-an): there
+   is nothing to hear and it only costs bytes. */
+async function screenRecord(action, name){
+  if(!CONFIG.camera.recordEndpoint) return {ok:false, why:'no launcher'};
+  const q = '?action=' + action
+          + (name ? '&name=' + encodeURIComponent(name) : '')
+          + '&fps=' + (CONFIG.camera.recordFps || 30)
+          + '&crf=' + (CONFIG.camera.recordCrf || 23);
+  try{
+    const r = await fetch(CONFIG.camera.recordEndpoint + q, {method:'POST'});
+    const text = (await r.text()).trim();
+    return r.ok ? {ok:true, detail:text} : {ok:false, why:text || ('HTTP '+r.status)};
+  }catch(e){ return {ok:false, why:(e.message||String(e))}; }
+}
+
+/* ---- commands (in-dive allowed): record toggle + capture ----------------
+   ONE button, two recorders, reported separately. Either can be unavailable -
+   no camera on the bench, no ffmpeg on a fresh machine - and neither absence
+   should stop the other from running. */
 async function camRecordToggle(){
   const btn = $('cam-rec'); if(btn) btn.disabled = true;
+  const notes = [];
   try{
-    const r = await camApi('/api/record/toggle', {method:'POST'});
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    const st = await r.json();
-    state.cam.recording = !!st.recording; state.cam.recordRaw = st.record_raw || '';
+    const wantStart = !state.screenRec.active && !state.cam.recording;
+
+    // --- the handheld's screen ---
+    if(CONFIG.camera.recordEndpoint){
+      if(state.screenRec.active){
+        const r = await screenRecord('stop');
+        state.screenRec.active = false;
+        notes.push(r.ok ? 'screen saved ' + (r.detail || '').split(/[\\/]/).pop()
+                        : 'screen stop failed: ' + r.why);
+      } else if(wantStart){
+        const name = stampName(Date.now()) + '.mp4';
+        const r = await screenRecord('start', name);
+        state.screenRec.active = r.ok;
+        state.screenRec.file = r.ok ? r.detail : '';
+        notes.push(r.ok ? 'screen recording' : 'no screen recording: ' + r.why);
+      }
+    }
+
+    // --- the camera's own card ---
+    if(typeof camUp === 'function' && !camUp()){
+      notes.push('no camera');
+    } else {
+      try{
+        const r = await camApi('/api/record/toggle', {method:'POST'});
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        const st = await r.json();
+        state.cam.recording = !!st.recording; state.cam.recordRaw = st.record_raw || '';
+        notes.push(st.changed ? (st.recording ? 'camera recording' : 'camera stopped')
+                              : 'camera toggle sent (no state change seen)');
+        LOG.cmd('camera record ->', st);
+      }catch(e){ notes.push('camera failed: '+(e.message||e)); }
+    }
+
     renderCam();
-    camToast(st.changed ? (st.recording ? 'Recording started' : 'Recording stopped')
-                        : 'Record toggle sent (no state change seen)', st.changed ? 'ok' : 'warn');
-    LOG.cmd('camera record ->', st);
-  }catch(e){ camToast('Record failed: '+(e.message||e), 'bad'); }
-  finally{ if(btn) btn.disabled = false; }
+    const bad = notes.some(n => /failed|no screen recording/.test(n));
+    camToast('REC · ' + notes.join(' · '), bad ? 'warn' : 'ok');
+  }finally{ if(btn) btn.disabled = false; }
+}
+
+/* A recording left running outlives the page that started it, so stop it when the
+   console goes away. sendBeacon survives unload where fetch does not. */
+function stopScreenRecordingOnExit(){
+  if(!state.screenRec.active || !CONFIG.camera.recordEndpoint) return;
+  try{
+    const url = CONFIG.camera.recordEndpoint + '?action=stop';
+    if(navigator.sendBeacon) navigator.sendBeacon(url, new Blob([], {type:'text/plain'}));
+    else fetch(url, {method:'POST', keepalive:true});
+  }catch(e){}
 }
 /* ---- stills: two copies, taken independently ----------------------------
    The camera's own JPEG goes to the SD card, which is inside the vehicle, in the
@@ -156,15 +230,32 @@ async function camRecordToggle(){
    It also means PIC does something useful in SIM, where there is no camera at
    all - the frame source falls back to the map, so a bench run still produces a
    real image to test against. */
-/* Milliseconds are not decoration. The id is the IndexedDB key, so two presses
-   inside the same second produced the same key and the second one SILENTLY
-   OVERWROTE the first — losing an image in the feature whose entire purpose is
-   not losing images. */
-function stampName(t){
-  const d = new Date(t), p = n => String(n).padStart(2, '0');
-  return `neptune-${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}`
-       + `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
-       + `-${String(d.getMilliseconds()).padStart(3, '0')}`;
+/* Every artefact this session produces is named the same way: {mode}_{iso}.{ext}.
+   The mode is what the console was actually doing (sim / real / stale), so a folder
+   of files sorts by time and still says which of them were real dives.
+
+   Milliseconds are kept because the name is also the IndexedDB key: at second
+   resolution two presses inside the same second produced the same key and the
+   second silently overwrote the first.
+
+   Colons are stripped - ISO 8601 uses them and Windows will not have them in a
+   filename, which is the sort of thing that fails only once there is real data. */
+function fsIso(t){ return new Date(t).toISOString().replace(/:/g, '-'); }
+function stampName(t){ return (state.mode || 'sim') + '_' + fsIso(t); }
+
+/* Hand a file to the launcher, which puts it under client/navigation_logs/<kind>/.
+   Returns the path it wrote, or '' if there is no launcher (page served from the
+   Pi, a static server, a test harness) - in which case the caller falls back to a
+   browser download. */
+async function saveArtifact(kind, name, blob, append){
+  if(!CONFIG.camera.saveEndpoint) return '';
+  try{
+    const q = '?kind=' + encodeURIComponent(kind) + '&name=' + encodeURIComponent(name)
+            + (append ? '&append=1' : '');
+    const r = await fetch(CONFIG.camera.saveEndpoint + q, {method:'POST', body:blob});
+    if(!r.ok) return '';
+    return (await r.text()).trim();
+  }catch(e){ return ''; }
 }
 
 /* What the operator is actually looking at, in priority order. In blind nav the
@@ -219,7 +310,7 @@ async function grabScreenshot(id){
     // reached the disk. Taking the browser out of the path fixes that for good.
     const url = CONFIG.camera.screenshotEndpoint
               + (id ? (CONFIG.camera.screenshotEndpoint.indexOf('?') === -1 ? '?' : '&')
-                      + 'save=' + encodeURIComponent(id) : '');
+                      + 'name=' + encodeURIComponent(id) : '');
     const r = await fetch(url, ctl ? {signal:ctl.signal} : undefined);
     if(!r.ok) return null;                       // 404 = not the launcher; 500 = it tried and failed
     const type = r.headers.get('content-type') || '';
@@ -284,7 +375,7 @@ function stampCaption(cx, w, h, t, source, basemap){
 async function captureLocalStill(t){
   // A true screen capture first — it is the whole point: the operator wants what
   // is on the screen, metrics and basemap included, not the video layer alone.
-  const screenId = stampName(t) + '-screen';
+  const screenId = stampName(t) + '.png';
   const shot = await grabScreenshot(screenId);
   if(shot){
     try{
@@ -331,13 +422,12 @@ async function captureLocalStill(t){
   return await storeStill(t, blob, {source:src.source, w:src.w, h:src.h, basemap, degraded});
 }
 
-const _SUFFIX = { screen:'screen', map:'map', video:'cam' };
-
 async function storeStill(t, blob, meta){
   // Telemetry travels WITH the image. A still with no depth or heading is a
   // holiday snap; the point is being able to place it in the dive afterwards.
   const rec = {
-    id: stampName(t) + '-' + (_SUFFIX[meta.source] || 'cam'),
+    // The id IS the filename, so the in-app list and the folder agree.
+    id: stampName(t) + (meta.source === 'screen' ? '.png' : '.jpg'),
     t, source: meta.source, w: meta.w, h: meta.h, blob, basemap: meta.basemap,
     sim: (typeof commandsBlocked === 'function') ? commandsBlocked() : null,
     depth: state.depth, heading: state.heading, pressure: state.pressure,
@@ -361,6 +451,12 @@ async function storeStill(t, blob, meta){
   // so every PIC after the first vanished silently. The <a download> path below is
   // now only for the composite fallbacks, where nothing else can write the file.
   let downloaded = false, savedPath = meta.savedPath || '';
+  if(!savedPath){
+    // The composite fallbacks were the only artefacts still going out through the
+    // browser and landing loose in Downloads. Offer them to the launcher first so
+    // everything the session produced ends up in the same folder.
+    savedPath = await saveArtifact('images', rec.id, blob, false);
+  }
   if(savedPath){
     downloaded = true;
   } else {
@@ -516,6 +612,9 @@ function _mb(b){ return b ? (b/1e6).toFixed(1)+'MB' : ''; }
 function initCamera(){
   const rec = $('cam-rec'); if(rec) rec.addEventListener('click', camRecordToggle);
   const cap = $('cam-capture'); if(cap) cap.addEventListener('click', camCapture);
+  // A recording outlives the page unless something stops it.
+  window.addEventListener('beforeunload', stopScreenRecordingOnExit);
+  window.addEventListener('pagehide', stopScreenRecordingOnExit);
   const surf = $('cfg-surfaced'); if(surf) surf.addEventListener('change', ()=>setSurfaced(surf.checked));
   setSurfaced(false);            // locked until surfaced
   renderCam();

@@ -58,6 +58,33 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
   every branch settles, a timeout backstops the rest, and `onversionchange` means this window
   never blocks the next upgrade. Losing the database now costs persistence, not the dashboard.
 
+- 🧪 **Record the screen too, and give every artefact one home and one name.**
+  The camera records what it sees, onto a card inside the vehicle. Nothing recorded what the
+  OPERATOR saw, so a dive had no topside account of itself. REC now drives both, reported
+  separately so a missing camera or a missing ffmpeg does not stop the other.
+  The screen half is `gdigrab -> libx264 -crf 23 -preset veryfast -an`, run by the launcher -
+  the same trade as re-encoding a screen recording with `-vcodec h264` afterwards, done once
+  and live. **~1.4 MB/min** measured. Stopping writes `q` to ffmpeg's stdin rather than
+  killing it, because a hard-killed MP4 has no moov atom and will not play. The AMD GPU
+  encoder is deliberately NOT used: it would be lighter on CPU, and this handheld has an
+  unresolved kernel fault under sustained GPU load.
+  Everything a session produces now lands in `client/navigation_logs/{images,videos,logs}`
+  as `{mode}_{iso}`, with a **Neptune Recordings** desktop shortcut, instead of being
+  scattered through the browser's download folder.
+  *Verified: 9 launcher-handler checks (append does not overwrite, binary bytes survive,
+  traversal contained), 13 with real ffmpeg (H.264 High, 1920x1080, zero audio streams,
+  ffprobe parses it so the moov atom was written, a second start refused), 19 client checks.*
+
+- 🧪 **The session log no longer needs remembering.**
+  There was an EXPORT LOG button. A log you have to remember to save is a log you find
+  missing exactly when you needed it - the same reasoning that made dive logging automatic.
+  It now starts with the session and appends to disk every 5 s as it happens.
+  Events are teed at `REC.log()` rather than read back out of the IndexedDB ring, because the
+  Pi upload deletes from that ring and a disk writer reading the same rows would race it.
+  Timer-flushed rather than written at shutdown on purpose: the kernel fault on this handheld
+  takes the machine down with no unload event, so a log held in memory until exit is lost in
+  precisely the sessions worth reading.
+
 - 🧪 **Only the first PIC of a session ever reached the disk.**
   Chrome permits ONE automatic download per origin and then blocks the rest, storing the
   decision: the profile had `automatic_downloads: 2` recorded against

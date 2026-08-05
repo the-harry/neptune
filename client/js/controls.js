@@ -206,7 +206,10 @@ function buildMapper(){
       '<div style="display:flex;align-items:center;gap:8px;padding:6px 20px">'+
         '<span class="font-label-caps text-label-caps text-on-surface-variant" style="flex:0 0 80px">BLACKBOX</span>'+
         '<button id="cfg-mark" class="mp-btn">MARK EVENT</button>'+
-        '<button id="cfg-exportlog" class="mp-btn">EXPORT LOG</button>'+
+        // No EXPORT LOG. The session log writes itself to navigation_logs/logs as
+        // it happens - a log you have to remember to save is a log you find
+        // missing exactly when you needed it.
+        '<span id="cfg-logstate" class="font-label-caps text-[10px] text-on-surface-variant" style="letter-spacing:0"></span>'+
       '</div>'+
       '<div class="font-label-caps text-[10px] text-primary/50 uppercase tracking-widest" style="padding:10px 20px 0">Camera '+
         '<span id="cfg-surfaced-hint" class="text-error" style="text-transform:none;letter-spacing:0;font-weight:400">(locked in-dive)</span></div>'+
@@ -237,7 +240,14 @@ function buildMapper(){
   $('cfg-origin').addEventListener('click', ()=>{ closeMapper(); if(typeof openOriginModal==='function') openOriginModal(); });
   const cd=$('cfg-dives'); if(cd) cd.addEventListener('click', ()=>{ closeMapper(); if(typeof openDiveLog==='function') openDiveLog(); });
   const mk=$('cfg-mark'); if(mk) mk.addEventListener('click', ()=>{ if(window.REC) REC.mark('config'); });
-  const ex=$('cfg-exportlog'); if(ex) ex.addEventListener('click', ()=>{ if(window.REC) REC.exportLog(); });
+  // Show where the session log is going, so it is visibly happening rather than
+  // something the operator has to trust.
+  const ls=$('cfg-logstate');
+  if(ls && window.REC){
+    ls.textContent = REC.diskFile
+      ? ('logging to ' + REC.diskFile + ' (' + REC.diskWritten + ' events)')
+      : 'session log unavailable (no launcher)';
+  }
   // Camera config panel + file browser are wired by camera.js (initCamera).
   // Click backdrop (outside the card) to close
   modal.addEventListener('click', (e)=>{ if(e.target===modal) closeMapper(); });

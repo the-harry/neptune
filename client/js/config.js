@@ -108,11 +108,23 @@ const CONFIG = {
     // page from localhost) for a real screen capture - metrics, control rail,
     // basemap and all. Set to '' to always use the in-page canvas composite.
     screenshotEndpoint: '/__screenshot',
-    screenshotTimeoutMs: 4000              // never let a wedged launcher block PIC
+    screenshotTimeoutMs: 4000,             // never let a wedged launcher block PIC
+    // Everything this session produces goes through the launcher into
+    // client/navigation_logs/{images,videos,logs}. Empty '' = no launcher writes.
+    saveEndpoint:   '/__save',
+    recordEndpoint: '/__record',
+    recordFps: 30,                         // gdigrab capture rate
+    recordCrf: 23                          // x264 quality: lower = better + bigger
   },
 
   /* ---- BLACKBOX client recorder (logging addendum) ----------------------- */
   recorder: {
+    // The session log writes itself to navigation_logs/logs as it happens. Flushed
+    // on a timer, not at shutdown: this handheld has an unresolved kernel fault
+    // that takes the machine down with no unload event, and a log kept in memory
+    // until exit is lost exactly in the sessions worth reading.
+    diskFlushMs: 5000,
+    diskQueueMax: 5000,        // bounded if the launcher is not there; oldest dropped
     enabled:       true,
     session:       '/api/session',    // adopt the Pi's session id on connect (§1)
     clientlog:     '/api/clientlog',  // batched upload target (§5)

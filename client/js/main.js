@@ -185,7 +185,11 @@ async function boot(forced){
                            window.open(URL.createObjectURL(b), '_blank'); return b; },
     camUp, commandsBlocked,
     openOrigin:openOriginModal, openAreas:openAreaManager, requestLocation:requestDeviceLocation,
-    REC, mark:(n)=>REC.mark(n), exportLog:()=>REC.exportLog(),
+    REC, mark:(n)=>REC.mark(n),
+    // The session log writes itself; this only says where it is going.
+    sessionLog:()=>({file:REC.diskFile, path:REC.diskPath||'', written:REC.diskWritten,
+                     queued:REC.diskQueue.length, dropped:REC.diskDropped}),
+    screenRecord,
     get bindings(){ return state.bindings; }
   };
   LOG.state('ready. Console API available as window.NEPTUNE (try NEPTUNE.logRate(true))');
