@@ -205,7 +205,7 @@ function canvasTainted(cv){
    what lets the basemap survive. Falls back to the canvas composite when the page
    is not being served by the launcher (served from the Pi, from a plain static
    server, or a test harness). */
-async function grabScreenshot(){
+async function grabScreenshot(id){
   if(!CONFIG.camera.screenshotEndpoint) return null;
   const ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
   // PIC must stay responsive: a launcher that is wedged or an endpoint that is not
@@ -213,13 +213,20 @@ async function grabScreenshot(){
   const killer = ctl ? setTimeout(()=>{ try{ ctl.abort(); }catch(e){} },
                                   CONFIG.camera.screenshotTimeoutMs || 4000) : null;
   try{
-    const r = await fetch(CONFIG.camera.screenshotEndpoint, ctl ? {signal:ctl.signal} : undefined);
+    // Hand the launcher the filename so IT writes the file. Chrome allows one
+    // automatic download per origin and then blocks the rest - it had already
+    // recorded a permanent block for this origin, so only the first PIC ever
+    // reached the disk. Taking the browser out of the path fixes that for good.
+    const url = CONFIG.camera.screenshotEndpoint
+              + (id ? (CONFIG.camera.screenshotEndpoint.indexOf('?') === -1 ? '?' : '&')
+                      + 'save=' + encodeURIComponent(id) : '');
+    const r = await fetch(url, ctl ? {signal:ctl.signal} : undefined);
     if(!r.ok) return null;                       // 404 = not the launcher; 500 = it tried and failed
     const type = r.headers.get('content-type') || '';
     if(type.indexOf('image') !== 0) return null;
     const blob = await r.blob();
     const bmp = await createImageBitmap(blob);
-    return { bmp, w: bmp.width, h: bmp.height };
+    return { bmp, w: bmp.width, h: bmp.height, savedPath: r.headers.get('X-Saved-Path') || '' };
   }catch(e){ return null; }
   finally{ if(killer) clearTimeout(killer); }
 }
@@ -277,7 +284,8 @@ function stampCaption(cx, w, h, t, source, basemap){
 async function captureLocalStill(t){
   // A true screen capture first — it is the whole point: the operator wants what
   // is on the screen, metrics and basemap included, not the video layer alone.
-  const shot = await grabScreenshot();
+  const screenId = stampName(t) + '-screen';
+  const shot = await grabScreenshot(screenId);
   if(shot){
     try{
       const cv = document.createElement('canvas');
@@ -291,7 +299,9 @@ async function captureLocalStill(t){
       // control rail. The composite fallbacks below DO get one, because there the
       // surrounding UI is genuinely absent from the image.
       const blob = await new Promise(res => cv.toBlob(res, 'image/jpeg', CONFIG.camera.stillQuality || 0.92));
-      if(blob) return await storeStill(t, blob, {source:'screen', w:shot.w, h:shot.h, basemap:null, degraded:''});
+      if(blob) return await storeStill(t, blob, {source:'screen', w:shot.w, h:shot.h,
+                                                 basemap:null, degraded:'',
+                                                 savedPath:shot.savedPath});
     }catch(e){ /* fall through to the canvas composite below */ }
   }
 
@@ -335,24 +345,38 @@ async function storeStill(t, blob, meta){
     x: (typeof MAP !== 'undefined') ? MAP.x : null,
     y: (typeof MAP !== 'undefined') ? MAP.y : null,
     origin: (typeof MAP !== 'undefined' && MAP.hasOrigin) ? MAP.origin : null,
+    // Where the launcher put the file. Set BEFORE the record is written - assigning
+    // it afterwards left every stored record without it, so the in-app list could
+    // not tell you where the disk copy went.
+    savedPath: meta.savedPath || '',
   };
   const stored = await STORE.stillPut(rec);
 
-  // Also put a real FILE on disk - the whole point is a second copy, and one that
-  // survives the browser profile being cleared. Best effort: if the download is
-  // blocked the IndexedDB copy above still exists, and the toast says which.
-  let downloaded = false;
-  try{
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = rec.id + '.jpg';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url), 30000);
+  // A real FILE on disk - the whole point is a second copy, and one that survives
+  // the browser profile being cleared.
+  //
+  // The launcher writes it when it took the capture, which is the ONLY reliable
+  // route: Chrome permits one automatic download per origin and then blocks the
+  // rest, and it had already recorded a permanent block for http://localhost:8080,
+  // so every PIC after the first vanished silently. The <a download> path below is
+  // now only for the composite fallbacks, where nothing else can write the file.
+  let downloaded = false, savedPath = meta.savedPath || '';
+  if(savedPath){
     downloaded = true;
-  }catch(e){ /* stays in IndexedDB only */ }
+  } else {
+    try{
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = rec.id + '.jpg';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 30000);
+      downloaded = true;
+    }catch(e){ /* stays in IndexedDB only */ }
+  }
 
-  return { ok: stored || downloaded, rec, stored, downloaded, degraded: meta.degraded || '',
-           why: (!stored && !downloaded) ? 'could not store or download the image' : '' };
+  return { ok: stored || downloaded, rec, stored, downloaded, savedPath,
+           degraded: meta.degraded || '',
+           why: (!stored && !downloaded) ? 'could not store or save the image' : '' };
 }
 
 async function camCapture(){
@@ -366,12 +390,14 @@ async function camCapture(){
     let local;
     try{ local = await captureLocalStill(t); }
     catch(e){ local = { ok:false, why:(e.message||String(e)) }; }
-    if(local.ok) notes.push('saved locally'
+    if(local.ok) notes.push((local.savedPath ? 'saved ' + local.savedPath.split(/[\/]/).pop()
+                                             : 'saved locally')
                             + (local.downloaded ? '' : ' (in-app only)')
                             + (local.degraded ? ' — ' + local.degraded : ''));
     else         notes.push('local save failed: ' + local.why);
     if(local.rec) LOG.cmd('still saved ->', {id:local.rec.id, source:local.rec.source,
-                                             stored:local.stored, downloaded:local.downloaded});
+                                             stored:local.stored, downloaded:local.downloaded,
+                                             path:local.savedPath || '(browser download)'});
 
     // CAMERA second, and only if there is one. In sim this is skipped entirely
     // rather than reported as a failure - there is no camera to fail.

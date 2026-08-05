@@ -299,6 +299,15 @@ a side effect. The listener is loopback-only, so nothing off the machine can ask
 handheld runs 1920×1080 at 150%, and a DPI-unaware process is told the screen is 1280×720 and
 silently captures only its top-left corner.
 
+**The launcher writes the file, not the browser.** Chrome permits one automatic download per
+origin and then blocks the rest, storing the decision — the profile had already recorded
+`automatic_downloads: 2` for `http://localhost:8080`, so exactly one still per session reached
+the disk and the rest vanished with no prompt (an `--app` window has nowhere to show one). PIC
+sends the id with the request and the launcher writes the PNG to Downloads. The name is
+sanitised to a bare filename: anything the page sends is untrusted, and nothing should be able
+to steer that write out of the folder. The composite fallbacks still go through `<a download>`,
+so `AutomaticDownloadsAllowedForUrls` is set as well.
+
 The capture is stored **unmodified** — no caption. The instrument bar is already in frame and
 the filename carries the timestamp, so a strip along the bottom would only cover the control
 rail. The composite fallbacks below *do* get one, because there the surrounding UI is genuinely

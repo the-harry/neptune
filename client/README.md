@@ -262,6 +262,14 @@ localhost — for a genuine screen capture, the same thing PrintScreen does. It 
 same-origin, so it does not taint the canvas, which means the satellite basemap survives
 too. `GET /__screenshot` (loopback-only listener; nothing off the machine can ask).
 
+**The launcher writes the file too.** Chrome permits exactly ONE automatic download per
+origin and then blocks the rest — it had already recorded `automatic_downloads: 2` (block)
+for `http://localhost:8080`, so only the first PIC of a session ever reached the disk, with
+no visible prompt in an `--app` window. PIC now sends the filename with the request
+(`/__screenshot?save=<id>`) and the launcher writes the PNG to **Downloads** itself, taking
+the browser out of the path entirely. The composite fallbacks still use `<a download>`,
+which is why `tether-setup.ps1` also sets `AutomaticDownloadsAllowedForUrls`.
+
 That capture is left **unmodified** — no caption. The top bar is already in frame and the
 filename carries the timestamp; a strip along the bottom would cover the control rail.
 

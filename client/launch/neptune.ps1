@@ -272,9 +272,10 @@ try {
 
       $requestLine = ($sb.ToString() -split "`r`n")[0]
       $parts = $requestLine -split ' '
-      $path  = if ($parts.Length -gt 1) { $parts[1] } else { "/" }
-      $path  = ($path -split '\?')[0]
-      $path  = [System.Uri]::UnescapeDataString($path)
+      $target = if ($parts.Length -gt 1) { $parts[1] } else { "/" }
+      $query  = if ($target.Contains('?')) { $target.Substring($target.IndexOf('?') + 1) } else { "" }
+      $path   = ($target -split '\?')[0]
+      $path   = [System.Uri]::UnescapeDataString($path)
 
       # The dashboard's EXIT button hits this so the operator can always get out.
       if ($path -eq "/__quit") {
@@ -303,7 +304,40 @@ try {
           $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
           $body = $ms.ToArray()
           $ms.Dispose(); $gfx.Dispose(); $bmp.Dispose()
-          $head = "HTTP/1.1 200 OK`r`nContent-Type: image/png`r`nContent-Length: $($body.Length)`r`nCache-Control: no-store`r`nX-Screen: $($bounds.Width)x$($bounds.Height)`r`nConnection: close`r`n`r`n"
+
+          # WE write the file, not the browser. Chrome allows ONE automatic download
+          # per origin and then blocks the rest - it had already recorded
+          # automatic_downloads=2 (block) for http://localhost:8080 - so the operator
+          # got exactly one still and then silence. Writing it here removes the
+          # browser from the path entirely.
+          $savedPath = ""
+          $saveName = ""
+          foreach ($kv in ($query -split '&')) {
+            $pair = $kv -split '=', 2
+            if ($pair.Length -eq 2 -and $pair[0] -eq 'save') {
+              $saveName = [System.Uri]::UnescapeDataString($pair[1])
+            }
+          }
+          # Anything the page sends is untrusted: strip it to a bare filename so no
+          # request can steer this write out of the downloads folder.
+          $saveName = ($saveName -replace '[^A-Za-z0-9._-]', '')
+          if ($saveName.Length -gt 80) { $saveName = $saveName.Substring(0, 80) }
+          if ($saveName) {
+            try {
+              $dl = $null
+              try {
+                $sf = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders" -ErrorAction Stop
+                $dl = $sf."{374DE290-123F-4565-9164-39C4925E467B}"
+              } catch { }
+              if (-not $dl -or -not (Test-Path $dl)) { $dl = Join-Path $env:USERPROFILE "Downloads" }
+              if (-not (Test-Path $dl)) { New-Item -ItemType Directory -Path $dl -Force | Out-Null }
+              $file = Join-Path $dl ($saveName + ".png")
+              [System.IO.File]::WriteAllBytes($file, $body)
+              $savedPath = $file
+            } catch { $savedPath = "" }
+          }
+          $savedHeader = if ($savedPath) { "X-Saved-Path: $savedPath`r`n" } else { "" }
+          $head = "HTTP/1.1 200 OK`r`nContent-Type: image/png`r`nContent-Length: $($body.Length)`r`nCache-Control: no-store`r`nX-Screen: $($bounds.Width)x$($bounds.Height)`r`n$savedHeader" + "Connection: close`r`n`r`n"
         } catch {
           $body = [System.Text.Encoding]::UTF8.GetBytes("screenshot failed: $($_.Exception.Message)")
           $head = "HTTP/1.1 500 Internal Server Error`r`nContent-Type: text/plain; charset=utf-8`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n"

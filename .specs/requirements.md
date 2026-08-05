@@ -200,6 +200,7 @@ camera I cannot recover, or never had, does not mean I have no picture.
 10. Two stills taken in quick succession SHALL BOTH be kept.
 11. PIC SHALL NOT be disabled because the camera is unavailable.
 12. A capture that is slow or unavailable SHALL NOT block PIC.
+13. EVERY press SHALL write a file, not just the first of a session.
 
 ### R5.2 — Blind navigation
 **As an** operator, **I want** the map to take over when the camera dies, **so that** I can

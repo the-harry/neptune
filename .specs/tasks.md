@@ -58,6 +58,22 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
   every branch settles, a timeout backstops the rest, and `onversionchange` means this window
   never blocks the next upgrade. Losing the database now costs persistence, not the dashboard.
 
+- 🧪 **Only the first PIC of a session ever reached the disk.**
+  Chrome permits ONE automatic download per origin and then blocks the rest, storing the
+  decision: the profile had `automatic_downloads: 2` recorded against
+  `http://localhost:8080`. In an `--app` window there is nowhere to show the prompt, so every
+  press after the first vanished silently — the still was in IndexedDB, the file never
+  appeared, and the toast said "saved locally" because as far as the page knew it had been.
+  The launcher already had the bytes, so it writes the file itself now
+  (`/__screenshot?save=<id>` -> Downloads) and the browser is out of the path. The name is
+  sanitised to a bare filename so nothing the page sends can steer the write elsewhere.
+  `AutomaticDownloadsAllowedForUrls` is set too, for the composite fallback that still uses
+  `<a download>`. Same commit: the toast now names the file it wrote, since the whole failure
+  was invisible from the console.
+  *Verified: five presses in a row against the launcher's real handler produce five distinct
+  files on disk; path traversal is stripped; and client-side, five presses request zero
+  browser downloads with the launcher present, five without it.*
+
 - 🧪 **Make PIC take an actual screenshot, which is what was asked for.**
   Two rounds of fixing the wrong thing. A canvas composite can only ever reach the video and
   the map — it cannot see the instrument bar, the control rail or the banners, and the

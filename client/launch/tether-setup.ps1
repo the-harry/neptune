@@ -175,38 +175,56 @@ Write-Host "`n[5/5] Auto-grant location to the dashboard (no prompt)" -Foregroun
 # This lives here rather than in neptune.ps1 because HKCU\Software\Policies is
 # ACL-protected: policy writes require elevation even in the user hive.
 $chromePol = "HKLM:\SOFTWARE\Policies\Google\Chrome"
-try {
-  $geoKey = "$chromePol\GeolocationAllowedForUrls"
-  if (-not (Test-Path $geoKey)) { New-Item -Path $geoKey -Force | Out-Null }
-  foreach ($v in (Get-Item $geoKey).Property) { Remove-ItemProperty -Path $geoKey -Name $v -ErrorAction SilentlyContinue }
-  # The PORT IS REQUIRED. A Chrome content-settings pattern with no port matches the
-  # scheme's DEFAULT port (80) - not "any port", which is what it looks like. Written
-  # as bare "http://localhost" the policy silently never matched http://localhost:8080
-  # and the map prompted on every launch. Enumerate the launcher's whole port range
-  # (it advances from 8080 when a port is busy), for both loopback spellings.
-  $i = 0
-  foreach ($p in 8080..8091) {
-    foreach ($h in @("http://localhost:$p", "http://127.0.0.1:$p")) {
-      $i++
-      New-ItemProperty -Path $geoKey -Name "$i" -Value $h -PropertyType String -Force | Out-Null
+$edgePol   = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"
+
+# Chrome's content-settings URL-list policies all take the same shape: a numbered
+# list of origin patterns. Shared rather than copied per policy, because the one
+# thing that is easy to get wrong is the same in every copy:
+#
+#   THE PORT IS REQUIRED. A Chrome content-settings pattern with no port matches the
+#   scheme's DEFAULT port (80) - not "any port", which is what it looks like. Written
+#   as bare "http://localhost" the policy silently never matched http://localhost:8080
+#   and the map prompted on every launch.
+#
+# Enumerate the launcher's whole port range (it advances from 8080 when a port is
+# busy), for both loopback spellings.
+function Set-UrlListPolicy {
+  param([string]$Key, [string]$What)
+  try {
+    if (-not (Test-Path $Key)) { New-Item -Path $Key -Force | Out-Null }
+    foreach ($v in (Get-Item $Key).Property) { Remove-ItemProperty -Path $Key -Name $v -ErrorAction SilentlyContinue }
+    $i = 0
+    foreach ($p in 8080..8091) {
+      foreach ($h in @("http://localhost:$p", "http://127.0.0.1:$p")) {
+        $i++
+        New-ItemProperty -Path $Key -Name "$i" -Value $h -PropertyType String -Force | Out-Null
+      }
     }
+    return $i
+  } catch {
+    Nope "could not set $What ($($_.Exception.Message))"
+    return 0
   }
-  OK "Chrome will auto-allow location for localhost:8080-8091 ($i patterns)"
+}
+
+$n = Set-UrlListPolicy "$chromePol\GeolocationAllowedForUrls" "the Chrome geolocation policy"
+if ($n) {
+  OK "Chrome will auto-allow location for localhost:8080-8091 ($n patterns)"
   Info "scope is loopback only - the page we serve ourselves, nothing else"
-} catch { Nope "could not set the Chrome geolocation policy: $($_.Exception.Message)" }
+}
+
+# Chrome permits ONE automatic download per origin and then blocks the rest, storing
+# the decision (automatic_downloads=2) in the profile. PIC saves a still per press,
+# so the operator got exactly one file and then silence, with no visible prompt in an
+# --app window. The launcher now writes screen captures itself, but the composite
+# fallback still goes through the browser, so lift the block properly.
+$n = Set-UrlListPolicy "$chromePol\AutomaticDownloadsAllowedForUrls" "the Chrome downloads policy"
+if ($n) { OK "Chrome will allow repeat downloads from localhost:8080-8091 (PIC saves one per press)" }
+
 # Edge shares the Chromium policy schema, in case the launcher falls back to it.
-try {
-  $edgeKey = "HKLM:\SOFTWARE\Policies\Microsoft\Edge\GeolocationAllowedForUrls"
-  if (-not (Test-Path $edgeKey)) { New-Item -Path $edgeKey -Force | Out-Null }
-  $j = 0
-  foreach ($p in 8080..8091) {
-    foreach ($h in @("http://localhost:$p", "http://127.0.0.1:$p")) {
-      $j++
-      New-ItemProperty -Path $edgeKey -Name "$j" -Value $h -PropertyType String -Force | Out-Null
-    }
-  }
-  Info "same policy applied to Edge (fallback browser)"
-} catch { }
+[void](Set-UrlListPolicy "$edgePol\GeolocationAllowedForUrls" "the Edge geolocation policy")
+[void](Set-UrlListPolicy "$edgePol\AutomaticDownloadsAllowedForUrls" "the Edge downloads policy")
+Info "same policies applied to Edge (fallback browser)"
 
 Write-Host "`n---- result ----" -ForegroundColor Magenta
 if ($nic) {
