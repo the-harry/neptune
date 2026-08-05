@@ -308,7 +308,7 @@ now (`preferSharpTiles`), so a coarse tile is never upscaled when a finer one ex
 > and that is what this does. Downloading an offline area caches whatever that mosaic
 > currently holds for the bbox.
 
-The **ROG Ally paddles zoom the map**: `F9` in, `F10` out (`CONFIG.map.zoomKeys`), and
+The **ROG Ally paddles zoom the map**: `F10` in, `F9` out (`CONFIG.map.zoomKeys`), and
 they zoom whichever view is on screen — the radar has its own scale, so zooming the big
 map from the collapsed view would look like a dead control.
 
