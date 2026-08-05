@@ -74,3 +74,32 @@ adjustment-on-output, readiness checklist, offline area-extractor graceful failu
 - Install the **`pmtiles`** binary during bootstrap for area extraction (`NAV_PMTILES_SRC` =
   the world build URL). Not needed at dive time.
 - Wire `RealSensorSource` (BNO085 / MS5837 / spool encoder) — `TODO(hardware)` in `sensors.py`.
+
+## Automatic navigation log (safety)
+
+**Every session is logged, unasked.** A dive nobody remembered to start recording is
+exactly the dive you needed afterwards, so `NavService` opens a log the moment an
+origin exists — no `POST /api/nav/dive/start` required. Disable only for bench work
+with `NAV_AUTOLOG=0`.
+
+**The record is the journal, not the GeoJSON.** Each dive writes two files into
+`dives_dir`:
+
+| File | What | When |
+|---|---|---|
+| `dive-<ts>.jsonl` | append-only, one line per sample | **as it happens** |
+| `dive-<ts>.geojson` | finished track, origin-adjusted | on stop |
+
+That split is the point. Previously samples lived only in memory and were written
+once, by `stop_dive()` — so a crash, a power cut or a killed process lost the entire
+track. The `.jsonl` is flushed per line and `fsync`'d every few seconds, which bounds
+the worst case to that window rather than the whole dive.
+
+**Unfinished dives are recovered on the next start.** A `.jsonl` with no matching
+`.geojson` means the process died mid-dive, so `_recover_orphans()` rebuilds the
+GeoJSON from it and marks `properties.recovered = true`. The parser deliberately
+tolerates a truncated final line — a journal from a crash almost always ends
+mid-write, and that must not cost the rest of the dive.
+
+Logging never blocks navigation: a full disk or an unwritable path drops the journal
+and logs a warning, and the vehicle carries on.

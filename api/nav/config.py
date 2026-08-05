@@ -19,6 +19,12 @@ def _i(env, d):
 def _s(env, d):
     return os.environ.get(env, d)
 
+def _b(env, d):
+    v = os.environ.get(env)
+    if v is None:
+        return d
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
 
 # WGS84 for the flat-earth approximation (spec §5.2). Exact enough at pond/canal scale.
 EARTH_R = 6378137.0
@@ -44,6 +50,10 @@ class NavSettings:
     data_dir: Path = field(default_factory=lambda: Path(_s("NAV_DATA_DIR", str(_ROOT / "data"))))
     areas_dir: Path = field(default_factory=lambda: Path(_s("NAV_AREAS_DIR", str(_ROOT / "data" / "areas"))))
     dives_dir: Path = field(default_factory=lambda: Path(_s("NAV_DIVES_DIR", str(_ROOT / "data" / "dives"))))
+    # SAFETY: log every session automatically. A navigation record is not an opt-in
+    # feature - the dive you forgot to start recording is the one you needed. Set
+    # NAV_AUTOLOG=0 only for bench work where the noise is unwanted.
+    autolog: bool = field(default_factory=lambda: _b("NAV_AUTOLOG", True))
     speed_lut_dir: Path = field(default_factory=lambda: Path(_s("NAV_LUT_DIR", str(_ROOT / "data" / "speed_luts"))))
 
     # --- pmtiles extractor (legacy vector path §6.1) — a separate binary; may be absent ---

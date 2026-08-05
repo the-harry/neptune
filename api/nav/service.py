@@ -43,8 +43,34 @@ class NavService:
     async def start(self) -> None:
         for d in (settings.data_dir, settings.areas_dir, settings.dives_dir, settings.speed_lut_dir):
             d.mkdir(parents=True, exist_ok=True)
+        self._recover_orphans()
         self._task = asyncio.create_task(self._loop())
-        log.info("nav service started (sensors=%s)", "sim" if self.sensors.is_sim else "real")
+        log.info("nav service started (sensors=%s, autolog=%s)",
+                 "sim" if self.sensors.is_sim else "real", settings.autolog)
+
+    def _recover_orphans(self) -> None:
+        """Turn journals with no finished GeoJSON into readable dives.
+
+        A .jsonl with no matching .geojson means the process died mid-dive - a crash,
+        a power cut, a pulled plug. That is precisely the dive worth keeping, so it is
+        rebuilt on the next start rather than left as an unreadable fragment.
+        """
+        try:
+            for jf in sorted(settings.dives_dir.glob("dive-*.jsonl")):
+                gf = jf.with_suffix(".geojson")
+                if gf.exists():
+                    continue
+                try:
+                    feat = _feature_from_journal(jf)
+                    if feat is None:
+                        continue
+                    gf.write_text(json.dumps(feat, indent=2))
+                    log.warning("recovered an unfinished dive from %s (%d samples)",
+                                jf.name, len(feat.get("samples", [])))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("could not recover %s: %s", jf.name, exc)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("dive recovery scan failed: %s", exc)
 
     async def stop(self) -> None:
         if self._task:
@@ -60,6 +86,14 @@ class NavService:
         bcast_every = max(1, round(settings.dr_hz / settings.broadcast_hz))
         i = 0
         while True:
+            # SAFETY: a navigation log is not something to remember to switch on. The
+            # moment an origin exists there is a position to record, so record it -
+            # unasked, every session. A dive nobody logged is a dive nobody can review.
+            if (settings.autolog and self.dive is None and self.origin is not None):
+                try:
+                    self.start_dive(auto=True)
+                except Exception as exc:  # noqa: BLE001 — never let logging stop navigation
+                    log.warning("auto dive log could not start: %s", exc)
             s = self.sensors.read(dt)
             if s is not None:
                 self.last_sample = s          # IMU heading/cal available even without a dive
@@ -84,16 +118,19 @@ class NavService:
     def set_origin(self, o: Origin) -> None:
         self.origin = o
 
-    def start_dive(self) -> str:
+    def start_dive(self, auto: bool = False) -> str:
         if not self.origin:
             raise ValueError("no origin set")
+        if self.dive is not None:                 # an explicit start supersedes the auto log
+            self.stop_dive()
         dive_id = "dive-" + time.strftime("%Y%m%d-%H%M%S")
         self.sensors.reset()
         self.dr = DeadReckoner(self.origin, self.speed_lut, self.flow,
                                centreline_lonlat=self.centreline)
         self.dive = DiveLog(dive_id, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                            self.origin, self.speed_lut.id, self.flow)
-        log.info("dive started: %s", dive_id)
+                            self.origin, self.speed_lut.id, self.flow,
+                            directory=settings.dives_dir, auto=auto)
+        log.info("dive started: %s%s", dive_id, " (automatic)" if auto else "")
         return dive_id
 
     def stop_dive(self):
@@ -180,6 +217,53 @@ def _centreline_from_geojson(gj: dict) -> list[tuple[float, float]]:
 
 
 # ==========================================================================
+def _feature_from_journal(path):
+    """Rebuild a dive Feature from an append-only .jsonl journal.
+
+    Tolerant on purpose: the last line of a journal from a crashed process is very
+    often truncated mid-write, and that must not cost the whole dive. Bad lines are
+    skipped, everything readable is kept.
+    """
+    from .geo import to_latlon
+    header, samples = None, []
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:  # noqa: BLE001 — truncated tail; keep what we have
+                continue
+            kind = rec.get("type")
+            if kind == "header":
+                header = rec
+            elif kind == "s":
+                samples.append(rec)
+    if header is None or not samples:
+        return None
+    o = header.get("origin") or {}
+    olat, olon = o.get("lat"), o.get("lon")
+    coords, out = [], []
+    for smp in samples:
+        if olat is not None and olon is not None:
+            lat, lon = to_latlon(smp.get("x", 0.0), smp.get("y", 0.0), olat, olon)
+            coords.append([round(lon, 7), round(lat, 7)])
+        out.append({"t": smp.get("t"), "depth_m": smp.get("depth_m"),
+                    "heading_deg": smp.get("heading_deg"),
+                    "snapped": smp.get("snapped"), "confidence": smp.get("confidence")})
+    return {
+        "type": "Feature",
+        "properties": {
+            "dive_id": header.get("dive_id"), "started_at": header.get("started_at"),
+            "speed_lut_id": header.get("speed_lut_id"), "auto": header.get("auto", False),
+            "recovered": True,          # this dive never got a clean stop
+            "samples": len(out),
+        },
+        "geometry": {"type": "LineString", "coordinates": coords},
+        "samples": out,
+    }
+
 def build_router(svc: NavService) -> APIRouter:
     r = APIRouter()
 
