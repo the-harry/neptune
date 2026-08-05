@@ -49,8 +49,12 @@ class NavService:
             d.mkdir(parents=True, exist_ok=True)
         self._recover_orphans()
         self._task = asyncio.create_task(self._loop())
-        log.info("nav service started (sensors=%s, autolog=%s)",
-                 "sim" if self.sensors.is_sim else "real", settings.autolog)
+        # Log the SOURCE and whether it is simulated separately. Collapsing them into
+        # one word printed "sensors=sim" while VehicleSensorSource was actually in use
+        # (is_sim is true whenever the vehicle hardware is mocked), which is exactly the
+        # confusion that hid the scripted-path bug for so long.
+        log.info("nav service started (source=%s, simulated=%s, autolog=%s)",
+                 type(self.sensors).__name__, self.sensors.is_sim, settings.autolog)
 
     def _recover_orphans(self) -> None:
         """Turn journals with no finished GeoJSON into readable dives.
