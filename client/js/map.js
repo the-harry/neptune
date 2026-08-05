@@ -34,10 +34,22 @@ const C = { grid:'rgba(180,107,255,0.13)', origin:'#ff8c1a', sub:'#b46bff',
 
 function navFetch(path, opts){ return fetch((state.httpBase||'') + path, opts); }
 
+/* Metres per pixel for whichever view is on screen. The radar never follows the big
+   map's zoom - that is the whole point of it being a glance instrument. */
+function curScale(){ return (MAP.expanded || MAP.blind) ? MAP.scale : MAP.radarScale; }
+
 function initMap(){
   MAP.panel = $('map-panel'); MAP.canvas = $('map-canvas'); MAP.radar = $('radar');
   if(!MAP.panel||!MAP.canvas) return;
-  MAP.ctx = MAP.canvas.getContext('2d'); MAP.scale = CONFIG.map.metersPerPixel; MAP.headingUp = CONFIG.map.headingUp;
+  MAP.ctx = MAP.canvas.getContext('2d');
+  // TWO scales, on purpose. The radar circle is a GLANCE instrument: it must mean the
+  // same thing every time you look at it, so it keeps its own fixed metres-per-pixel.
+  // The full-screen views (expanded, blind nav) are explorable and get the adjustable
+  // one. Sharing a single value meant zooming the big map silently rescaled the radar -
+  // and after blind nav gained zoom controls, that happened constantly.
+  MAP.scale = CONFIG.map.metersPerPixel;        // expanded / blind nav (zoomable)
+  MAP.radarScale = CONFIG.map.metersPerPixel;   // collapsed radar (fixed glance zoom)
+  MAP.headingUp = CONFIG.map.headingUp;
   document.documentElement.style.setProperty('--radar-px', (CONFIG.map.radarPx||200)+'px');
   resizeMap(); window.addEventListener('resize', resizeMap);
 
@@ -405,7 +417,7 @@ function fmtMeters(m){ return m>=1000 ? (Math.round(m/100)/10)+' km' : Math.roun
 function drawCanvas(){
   const ctx=MAP.ctx,w=MAP.canvas.width,h=MAP.canvas.height,dpr=MAP.dpr;
   ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle='#0c0118'; ctx.fillRect(0,0,w,h);
-  const cx=w/2,cy=h/2, ppm=dpr/MAP.scale;                  // device px per metre
+  const cx=w/2,cy=h/2, ppm=dpr/curScale();                 // device px per metre
   const headingUp = !MAP.expanded && MAP.headingUp;
   const rot = headingUp ? -MAP.hdg*Math.PI/180 : 0;
   const center = (MAP.viewLat!=null)? { lat:MAP.viewLat, lon:MAP.viewLon } : null;
@@ -414,14 +426,14 @@ function drawCanvas(){
 
   // 1) satellite imagery (§3)
   let drewTiles=false;
-  if(haveProj){ try{ drewTiles=drawTiles(ctx,w,h,center.lat,center.lon,MAP.scale,rot,dpr,MAP.activeArea); }catch(e){ LOG.warn('tiles:',e&&e.message); } }
+  if(haveProj){ try{ drewTiles=drawTiles(ctx,w,h,center.lat,center.lon,curScale(),rot,dpr,MAP.activeArea); }catch(e){ LOG.warn('tiles:',e&&e.message); } }
 
   // 2) readability tint over imagery (§5) — darker in the radar, lighter expanded
   if(drewTiles){ ctx.setTransform(1,0,0,1,0,0);
     ctx.fillStyle='rgba(6,2,16,'+(MAP.expanded?CONFIG.map.tintExpanded:CONFIG.map.tintCollapsed)+')'; ctx.fillRect(0,0,w,h); }
 
   // scale label (updates with zoom, §4)
-  const gm = niceMeters(52, 1/MAP.scale);
+  const gm = niceMeters(52, 1/curScale());
   const sc=$('radar-scale'); if(sc) sc.innerHTML=fmtMeters(gm).replace(' ','&nbsp;');
 
   // 3) reference grid (subordinate) — meter frame, rotated. Fainter over imagery.
