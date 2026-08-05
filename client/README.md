@@ -230,6 +230,35 @@ instruments — thrust, steering, video — fully live**. The map never captures
 gamepad/keyboard piloting input (handlers are scoped to the canvas; MapLibre, if ever
 vendored, is `keyboard:false`).
 
+## PIC takes two copies
+
+The camera's own JPEG goes to the SD card — which is inside the vehicle, in the water,
+on a card that has to be physically recovered. If the camera is flat, absent or
+unreachable there is no copy at all. So **PIC also grabs what the operator is looking
+at**, topside, into IndexedDB *and* as a file download.
+
+The two halves are independent (§3): a dead camera does not stop the local still, and a
+failed local save does not stop the camera. The toast reports each separately and never
+claims a copy that was not made.
+
+The frame source is the live video when there is one, and **the map otherwise** — in
+blind nav the map *is* the view, so a still of a black video element would be worse than
+nothing: it would look like the camera worked. That is also why PIC does something
+useful in **sim**, where there is no camera at all, so the whole path can be exercised
+on the bench.
+
+Telemetry travels with the image (time, depth, heading, pressure, ballast, pack volts,
+local x/y, origin, and whether it was taken in sim) — a still with no depth or heading is
+a holiday snap; the point is being able to place it in the dive afterwards.
+
+The id carries milliseconds because it is the IndexedDB key: at second resolution, two
+presses inside the same second silently overwrote each other.
+
+```js
+await NEPTUNE.stills()          // metadata for every still, newest first
+await NEPTUNE.openStill(id)     // pop one out of IndexedDB into a tab
+```
+
 ## Blackbox recorder (two-sided logging)
 
 `js/recorder.js` is the topside half of a two-sided flight recorder. It logs the

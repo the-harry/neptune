@@ -162,7 +162,7 @@ that belong to whatever is down, and keeps everything else live:
 |---|---|---|
 | **ROV link** (`/ws/control`) | vehicle commands rejected (they *never* queue) | map, radar, saved areas, dive logs, config, camera buttons |
 | **Video** (go2rtc WebRTC) | NO FEED overlay on the video panel only | everything else, including camera REC/PIC |
-| **Camera control** (WOLFANG CGI) | REC/PIC greyed | piloting, video, map |
+| **Camera control** (WOLFANG CGI) | REC greyed — **PIC still saves a topside still** | piloting, video, map |
 | **Nav** (`/ws/nav`) | no live track (needs an origin fix first) | piloting, video, camera |
 | **Internet** | no place search / new tile downloads | saved offline areas |
 

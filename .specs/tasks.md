@@ -23,6 +23,41 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
   *Verified on the Pi:* steer RIGHT `284.0 → 301.9`, steer LEFT `301.9 → 278.5`, straight
   `4.20 m` in `6.1 s`, auto dive log `dive-20260805-014654.jsonl` written unasked.
 
+## Top bar and stills
+
+- 🧪 **Stop the top-bar metrics rendering on top of each other.**
+  Twenty tiles were laid out `flex:1 1 0` — equal columns filling the bar. Each got 48px
+  whatever it held, `min-width:0` let the box shrink below its own text, and
+  `white-space:nowrap` spilled that text over its neighbours. Measured at 1280px: **13 of 20
+  tiles overflowed and 12 pairs of text collided** with live values. With `--` in every field
+  it looked fine, which is why it survived — it only breaks once the Pi is attached.
+  Tiles are content-sized now and cannot shrink. Also reclaimed width that carried no
+  information: `INCANDESCENT` (106px, introduced by the camera-defaults work) is abbreviated
+  in the HUD with the full value in the tooltip; the origin tile dropped `SET ` and its spaces,
+  which repeated what the tile's own label and colour already said; and the header ran *under*
+  the EXIT button, truncating the last tile. *Verified in Chrome: 20 tiles, one row, 0
+  collisions, 0 escaping the bar, with the worst-case value in every field simultaneously.*
+
+- 🧪 **PIC keeps a topside copy, so a camera you cannot recover is not the only copy.**
+  The camera's JPEG goes to an SD card inside a vehicle that is in the water, and with no
+  camera there was no still at all — so PIC did nothing in sim. It now also grabs the current
+  view into IndexedDB *and* as a file download, independently of the camera: either half can
+  fail without the other, and the toast reports each rather than claiming both. The frame comes
+  from the live video when there is one and **the map otherwise** — in blind nav the map *is*
+  the view, and a still of a black `<video>` would look like the camera worked. Telemetry
+  travels with the image so it can be placed in the dive afterwards.
+  Two bugs found while testing it: the local grab ran *after* the camera's ~2 s blocking
+  capture (saving a frame from well after the press), and second-resolution ids meant two
+  presses in the same second **silently overwrote each other**. *22/22 checks in a real
+  browser, with no camera present.*
+
+- 🧪 **Stop a version bump from hanging the boot.**
+  Adding the `stills` store raised the IndexedDB version, which introduces `onblocked`: an
+  older connection held open by a second window fires *neither* `onsuccess` nor `onerror`, and
+  `boot()` awaits `STORE.init()` — so the whole console never starts. Reproduced, then fixed:
+  every branch settles, a timeout backstops the rest, and `onversionchange` means this window
+  never blocks the next upgrade. Losing the database now costs persistence, not the dashboard.
+
 ## Camera configuration
 
 - 🧪 **Set the camera up for a dive, and stop `preflight()` reporting a check it never made.**

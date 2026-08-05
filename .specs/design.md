@@ -81,7 +81,7 @@ Six states are tracked separately, because on this vehicle they genuinely fail o
 | Internet | no search, no new tile downloads | saved offline areas |
 | ROV link | vehicle commands not transmitted | map, radar, areas, dives, config, camera buttons |
 | Video | NO FEED on the video panel | everything else |
-| Camera control | REC/PIC disabled | piloting, video, map |
+| Camera control | REC disabled; PIC still saves a topside still | piloting, video, map |
 | Nav | no live track | piloting, video, camera |
 | Vehicle | armed / idle / fault | — |
 
@@ -93,8 +93,9 @@ one blob whenever the Pi was unreachable.
 ### Two kinds of "down"
 - **`simulated`** — no vehicle link, but there *is* something to simulate. Tinted, **fully
   interactive**. The console must be flyable on the bench.
-- **`gated`** — genuinely unavailable, nothing to simulate (camera REC/PIC with no camera).
-  Disabled, because pretending would be a lie.
+- **`gated`** — genuinely unavailable, nothing to simulate (camera REC with no camera).
+  Disabled, because pretending would be a lie. PIC is deliberately *not* gated: it keeps a
+  topside copy that does not need the camera at all.
 
 ### Stale vs gone
 `STALE` means a brief gap on a **still-open socket** — bounded by `simFallbackMs` and
@@ -275,6 +276,46 @@ because a rebooted camera has a wrong clock (it has no RTC, and burns the clock 
 **AWB is the one conditional setting.** Water absorbs red first, so with no lamps the warmest
 preset counteracts the blue-green cast, and with the white LEDs on the same preset produces an
 orange one. It follows the vehicle's white-light state, reconciled on the next guard tick.
+
+### Stills (`client/js/camera.js`, `store.js`)
+PIC takes **two copies**, because the camera's own JPEG lands on an SD card inside a vehicle
+that is in the water, and if the camera is flat or absent there is no copy at all. The topside
+grab goes to IndexedDB *and* to a file download — the download is the copy that survives the
+browser profile being cleared, the IndexedDB copy is the one that survives the download being
+blocked, and the toast reports each independently rather than claiming both.
+
+The frame source is the live video when there is one and **the map otherwise**. In blind nav
+the map *is* the view, so capturing a black `<video>` would be actively misleading: it would
+look like the camera worked. This is also what makes PIC exercisable in sim.
+
+Two details that are not cosmetic:
+- **The local grab happens first.** The camera's capture blocks its single-threaded server for
+  ~2 s, so grabbing afterwards would save a frame from well after the moment PIC was pressed.
+- **The id carries milliseconds.** It is the IndexedDB key, and at second resolution two
+  presses inside the same second silently overwrote each other — losing an image in the
+  feature whose entire purpose is not losing images.
+
+### The store must never hang the boot
+`boot()` awaits `STORE.init()`, so a path that does not settle is a console that never starts.
+Adding the `stills` store raised the IndexedDB version, and a version bump introduces
+`onblocked`: an older connection held open by a second window (or a page left behind by a
+previous launch) blocks the upgrade and fires *neither* `onsuccess` nor `onerror`. Every branch
+now settles, a timeout backstops the rest, and the connection sets `onversionchange` so this
+window is never the one blocking the next upgrade. Losing the database costs persistence, not
+the dashboard.
+
+### The top bar sizes to its content
+Twenty metric tiles were laid out `flex:1 1 0` — equal columns filling the bar. Each got 48px
+whatever it held, `min-width:0` let the box shrink below its own text, and `white-space:nowrap`
+then spilled that text over its neighbours: 13 of 20 tiles overflowed with live values and the
+bar became unreadable exactly when it had something to say. With `--` in every field it looked
+fine, which is why it survived — the failure only appears once the Pi is attached.
+
+Tiles are content-sized now and cannot shrink. Three things were also costing width for no
+information: `INCANDESCENT` (106px — introduced by the camera defaults work), `SET ±65m · 3d`
+repeating what the tile's own label and colour already said, and a header that ran *under* the
+EXIT button. Measured at 1280px: 20 tiles, one row, zero collisions, with the worst-case values
+for every field simultaneously. If it ever does run out of width it wraps rather than overlaps.
 
 ### Wi-Fi power save on the camera link
 `wlan0` *is* the camera. Raspberry Pi OS enables Wi-Fi power management by default, the radio

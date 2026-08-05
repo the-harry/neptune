@@ -51,8 +51,10 @@ can rehearse and demonstrate.
 2. WHEN a control is driven with no link, THEN nothing SHALL be transmitted and nothing
    SHALL be queued for later.
 3. WHEN simulating, THEN the HUD SHALL say so unmistakably.
-4. WHEN a subsystem is genuinely unavailable with nothing to simulate (camera REC/PIC with no
+4. WHEN a subsystem is genuinely unavailable with nothing to simulate (camera REC with no
    camera), THEN those controls SHALL be disabled rather than pretend.
+5. A control that still does something useful without its subsystem SHALL NOT be disabled with
+   it — PIC keeps a topside still with no camera attached (see R5.4).
 
 ---
 
@@ -175,6 +177,23 @@ what the sub sees.
 3. Video SHALL reconnect by itself after a camera reconfiguration or a transient drop.
 4. Repeated reconnection SHALL NOT leak peer connections, sockets, timers or decoders.
 5. WHEN the camera is asleep or absent, THEN it SHALL rejoin automatically when powered on.
+
+### R5.4 — A still is kept topside, not only on the vehicle
+**As an** operator, **I want** PIC to keep a copy of the shot on the handheld, **so that** a
+camera I cannot recover, or never had, does not mean I have no picture.
+
+**Acceptance criteria**
+1. WHEN PIC is pressed, THEN a still SHALL be saved topside regardless of the camera.
+2. THE topside still and the camera's own SD copy SHALL be independent: either failing
+   SHALL NOT prevent the other, AND the result of each SHALL be reported separately.
+3. THE console SHALL NOT report a copy it did not make.
+4. WHEN there is no live feed, THEN the still SHALL be of the view actually in use (the map),
+   NOT a blank video frame.
+5. WHEN there is no camera at all (bench or simulation), THEN PIC SHALL still produce a real
+   image, so the path can be exercised without hardware.
+6. Each still SHALL carry the telemetry needed to place it in the dive afterwards.
+7. Two stills taken in quick succession SHALL BOTH be kept.
+8. PIC SHALL NOT be disabled because the camera is unavailable.
 
 ### R5.2 — Blind navigation
 **As an** operator, **I want** the map to take over when the camera dies, **so that** I can

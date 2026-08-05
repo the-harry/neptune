@@ -174,10 +174,16 @@ async function boot(forced){
   //   NEPTUNE.openMapper()    open the input remapper
   //   NEPTUNE.resetBindings() restore default input mapping
   window.NEPTUNE = {
-    state, LOG, CONFIG,
+    state, LOG, CONFIG, STORE, MAP,
     log:LOG.setEnabled, logRate:LOG.setHighRate,
     openMapper, closeMapper, resetBindings,
     connectVideo, camRecordToggle, camCapture,
+    // Topside stills taken by PIC. `stills()` lists metadata; `openStill(id)`
+    // pops one out of IndexedDB so a capture can be checked without a camera.
+    stills:()=>STORE.stills(),
+    openStill:async(id)=>{ const b=await STORE.stillBlob(id); if(!b) return null;
+                           window.open(URL.createObjectURL(b), '_blank'); return b; },
+    camUp, commandsBlocked,
     openOrigin:openOriginModal, openAreas:openAreaManager, requestLocation:requestDeviceLocation,
     REC, mark:(n)=>REC.mark(n), exportLog:()=>REC.exportLog(),
     get bindings(){ return state.bindings; }

@@ -482,8 +482,8 @@ body.map-expanded #area-select.on{display:flex}
 #origin-prompt .op-btn2:hover{background:color-mix(in srgb,var(--on-surface-variant) 14%,transparent)}
 
 /* ---- degradation indicator (§3): compact icons — internet · backend · vehicle ---- */
-#status-tri{display:flex;gap:7px;align-items:center;margin-right:8px;flex:0 0 auto}
-.st-ic{display:inline-flex;width:19px;height:19px}
+#status-tri{display:flex;gap:5px;align-items:center;margin-right:6px;flex:0 0 auto}
+.st-ic{display:inline-flex;width:17px;height:17px}
 .st-ic svg{width:100%;height:100%}
 .st-ic.ok  {color:var(--tertiary)}
 .st-ic.warn{color:var(--hazard);opacity:.85}
@@ -603,14 +603,30 @@ body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
 .sonar-tick{fill:var(--tertiary);opacity:.55;font-family:var(--font-sans);font-size:11px;font-weight:700;letter-spacing:.08em}
 .sonar-readout{display:flex;flex-direction:column;gap:6px;padding-bottom:8px}
 
-/* ---- top-bar metric tiles: equal-width columns filling the bar; label over value ---- */
-.metric{flex:1 1 0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1;gap:1px;min-width:0;padding:0 2px}
-.m-label{font-family:var(--font-sans);font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--on-surface-variant);text-transform:uppercase;white-space:nowrap}
-.m-val{font-family:var(--font-mono);font-size:16px;font-weight:600;color:var(--primary);white-space:nowrap}
+/* ---- top-bar metric tiles: sized to their CONTENT, label over value ----
+   This used to be `flex:1 1 0` - equal columns filling the bar. Twenty metrics in
+   953px gave every tile exactly 48px whatever it contained, `min-width:0` let the
+   box shrink below its own text, and `white-space:nowrap` then spilled that text
+   straight over the neighbours. 13 of 20 tiles overflowed with live values
+   ("14.7 PSI" needs 70px, "INCANDESCENT" 106px) and the bar became unreadable
+   exactly when it had something to say. With `--` in every field it looked fine,
+   which is why it survived: the failure only appears once the Pi is attached.
+
+   Tiles are now content-sized and cannot shrink, the row wraps to a second line if
+   it ever genuinely runs out of width, and the bar grows to fit rather than
+   overlapping. Type is a touch smaller so the common case stays on one line. */
+.metric{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.15;gap:1px;padding:0 2px}
+.m-label{font-family:var(--font-sans);font-size:9px;font-weight:700;letter-spacing:.03em;color:var(--on-surface-variant);text-transform:uppercase;white-space:nowrap}
+.m-val{font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--primary);white-space:nowrap}
 .m-val.rec{color:var(--error);animation:pulse 1s infinite}
-.m-sep{width:1px;height:30px;background:var(--outline-variant);opacity:.5;flex:0 0 auto;margin:0 2px}
-#leak-icon{display:inline-flex;width:28px;height:28px;flex:0 0 auto}
-#leak-icon svg{width:28px;height:28px}
+.m-sep{width:1px;height:28px;background:var(--outline-variant);opacity:.5;flex:0 0 auto;margin:0 1px}
+/* The bar grows rather than overlapping. `h-16` pins it to 64px, which is right for
+   the normal single row, but a fixed height plus nowrap tiles has only one way to
+   fail - on top of itself. min-height keeps the usual look; wrap + auto height mean
+   an unusually long set of readings costs a second row instead of legibility. */
+#topbar{height:auto;min-height:64px;flex-wrap:wrap;row-gap:2px}
+#leak-icon{display:inline-flex;width:24px;height:24px;flex:0 0 auto}
+#leak-icon svg{width:24px;height:24px}
 
 /* ---- flex utilities (used by the viewport-fitting rail) ---- */
 .flex-1{flex:1 1 0%}

@@ -298,10 +298,14 @@ function renderOriginTile(){
   const ageMs  = MAP.origin.t ? (Date.now() - MAP.origin.t) : 0;
   const ageH   = ageMs / 3600000;
   const staleH = CONFIG.map.originStaleH || 8;
-  const acc    = 'SET ±'+Math.round(MAP.origin.accuracy)+'m';
+  // Kept short on purpose: the tile's own label already says ORIGIN, and the colour
+  // already says fresh/stale, so "SET " and the spaces were 38px of the top bar
+  // spent repeating what is next to them - enough to push a tile onto a second row.
+  // The full sentence stays in the tooltip.
+  const acc    = '±'+Math.round(MAP.origin.accuracy)+'m';
   if(ageH >= staleH){
     const age = ageH >= 48 ? Math.round(ageH/24)+'d' : Math.round(ageH)+'h';
-    el.textContent = acc+' · '+age;
+    el.textContent = acc+'·'+age;
     el.style.color = 'var(--hazard)';
     if(tile) tile.title='Origin was set '+age+' ago, possibly at another site. '+
                         'Tap to re-set it to where you are now.';

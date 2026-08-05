@@ -102,7 +102,8 @@ const CONFIG = {
     webrtcWs:     '/go2rtc/api/ws',        // go2rtc WebRTC signaling (nginx-proxied)
     stream:       'sub',                   // go2rtc stream name (go2rtc.yaml)
     statusPollMs: 5000,                    // REST /api/status poll (backup to the WS)
-    videoRetryMs: 2500                     // WebRTC reconnect backoff floor (§7.4 self-heal)
+    videoRetryMs: 2500,                    // WebRTC reconnect backoff floor (§7.4 self-heal)
+    stillQuality: 0.92                     // topside PIC copy: JPEG quality (0-1)
   },
 
   /* ---- BLACKBOX client recorder (logging addendum) ----------------------- */

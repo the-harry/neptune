@@ -10,16 +10,57 @@
    ============================================================================ */
 const STORE = { db:null, ready:false, TILE_CACHE:'neptune-tiles' };
 
+/* boot() AWAITS this, so a path that never settles is a dashboard that never
+   starts. That is not hypothetical: raising the version to add `stills` means an
+   older connection held open by a second tab (or a stale page left behind by a
+   previous launch) BLOCKS the upgrade, and `onblocked` fires instead of
+   `onsuccess`/`onerror`. With no handler the promise hangs forever and the whole
+   console is dead — worse than losing persistence.
+
+   So: every branch settles, there is a timeout backstop for the ones that are
+   "impossible", and losing the database only costs persistence. If a block later
+   clears, `onsuccess` still runs and storage quietly comes back. */
 STORE.init = function(){
   return new Promise((resolve)=>{
-    let req; try{ req=indexedDB.open('neptune-store', 1); }catch(e){ resolve(false); return; }
+    let settled = false;
+    const finish = (ok, why)=>{
+      if(settled) return;
+      settled = true;
+      if(why && typeof console !== 'undefined') console.warn('[store] ' + why);
+      resolve(ok);
+    };
+    const guard = setTimeout(()=>finish(false,
+      'IndexedDB did not answer — running without persistence'), 4000);
+    let req;
+    try{ req=indexedDB.open('neptune-store', 2); }
+    catch(e){ clearTimeout(guard); finish(false, 'IndexedDB unavailable: '+(e.message||e)); return; }
+    // Another tab is holding an older version open. Do not make the operator wait
+    // on it: come up now, without storage, and say why.
+    req.onblocked = ()=>finish(false,
+      'database upgrade blocked by another Neptune window — close it and reload to restore saving');
     req.onupgradeneeded = ()=>{ const db=req.result;
       if(!db.objectStoreNames.contains('kv'))    db.createObjectStore('kv',    {keyPath:'k'});
       if(!db.objectStoreNames.contains('areas')) db.createObjectStore('areas', {keyPath:'name'});
       if(!db.objectStoreNames.contains('dives')) db.createObjectStore('dives', {keyPath:'id'});
+      // v2: stills. The camera writes its own copy to its SD card, which is on the
+      // vehicle, in the water, on a card that has to be recovered - and in sim there
+      // is no camera at all. This is the copy that exists topside either way.
+      if(!db.objectStoreNames.contains('stills')) db.createObjectStore('stills', {keyPath:'id'});
     };
-    req.onsuccess = ()=>{ STORE.db=req.result; STORE.ready=true; resolve(true); };
-    req.onerror   = ()=>resolve(false);
+    req.onsuccess = ()=>{
+      clearTimeout(guard);
+      STORE.db=req.result; STORE.ready=true;
+      // Be the tab that yields. Without this WE become the stale connection that
+      // blocks the next version bump, and the operator gets a console that will
+      // not start until they find and close this window.
+      STORE.db.onversionchange = ()=>{
+        try{ STORE.db.close(); }catch(e){}
+        STORE.db=null; STORE.ready=false;
+        if(typeof console !== 'undefined') console.warn('[store] closed for an upgrade in another window');
+      };
+      finish(true);
+    };
+    req.onerror = ()=>{ clearTimeout(guard); finish(false, 'IndexedDB open failed — running without persistence'); };
   });
 };
 function _tx(store, mode){ return STORE.db.transaction(store, mode).objectStore(store); }
@@ -38,6 +79,19 @@ STORE.areaDelete = async function(name){ if(!STORE.db) return false; await _p(()
 STORE.dives = async function(){ if(!STORE.db) return []; return (await _p(()=>_tx('dives','readonly').getAll()))||[]; };
 STORE.divePut = async function(d){ if(!STORE.db) return false; await _p(()=>_tx('dives','readwrite').put(d)); return true; };
 STORE.diveDelete = async function(id){ if(!STORE.db) return false; await _p(()=>_tx('dives','readwrite').delete(id)); return true; };
+
+/* ---- stills (client-owned; the topside copy of every PIC) ----
+   The blob lives in the record. Listing them all would drag every image into
+   memory, so `stills()` returns METADATA only and `stillBlob()` fetches one. */
+STORE.stillPut = async function(rec){ if(!STORE.db) return false; await _p(()=>_tx('stills','readwrite').put(rec)); return true; };
+STORE.stills = async function(){
+  if(!STORE.db) return [];
+  const all = (await _p(()=>_tx('stills','readonly').getAll())) || [];
+  return all.map(({blob, ...meta})=>({...meta, bytes: blob ? blob.size : 0}))
+            .sort((a,b)=> (b.t||0) - (a.t||0));
+};
+STORE.stillBlob = async function(id){ if(!STORE.db) return null; const r=await _p(()=>_tx('stills','readonly').get(id)); return r ? r.blob : null; };
+STORE.stillDelete = async function(id){ if(!STORE.db) return false; await _p(()=>_tx('stills','readwrite').delete(id)); return true; };
 
 /* ---- Cache API: the offline satellite archive ---- */
 function _providerTmpl(){ return ((CONFIG.map.tileProviders||{}).esri||{}).url || ''; }

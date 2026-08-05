@@ -102,7 +102,7 @@ function renderCam(){
   const sd = $('cam-sd'); if(sd){ sd.textContent = c.sd || '--'; sd.style.color = c.sd==='READY' ? 'var(--tertiary)' : (c.sd ? 'var(--error)' : ''); }
   // live camera settings (mode-dependent: still res in CAMERA, video res otherwise)
   const q = $('cam-quality'); if(q) q.textContent = (c.mode==='CAMERA' ? c.imageRes : c.videoRes) || '--';
-  const wb = $('cam-awb'); if(wb) wb.textContent = c.awb || '--';
+  const wb = $('cam-awb'); if(wb){ wb.textContent = shortAwb(c.awb); wb.title = c.awb || ''; }
   const ev = $('cam-ev'); if(ev) ev.textContent = c.ev || '--';
   const rem = $('cam-remaining'); if(rem) rem.textContent = (c.remaining!=null ? c.remaining : '--');
   const md = $('cam-mode'); if(md) md.textContent = c.mode || '--';
@@ -113,6 +113,19 @@ function renderCam(){
     if(msg){ warn.textContent = '⚠ ' + msg; warn.classList.add('show'); }
     else warn.classList.remove('show');
   }
+}
+
+/* The HUD is a glance instrument on a 7in handheld: the top bar has ~48px per
+   metric, and "INCANDESCENT" needs 106px, which pushed its neighbours' text into
+   each other. Abbreviate for display only - the full value stays in the tooltip,
+   and nothing here changes what is sent to the camera. */
+const AWB_SHORT = {
+  INCANDESCENT:'INCAND', FLUORESCENT1:'FLUOR1', FLUORESCENT2:'FLUOR2',
+  FLUORESCENT3:'FLUOR3', DAYLIGHT:'DAY', CLOUDY:'CLOUD', AUTO:'AUTO',
+};
+function shortAwb(v){
+  if(!v) return '--';
+  return AWB_SHORT[String(v).toUpperCase()] || v;
 }
 
 /* ---- commands (in-dive allowed): record toggle + capture ---------------- */
@@ -130,16 +143,121 @@ async function camRecordToggle(){
   }catch(e){ camToast('Record failed: '+(e.message||e), 'bad'); }
   finally{ if(btn) btn.disabled = false; }
 }
+/* ---- stills: two copies, taken independently ----------------------------
+   The camera's own JPEG goes to the SD card, which is inside the vehicle, in the
+   water, on a card that has to be physically recovered - and if the camera is
+   flat, absent or unreachable there is no copy at all. So PIC also grabs what the
+   operator is looking at, topside, and keeps it here.
+
+   The two halves are deliberately independent (rule 3): a dead camera must not
+   stop the local still, and a full disk must not stop the camera. Each reports
+   its own outcome, and the toast never claims a copy that was not made.
+
+   It also means PIC does something useful in SIM, where there is no camera at
+   all - the frame source falls back to the map, so a bench run still produces a
+   real image to test against. */
+/* Milliseconds are not decoration. The id is the IndexedDB key, so two presses
+   inside the same second produced the same key and the second one SILENTLY
+   OVERWROTE the first — losing an image in the feature whose entire purpose is
+   not losing images. */
+function stampName(t){
+  const d = new Date(t), p = n => String(n).padStart(2, '0');
+  return `neptune-${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}`
+       + `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+       + `-${String(d.getMilliseconds()).padStart(3, '0')}`;
+}
+
+/* What the operator is actually looking at, in priority order. In blind nav the
+   map IS the view, so a still of a black video element would be worse than
+   useless - it would look like the camera worked. */
+function grabSource(){
+  const v = $('video-feed');
+  if(v && v.videoWidth > 0 && v.videoHeight > 0 && state.video === 'live')
+    return { el:v, w:v.videoWidth, h:v.videoHeight, source:'video' };
+  const c = (typeof MAP !== 'undefined') && MAP.canvas;
+  if(c && c.width > 0 && c.height > 0)
+    return { el:c, w:c.width, h:c.height, source:'map' };
+  return null;
+}
+
+async function captureLocalStill(t){
+  const src = grabSource();
+  if(!src) return { ok:false, why:'nothing to capture (no live feed, no map)' };
+  let blob;
+  try{
+    const cv = document.createElement('canvas');
+    cv.width = src.w; cv.height = src.h;
+    cv.getContext('2d').drawImage(src.el, 0, 0, src.w, src.h);
+    blob = await new Promise(res => cv.toBlob(res, 'image/jpeg', CONFIG.camera.stillQuality || 0.92));
+  }catch(e){ return { ok:false, why:'could not read the frame: '+(e.message||e) }; }
+  if(!blob) return { ok:false, why:'encoder returned nothing' };
+
+  // Telemetry travels WITH the image. A still with no depth or heading is a
+  // holiday snap; the point is being able to place it in the dive afterwards.
+  const rec = {
+    id: stampName(t) + '-' + (src.source === 'map' ? 'map' : 'cam'),
+    t, source: src.source, w: src.w, h: src.h, blob,
+    sim: (typeof commandsBlocked === 'function') ? commandsBlocked() : null,
+    depth: state.depth, heading: state.heading, pressure: state.pressure,
+    ballast: state.ballastLevel, batteryV: state.batteryV,
+    x: (typeof MAP !== 'undefined') ? MAP.x : null,
+    y: (typeof MAP !== 'undefined') ? MAP.y : null,
+    origin: (typeof MAP !== 'undefined' && MAP.hasOrigin) ? MAP.origin : null,
+  };
+  const stored = await STORE.stillPut(rec);
+
+  // Also put a real FILE on disk - the whole point is a second copy, and one that
+  // survives the browser profile being cleared. Best effort: if the download is
+  // blocked the IndexedDB copy above still exists, and the toast says which.
+  let downloaded = false;
+  try{
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = rec.id + '.jpg';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 30000);
+    downloaded = true;
+  }catch(e){ /* stays in IndexedDB only */ }
+
+  return { ok: stored || downloaded, rec, stored, downloaded,
+           why: (!stored && !downloaded) ? 'could not store or download the image' : '' };
+}
+
 async function camCapture(){
   const btn = $('cam-capture'); if(btn) btn.disabled = true;
+  const t = Date.now();
+  const notes = [];
   try{
-    const r = await camApi('/api/capture', {method:'POST'});
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    const f = await r.json();
-    camToast(f && f.name ? 'Captured '+f.name.split('/').pop() : 'Capture sent', 'ok');
-    LOG.cmd('camera capture ->', f);
-  }catch(e){ camToast('Capture failed: '+(e.message||e), 'bad'); }
-  finally{ if(btn) btn.disabled = false; }
+    // LOCAL first: it is the copy that always works, and doing it first means the
+    // frame matches the moment PIC was pressed rather than whatever is on screen
+    // ~2s later, after the camera's very slow capture has blocked the stream.
+    let local;
+    try{ local = await captureLocalStill(t); }
+    catch(e){ local = { ok:false, why:(e.message||String(e)) }; }
+    if(local.ok) notes.push('saved locally' + (local.downloaded ? '' : ' (in-app only)'));
+    else         notes.push('local save failed: ' + local.why);
+    if(local.rec) LOG.cmd('still saved ->', {id:local.rec.id, source:local.rec.source,
+                                             stored:local.stored, downloaded:local.downloaded});
+
+    // CAMERA second, and only if there is one. In sim this is skipped entirely
+    // rather than reported as a failure - there is no camera to fail.
+    if(typeof camUp === 'function' && !camUp()){
+      notes.push('no camera (SD copy skipped)');
+      camToast('PIC · ' + notes.join(' · '), local.ok ? 'warn' : 'bad');
+      return;
+    }
+    try{
+      const r = await camApi('/api/capture', {method:'POST'});
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      const f = await r.json();
+      notes.push(f && f.name ? 'SD: '+f.name.split('/').pop() : 'SD copy sent');
+      LOG.cmd('camera capture ->', f);
+      camToast('PIC · ' + notes.join(' · '), local.ok ? 'ok' : 'warn');
+    }catch(e){
+      notes.push('SD copy failed: '+(e.message||e));
+      camToast('PIC · ' + notes.join(' · '), local.ok ? 'warn' : 'bad');
+    }
+  }finally{ if(btn) btn.disabled = false; }
 }
 
 /* ---- mode-gated config panel (driven by cammenu.xml) -------------------- */

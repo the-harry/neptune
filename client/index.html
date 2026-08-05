@@ -29,7 +29,7 @@
 </div>
 
 <!-- TOP APP BAR -->
-<header class="fixed top-0 left-0 h-16 flex justify-between items-center px-edge-margin z-50 bg-surface/30 backdrop-blur-lg border-b border-white/10" style="right:110px">
+<header id="topbar" class="fixed top-0 left-0 h-16 flex justify-between items-center px-edge-margin z-50 bg-surface/30 backdrop-blur-lg border-b border-white/10" style="right:156px">
 <!-- Degradation model (§3): every subsystem fails independently, so each gets its own icon
      (internet · ROV link · video · camera control · vehicle). Hover for the live state. -->
 <div id="status-tri">
@@ -82,7 +82,7 @@
 <span class="cam-rec-txt font-label-caps text-[10px]">OFF</span>
 </button>
 <!-- STILL (picture) -->
-<button id="cam-capture" data-needs="cam" class="w-full py-1.5 rounded border-2 btn-photo flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="Capture still">
+<button id="cam-capture" class="w-full py-1.5 rounded border-2 btn-photo flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="Capture a still: saved topside, and to the camera SD card when there is a camera">
 <span class="material-symbols-outlined"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>
 <span class="font-label-caps text-[10px]">PIC</span>
 </button>
