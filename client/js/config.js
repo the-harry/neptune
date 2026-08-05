@@ -65,6 +65,12 @@ const CONFIG = {
     // since nothing can re-acquire it in the field without internet.
     originStaleH:   8,
     autoOrigin:     true,        // §2 — auto-request the handheld's location on load when no origin is set
+    // Keep the handheld's OWN position live (watchPosition), not just a fix on load.
+    // The marker is always live; the launch point follows it only until a dive starts,
+    // because moving the dead-reckoning datum mid-dive would shift the whole track.
+    followMe:       true,
+    meMinMoveM:     3,           // below this it is GPS jitter, not the operator walking
+    meMinGapMs:     5000,        // and never rewrite the stored origin faster than this
     // BLIND NAV — when the camera feed is gone, promote the map to the primary view so
     // the sub can still be driven on instruments instead of a black rectangle. This is
     // NOT the expanded map: that engages all-stop (a planning view), whereas this is a

@@ -143,6 +143,8 @@ async function autoRequestOrigin(){
       } }
   }catch(e){}
 
+  maybeStartLocationWatch();                       // keep the handheld's position live from here on
+
   if(!stored){ requestDeviceLocation(); return; }   // nothing saved - ask, as before
 
   // A stored origin renders immediately so the map works offline and instantly, but it
@@ -241,6 +243,9 @@ function requestDeviceLocation(){
       setOrigin(body).then(ok=>{
         if(ok===false){ showOriginFallback({message:'could not store the fix'}); return; }
         if(typeof MAP!=='undefined'){ MAP.x=0; MAP.y=0; }   // origin is the local frame's (0,0) — centre there
+        // The permission was just granted on a real gesture, which is the one moment
+        // Chrome will persist it — so start following from here without a reload.
+        maybeStartLocationWatch();
         if(p.coords.accuracy>(CONFIG.map.originRefineM||30)) offerRefine(p.coords.accuracy);
         else hideOriginPrompt();
       });
@@ -249,6 +254,76 @@ function requestDeviceLocation(){
     {enableHighAccuracy:true, timeout:15000, maximumAge:0}
   );
 }
+/* ---- The handheld's own position, kept LIVE --------------------------------
+   A fix taken once on load is wrong the moment the operator walks the bank looking
+   for somewhere to put in — which is exactly when the reachable circle matters most.
+   watchPosition keeps it current, like any other map application.
+
+   Two things move, and they are NOT the same thing:
+
+     MAP.me      where the handheld is now. Always live. It is the tether anchor,
+                 because the cable is held by whoever is holding this.
+     MAP.origin  the datum the sub is dead-reckoned FROM. Fixed during a dive.
+
+   The origin can only follow while no track exists — before launch. Moving the datum
+   mid-dive would shift every coordinate already plotted, so the sub would appear to
+   jump sideways for no reason and the recorded track would be a lie. After launch the
+   datum is frozen and the live marker simply diverges from it, which is the truth: you
+   walked, the sub did not.
+
+   Never prompts. watchPosition is only started once the permission is already granted,
+   so this can never put a dialog in front of an operator mid-dive. */
+let _geoWatch = null, _lastOriginWriteAt = 0;
+function maybeStartLocationWatch(){
+  if(_geoWatch !== null) return;
+  if(!CONFIG.map.followMe || state._fileSim) return;
+  if(!('geolocation' in navigator) || !window.isSecureContext) return;
+  const start=()=>{
+    if(_geoWatch !== null) return;
+    _geoWatch = navigator.geolocation.watchPosition(onLiveFix,
+      err=>LOG.map('live position watch: '+((err&&err.message)||'?')),
+      { enableHighAccuracy:true, timeout:20000, maximumAge:2000 });
+    LOG.map('live position watch started — the launch point follows the handheld until a dive begins');
+  };
+  if(!navigator.permissions){ return; }         // cannot check → do not risk a prompt
+  navigator.permissions.query({name:'geolocation'})
+    .then(st=>{
+      if(st.state==='granted') start();
+      // If it is granted later (the operator taps ORIGIN once), pick it up without a reload.
+      try{ st.onchange = ()=>{ if(st.state==='granted') start(); }; }catch(e){}
+    })
+    .catch(()=>{});
+}
+function stopLocationWatch(){
+  if(_geoWatch===null) return;
+  try{ navigator.geolocation.clearWatch(_geoWatch); }catch(e){}
+  _geoWatch=null;
+}
+function onLiveFix(p){
+  if(typeof MAP==='undefined') return;
+  const lat=p.coords.latitude, lon=p.coords.longitude, acc=p.coords.accuracy;
+  MAP.me = { lat, lon, acc, t:Date.now() };        // the marker is live unconditionally
+
+  if(!MAP.hasOrigin) return;                       // nothing to compare against yet
+  if(MAP.track.length > 0) return;                 // DIVING: the datum is frozen, deliberately
+  if(MAP.originTap) return;                        // operator is placing it by hand — don't fight them
+
+  const rel = toLocal(lat, lon, MAP.origin.lat, MAP.origin.lon);
+  const d   = Math.hypot(rel.x, rel.y);
+  if(d < (CONFIG.map.meMinMoveM || 3)) return;                 // GPS jitter, not walking
+  if(d > (CONFIG.map.originMoveM || 150)) return;              // a different site gets the explicit prompt
+  const storedAcc = (typeof MAP.origin.accuracy==='number') ? MAP.origin.accuracy : 1e9;
+  if(acc > storedAcc + 5) return;                              // never downgrade a good fix
+  const now = Date.now();
+  if(now - _lastOriginWriteAt < (CONFIG.map.meMinGapMs || 5000)) return;   // bound the writes
+  _lastOriginWriteAt = now;
+
+  // _override: this path is automatic, so it must never raise the accuracy confirm.
+  setOrigin({ lat, lon, accuracy:acc, source:'device-live', t:now, _override:true })
+    .then(ok=>{ if(ok!==false){ MAP.x=0; MAP.y=0;            // still at the launch point
+                                LOG.map('launch point moved with the handheld ('+Math.round(d)+' m)'); } });
+}
+
 function offerRefine(accuracy){
   // non-blocking: the operator can see which bank they're on — a tap beats WiFi positioning (§2)
   showOriginPrompt('ORIGIN ±'+Math.round(accuracy)+' m (WiFi)',

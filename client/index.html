@@ -183,8 +183,13 @@
     <line id="sonar-vec" class="sonar-vec" x1="0" y1="0" x2="0" y2="0"></line>
     <circle id="sonar-dot" class="sonar-dot" cx="0" cy="0" r="7"></circle>
     <circle class="sonar-center" r="2.5"></circle>
-    <text class="sonar-tick" x="0" y="-58" text-anchor="middle">FWD</text>
-    <text class="sonar-tick" x="0" y="70" text-anchor="middle">REV</text>
+    <!-- How much input is going each way, 0-100, one number per direction. Replaces the
+         FWD/REV labels: the numbers say the same thing and say how much. Dim at rest so
+         the dial stays clean, lit on the side actually being driven. -->
+    <text id="in-fwd" class="sonar-num" x="0" y="-70" text-anchor="middle">0</text>
+    <text id="in-rev" class="sonar-num" x="0" y="80" text-anchor="middle">0</text>
+    <text id="in-right" class="sonar-num" x="76" y="5" text-anchor="middle">0</text>
+    <text id="in-left" class="sonar-num" x="-76" y="5" text-anchor="middle">0</text>
     <!-- North indicator sits at the ring edge (radially clear of FWD, which is inset) -->
     <g id="radar-north"><line class="radar-n-tick" x1="0" y1="-92" x2="0" y2="-84"></line><text class="radar-n" x="0" y="-77" text-anchor="middle">N</text></g>
   </svg>
@@ -196,9 +201,9 @@
 </div>
 <div id="radar-scale" class="radar-scale">10&nbsp;m</div>
 </div>
+<!-- Throttle/steer used to be spelled out here too. The dial now carries them as the
+     four directional numbers, so this keeps only what the dial cannot show. -->
 <div class="sonar-readout">
-<div class="metric" style="align-items:flex-start"><span class="m-label">Throttle</span><span id="sonar-thr" class="m-val">0%</span></div>
-<div class="metric" style="align-items:flex-start"><span class="m-label">Steer</span><span id="sonar-str" class="m-val">0%</span></div>
 <!-- Straight-line range from the launch point against the cable you have. SIM is
      clamped to it; on a real link this only warns — the launch point can move. -->
 <div class="metric" style="align-items:flex-start"><span class="m-label">Tether</span><span id="sonar-teth" class="m-val">0 m</span></div>

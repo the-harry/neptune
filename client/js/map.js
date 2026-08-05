@@ -22,6 +22,7 @@ const MAP = {
   track:[], x:0, y:0, hdg:0, depth:0, scale:0.6, headingUp:true,
   expanded:false, hasArea:false, hasOrigin:false, origin:null, activeArea:null,
   navWs:null, lastNavAt:0, lastTick:0, _navBits:-1,   // _navBits: last NO-NAV label state
+  me:null,                                   // {lat,lon,acc,t} — the handheld, live (§2)
   viewLat:null, viewLon:null, follow:true,   // geographic view centre (§3); follow = track the sub
   centreline:null,                           // [[lon,lat],…] waterway overlay (§3.5)
   originTap:false,                           // one-shot: next map tap sets the origin (§2)
@@ -30,6 +31,7 @@ const MAP = {
   blind:false, blindSince:0, videoOkSince:0, videoWasLive:false,   // BLIND NAV (map as the driving view)
 };
 const C = { grid:'rgba(180,107,255,0.13)', origin:'#ff8c1a', sub:'#b46bff',
+           me:'#1f9dff',                       // the handheld — the operator, live
            shallow:'#4dffa6', deep:'#1f9dff' };
 
 function navFetch(path, opts){ return fetch((state.httpBase||'') + path, opts); }
@@ -336,12 +338,11 @@ function updateEmptyState(){
     const linked = typeof vehicleLinked==='function' && vehicleLinked();
     const navFresh = (performance.now()-MAP.lastNavAt) < 1500;
     nav.classList.toggle('on', linked && !navFresh);
-    // The collapsed radar is a 200 px circle and this badge sits near the bottom of
-    // it, where only ~99 px of chord is left — the full reason does not fit and would
-    // be clipped by the circle's overflow. Spell it out once the map is the driving
-    // view (expanded or BLIND NAV); keep the short form in the glance circle.
+    // The dial is a 200 px circle in BOTH the collapsed and blind-nav views, and this
+    // badge sits near the bottom of it where only ~99 px of chord is left — the full
+    // reason does not fit there. Spell it out only in the expanded map.
     const noSensors = typeof vehicleHasSensors==='function' && !vehicleHasSensors();
-    const roomy = MAP.expanded || MAP.blind;
+    const roomy = MAP.expanded;
     nav.innerHTML = (roomy && noSensors) ? 'NO&nbsp;NAV&nbsp;·&nbsp;NO&nbsp;SENSORS' : 'NO&nbsp;NAV';
     nav.title = noSensors
       ? 'No navigation: the vehicle reports no sensors fitted, so the marker holds position'
@@ -413,14 +414,27 @@ function pushTrack(x,y,depth){
   if(t.length>CONFIG.map.maxTrackPoints){ const keep=[]; for(let i=0;i<t.length;i++){ if(i>t.length/2||i%2===0) keep.push(t[i]); } MAP.track=keep; }
 }
 
-/* Straight-line range from the LAUNCH POINT, in 3D.
+/* Where the cable is anchored, in local-frame metres.
 
-   The local frame's 0,0 IS the launch point, so this works with or without a
-   geographic origin. Depth is included because the cable has to reach down as well
-   as out: at 6 m down, a 100 m tether only buys 99.8 m of ground — small here, but
-   it is the honest number and it is what makes the reachable circle shrink as you
-   descend. */
-function tetherRangeM(){ return Math.hypot(MAP.x, MAP.y, MAP.depth||0); }
+   Whoever holds the handheld holds the tether, so the anchor is the LIVE handheld
+   position when there is one — walk 20 m up the bank and the reachable circle walks
+   with you. Before any fix (and in SIM) it is the frame origin, which is the launch
+   point by definition. */
+function tetherAnchorLocal(){
+  if(MAP.me && MAP.hasOrigin && MAP.origin){
+    const r = toLocal(MAP.me.lat, MAP.me.lon, MAP.origin.lat, MAP.origin.lon);
+    return { x:r.x, y:r.y };
+  }
+  return { x:0, y:0 };
+}
+
+/* Straight-line range from the anchor, in 3D. Depth is included because the cable has
+   to reach down as well as out — which is what makes the reachable circle shrink as
+   the sub descends. */
+function tetherRangeM(){
+  const a=tetherAnchorLocal();
+  return Math.hypot(MAP.x-a.x, MAP.y-a.y, MAP.depth||0);
+}
 
 /* Horizontal reach still available at the current depth. */
 function tetherHorizLimitM(){
@@ -472,8 +486,9 @@ function mapTick(){
     // visibly costs range. Only ever pulled back toward the launch point, never
     // pushed, so the sub can always drive home.
     if(CONFIG.tether && CONFIG.tether.clampInSim){
-      const r=Math.hypot(MAP.x,MAP.y), lim=tetherHorizLimitM();
-      if(r>lim && r>0){ const k=lim/r; MAP.x*=k; MAP.y*=k; }
+      const a=tetherAnchorLocal(), dx=MAP.x-a.x, dy=MAP.y-a.y;
+      const r=Math.hypot(dx,dy), lim=tetherHorizLimitM();
+      if(r>lim && r>0){ const k=lim/r; MAP.x=a.x+dx*k; MAP.y=a.y+dy*k; }
     }
     pushTrack(MAP.x,MAP.y,MAP.depth);
   }
@@ -615,6 +630,21 @@ function drawCentreline(ctx,dpr){
    point. Drawn around the ORIGIN, not the sub — the question it answers is "is this
    a good place to put in", which is a question about the launch point. Radius is the
    horizontal budget left at the current depth, so it closes in as the sub descends. */
+/* "You are here" — the handheld, live. Distinct from the origin cross (which is the
+   dead-reckoning datum) because after launch the two separate, and the difference is
+   the whole point: the operator walked, the sub did not. The accuracy halo is drawn
+   honestly at whatever the fix claims, so a ±60 m Wi-Fi guess LOOKS like a guess. */
+function drawMeMarker(ctx,dpr,x,y,ppm,acc){
+  ctx.save();
+  const rpx=(acc||0)*ppm;
+  if(rpx>6 && rpx<4000){
+    ctx.fillStyle='rgba(31,157,255,.10)'; ctx.beginPath(); ctx.arc(x,y,rpx,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='rgba(31,157,255,.35)'; ctx.lineWidth=1*dpr; ctx.stroke();
+  }
+  ctx.fillStyle=C.me; ctx.strokeStyle='#0c0118'; ctx.lineWidth=2*dpr;
+  ctx.beginPath(); ctx.arc(x,y,5*dpr,0,Math.PI*2); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
 function drawTetherRing(ctx,dpr,ox,oy,ppm){
   const T=CONFIG.tether; if(!T || !T.showRing) return;
   const rpx=tetherHorizLimitM()*ppm;
@@ -631,7 +661,11 @@ function drawTrackProjected(ctx,dpr,headingUp){
   ctx.setTransform(1,0,0,1,0,0);
   // origin cross
   const oS=lonLatToScreen(MAP.origin.lat,MAP.origin.lon);
-  if(oS) drawTetherRing(ctx,dpr,oS[0],oS[1],dpr/curScale());
+  // Ring around the cable's ANCHOR (the handheld when we have a fix), not the datum.
+  const meS = MAP.me ? lonLatToScreen(MAP.me.lat,MAP.me.lon) : null;
+  const aS = meS || oS;
+  if(aS) drawTetherRing(ctx,dpr,aS[0],aS[1],dpr/curScale());
+  if(meS) drawMeMarker(ctx,dpr,meS[0],meS[1],dpr/curScale(),MAP.me.acc);
   if(oS){ ctx.strokeStyle=C.origin; ctx.lineWidth=2*dpr; ctx.beginPath();
     ctx.moveTo(oS[0]-7*dpr,oS[1]);ctx.lineTo(oS[0]+7*dpr,oS[1]);ctx.moveTo(oS[0],oS[1]-7*dpr);ctx.lineTo(oS[0],oS[1]+7*dpr);ctx.stroke();
     ctx.beginPath();ctx.arc(oS[0],oS[1],10*dpr,0,7);ctx.stroke(); }
@@ -661,7 +695,9 @@ function drawTrackMeterFrame(ctx,cx,cy,ppm,rot,headingUp){
   ctx.save(); ctx.translate(cx,cy); ctx.rotate(rot);
   const L=(wx,wy)=>[ (wx-MAP.x)*ppm, -(wy-MAP.y)*ppm ];
   const o=L(0,0);
-  drawTetherRing(ctx,dpr,o[0],o[1],ppm);
+  const an=tetherAnchorLocal(), aP=L(an.x,an.y);
+  drawTetherRing(ctx,dpr,aP[0],aP[1],ppm);
+  if(MAP.me) drawMeMarker(ctx,dpr,aP[0],aP[1],ppm,MAP.me.acc);
   ctx.strokeStyle=C.origin; ctx.lineWidth=2*dpr; ctx.beginPath();
   ctx.moveTo(o[0]-7*dpr,o[1]);ctx.lineTo(o[0]+7*dpr,o[1]);ctx.moveTo(o[0],o[1]-7*dpr);ctx.lineTo(o[0],o[1]+7*dpr);ctx.stroke();
   ctx.beginPath();ctx.arc(o[0],o[1],10*dpr,0,7);ctx.stroke();

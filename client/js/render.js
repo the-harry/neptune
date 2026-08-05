@@ -93,6 +93,16 @@ function renderLeak(leak){
   if(pulse) pulse.classList.toggle('on', !!leak);
 }
 
+/* One compass point of the input dial. `v` is that direction's share of its axis:
+   negative means the stick is going the other way, which reads 0 here — the opposite
+   number is the one lighting up. */
+const _numPrev={};
+function setInputNum(id, v){
+  const el=$(id); if(!el) return;
+  const n=Math.round(Math.max(0, Math.min(1, v||0))*100);
+  if(_numPrev[id]!==n){ _numPrev[id]=n; el.textContent=n; el.classList.toggle('live', n>0); }
+}
+
 let _prev={};
 function renderUI(v){
   const stale=!!v.stale;
@@ -120,9 +130,13 @@ function renderUI(v){
   const vec=$('sonar-vec'), dot=$('sonar-dot');
   if(vec){ vec.setAttribute('x2', sx.toFixed(1)); vec.setAttribute('y2', sy.toFixed(1)); }
   if(dot){ dot.setAttribute('cx', sx.toFixed(1)); dot.setAttribute('cy', sy.toFixed(1)); }
-  const sthr=$('sonar-thr'), sstr=$('sonar-str');
-  if(sthr) sthr.textContent = Math.round((state.input.throttle||0)*100)+'%';
-  if(sstr) sstr.textContent = Math.round((state.input.steer||0)*100)+'%';
+  // Four directional numbers, 0-100, one per compass point. Each shows only its OWN
+  // half of the axis, so "how hard am I pushing that way" is read straight off the
+  // side you are pushing rather than decoded from a signed percentage.
+  setInputNum('in-fwd',   state.input.throttle);
+  setInputNum('in-rev',  -state.input.throttle);
+  setInputNum('in-right', state.input.steer);
+  setInputNum('in-left',  -state.input.steer);
   // Lamps / toggles (only re-render on change to keep innerHTML swaps cheap)
   if(_prev.green!==v.green || _prev.greenLevel!==Math.round(v.greenLevel*100)){ renderLightButton('green', v.green, v.greenLevel); }
   if(_prev.white!==v.white || _prev.whiteLevel!==Math.round(v.whiteLevel*100)){ renderLightButton('white', v.white, v.whiteLevel); }

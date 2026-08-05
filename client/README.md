@@ -194,11 +194,14 @@ is not optional. This is also why a Pi with nothing wired is worth flying: it re
 
 ### The tether is 100 m, and the console plans against it
 
-`CONFIG.tether.lengthM` is the cable you actually have. **TETHER** reads out next to
-THROTTLE/STEER as the straight-line range from the launch point — the local frame's
-`0,0`, so it works with or without a geographic origin — and a dashed **reachable
-circle** is drawn around the origin on the map. That circle is the answer to *"is this
+`CONFIG.tether.lengthM` is the cable you actually have. **TETHER** reads out beside the
+dial as the straight-line range from the cable's anchor, and a dashed **reachable
+circle** is drawn around that anchor on the map. That circle is the answer to *"is this
 a good place to put in, and is this mission doable from here"*.
+
+The anchor is the **live handheld position** when there is a fix (see below) — the
+cable is held by whoever holds the handheld — falling back to the frame origin, which
+is the launch point by definition, in SIM and before any fix.
 
 Range is taken in **3D**: the cable has to reach down as well as out, so descending
 shrinks the circle by `√(L² − depth²)`. At 60 m down a 100 m tether reaches 80 m out.
@@ -214,17 +217,63 @@ Amber from `warnFromM` (80 m), red at or past the limit. The clamp only ever pul
 sub **back toward** the launch point, never pushes it, so a sub at the end of its cable
 can always drive home.
 
-### Blind nav shows what you're flying on
+### The dial reads as numbers, and never moves
 
-`.sonar-readout` was technically visible in BLIND NAV but useless: with `#radar` pulled
-to `position:fixed`, the wrap collapses to ~50 px in the bottom-left corner, so the
-numbers sat tiny and off to one side while the dial filled the middle of the screen.
-In a driving view they belong **with** the instrument, so THROTTLE / STEER / TETHER now
-sit in a row under the dial at 22 px.
+The dial shows **four numbers, 0–100, one per compass point** — how hard you are
+pushing that way. Each shows only its own half of an axis, so "how much am I giving
+it forward" is read straight off the top rather than decoded from a signed percentage.
+They are dim at rest and lit on the side actually being driven, which keeps the circle
+clean. They replace the old `FWD`/`REV` word labels and the separate THROTTLE/STEER
+text block, which said the same thing twice.
 
-That readout is also how you **tune the simulator against the real vehicle**: run the
-same throttle on both and compare the distance covered, then set
-`CONFIG.map.subMaxSpeedMs` to match.
+**BLIND NAV does not move the dial.** Same corner, same size, same side as with a live
+feed — only the *map* changes, leaving the circle to fill the screen behind it. Losing
+the camera should feel like the picture falling away from behind the instruments, not
+like a different application. `#radar` keeps its 200 px box (and its border — the dial
+is `inset:0` inside it, so dropping the border shifted the dial by 1 px and grew it by
+2); `#map-panel` is `position:fixed`, so it escapes the circle on its own. The dial's
+blind-mode backdrop ring is a **`box-shadow` spread, not a border**, precisely so it
+adds nothing to the box and the geometry stays identical.
+
+The dial is **not tappable in blind nav** — a stray tap would expand the map, and that
+engages ALL STOP on a sub that is being driven.
+
+Those numbers are also how you **tune the simulator against the real vehicle**: run the
+same throttle on both, compare distance covered, set `CONFIG.map.subMaxSpeedMs`.
+
+### The handheld's position is live
+
+`watchPosition` keeps the operator's own position current, like any other map app — a
+fix taken once on load is wrong the moment you walk the bank looking for somewhere to
+put in, which is exactly when the reachable circle matters most.
+
+Two things move, and they are **not** the same thing:
+
+| | What it is | When it moves |
+|---|---|---|
+| `MAP.me` | where the handheld is now, drawn with its accuracy halo | always |
+| `MAP.origin` | the datum the sub is dead-reckoned **from** | only before a dive |
+
+The origin follows the handheld while no track exists — you are still choosing a
+departure point. Once a dive is under way the datum **freezes**: moving it would shift
+every coordinate already plotted, so the sub would appear to jump sideways and the
+recorded track would be a lie. After that the live marker simply diverges from the
+origin, which is the truth — you walked, the sub did not.
+
+The **tether anchors on `MAP.me`**, not the datum, because the cable is held by whoever
+is holding the handheld. Walk 20 m up the bank and the reachable circle walks with you.
+
+Guards: it never prompts (the watch only starts once permission is already granted, and
+picks it up live via `permissions.onchange` if you grant it later); movement under
+`meMinMoveM` (3 m) is treated as jitter; the origin is never rewritten faster than
+`meMinGapMs`; a fix that is less accurate than the stored one is never adopted; and
+beyond `originMoveM` you are somewhere else entirely, which still gets the explicit
+**USE MY POSITION / KEEP** prompt.
+
+> **On the ROG Ally this is Wi-Fi positioning, not GNSS.** The handheld has no GPS
+> receiver, so fixes are coarse (tens of metres) and will not track walking the way a
+> phone does. The accuracy halo is drawn at whatever the fix claims, so a ±60 m guess
+> looks like a guess. Tapping the map to set the origin is still the precise route.
 
 ### A submarine can't be paused (§3)
 

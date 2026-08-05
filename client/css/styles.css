@@ -383,32 +383,26 @@ body.map-expanded .all-stop-banner.on{display:block}
    MAP.expanded stays false precisely so all of that behaviour comes for free. */
 body.map-blind #map-panel{position:fixed;inset:0;width:100vw;height:100vh;z-index:2;cursor:default;
   animation:mapExpandIn .28s ease}
-/* Make the RING ITSELF the full-viewport box in blind nav. The dial then centres with
-   plain absolute positioning inside it, instead of position:fixed inside a fixed,
-   clipped ancestor - which is what left it hanging off to one side. */
-body.map-blind #radar{position:fixed;inset:0;width:auto;height:auto;border-radius:0;
-  overflow:visible;border:0;box-shadow:none;background:transparent;cursor:default}
-/* The dial is the instrument you actually fly on - keep it, centred and big, and
-   square (its viewBox is square, so a full-bleed box would distort the rings). */
-/* Square on purpose: the SVG viewBox is square, so a full-bleed box would stretch the
-   rings into ellipses and make the heading needle lie about bearing. */
-body.map-blind #radar-dial{position:absolute;inset:auto;left:50%;top:50%;transform:translate(-50%,-50%);
-  width:min(56vh,56vw);height:min(56vh,56vw);z-index:4;opacity:.9}
-/* Throttle/steer readout and the scale stay - they matter more here than anywhere.
-   They were STAYING but not arriving: with #radar pulled to position:fixed the wrap
-   collapses to ~50 px in the bottom-left corner, so the numbers you fly on sat tiny
-   and off in a corner while the dial filled the middle of the screen. In a driving
-   view they belong WITH the instrument, so put them in a row under the dial at a
-   size you can read at a glance - this is also the readout used to compare the sim
-   against the real vehicle's speed. min(28vh,28vw) is half the dial's own size. */
+/* The dial does NOT move. Same corner, same size, same side as with a live feed —
+   switching to blind nav should feel like the picture fell away from behind the
+   instruments, not like a different application. Only the MAP changes: it leaves the
+   circle and fills the screen.
+   #radar therefore keeps its 200 px box, so the dial, the scale and the readout lay
+   out exactly as they do collapsed. #map-panel is position:fixed, whose containing
+   block is the viewport, so it escapes the circle without the ring being resized —
+   overflow:visible here is belt-and-braces for that escape.
+   #radar keeps its BORDER too, even though the full-screen map now paints over it:
+   the dial is inset:0 inside that border, so dropping it grew the dial by 2 px and
+   shifted it by 1 — the dial would then not be in the same place at all. */
+body.map-blind #radar{overflow:visible;background:transparent;cursor:default}
+/* The dial brings its own backdrop, because #radar's is now behind the map. The ring
+   is a box-shadow spread, NOT a border, so it adds nothing to the box and the dial's
+   geometry stays byte-identical to the live-feed view. */
+body.map-blind #radar-dial{background:rgba(12,1,24,.78);border-radius:50%;
+  box-shadow:0 0 0 1.5px color-mix(in srgb,var(--tertiary) 55%,transparent),
+             0 0 18px rgba(0,0,0,.6),0 0 14px rgba(77,255,166,.18)}
+/* The wrap (dial + scale + tether readout) rides above the full-screen map. */
 body.map-blind #radar-wrap{z-index:42}
-body.map-blind #radar-wrap .sonar-readout{
-  position:fixed;left:50%;top:calc(50% + min(28vh,28vw) + 12px);transform:translateX(-50%);
-  flex-direction:row;align-items:flex-start;gap:28px;padding:0}
-body.map-blind #radar-wrap .sonar-readout .metric{align-items:center!important}
-body.map-blind #radar-wrap .sonar-readout .m-label{font-size:11px;letter-spacing:.10em}
-body.map-blind #radar-wrap .sonar-readout .m-val{font-size:22px;line-height:1.1}
-body.map-blind #radar-wrap .tether-warn{align-self:center;margin-top:0;font-size:11px;padding:4px 10px}
 /* Do NOT hide #radar with opacity/visibility here: #map-panel is a CHILD of it, so
    that blanks the entire map. The ring is already made invisible above via
    border:0 + background:transparent, which is enough. */
@@ -622,7 +616,11 @@ body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
 .sonar-vec{stroke:var(--primary);stroke-width:3.5;stroke-linecap:round;filter:drop-shadow(0 0 5px var(--primary))}
 .sonar-dot{fill:var(--primary);filter:drop-shadow(0 0 6px var(--primary))}
 .sonar-center{fill:var(--tertiary);opacity:.6}
-.sonar-tick{fill:var(--tertiary);opacity:.55;font-family:var(--font-sans);font-size:11px;font-weight:700;letter-spacing:.08em}
+/* Directional input numbers (0-100), one per compass point of the dial. Dim at rest
+   so the circle reads clean; lit on whichever side is actually being driven. */
+.sonar-num{fill:var(--on-surface-variant);opacity:.30;font-family:var(--font-sans);
+  font-size:15px;font-weight:800;letter-spacing:.02em;transition:opacity .12s linear}
+.sonar-num.live{fill:var(--primary);opacity:1}
 .sonar-readout{display:flex;flex-direction:column;gap:6px;padding-bottom:8px}
 /* TETHER — range against the cable. Amber approaching the limit, red at or past it.
    Sits with THROTTLE/STEER because that is where the eye already is while driving. */
