@@ -199,7 +199,7 @@ async function boot(forced){
     // Stand somewhere else to plan. mockMe() arms a tap; mockMeAt() places it directly;
     // clearMock() goes back to the live fix. The dot turns red either way.
     mockMe:armMockMeTap, mockMeAt:(lat,lon)=>setMockMe(lat,lon), clearMock:clearMockMe,
-    meSource,
+    meSource, showTracks:toggleTrack, breakTrack,
     // The DIVE LOGS button is gone from CONFIG (recorded dives live in
     // navigation_logs/), but the browser is still there rather than deleted -
     // removing a control should not silently remove the capability.

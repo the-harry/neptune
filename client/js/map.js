@@ -28,6 +28,7 @@ const MAP = {
   originTap:false,                           // one-shot: next map tap sets the origin (§2)
   rovTap:false,                              // one-shot: next map tap places the ROV by hand
   mockMeTap:false, meReal:null,              // mocked operator position; last GENUINE fix
+  showTrack:true, trackBreak:false,          // eye toggle; "start a new segment here"
   drag:null, selReadout:null,                // pan drag state; area-selection readout callback (§4)
   replay:false,                              // viewing a saved dive — freeze live integration (§1)
   blind:false, blindSince:0, videoOkSince:0, videoWasLive:false,   // BLIND NAV (map as the driving view)
@@ -116,6 +117,7 @@ function initMap(){
   if(rc) rc.addEventListener('click', (e)=>{ e.stopPropagation(); MAP.scale=bestScaleNow(); });  // reset = best imagery, not a fixed m/px
   const sr=$('map-set-rov'); if(sr) sr.addEventListener('click', (e)=>{ e.stopPropagation(); armRovTap(); });
   const mm=$('map-mock-me'); if(mm) mm.addEventListener('click', (e)=>{ e.stopPropagation(); armMockMeTap(); });
+  const tt=$('map-track-toggle'); if(tt){ tt.addEventListener('click', (e)=>{ e.stopPropagation(); toggleTrack(); }); renderTrackToggle(); }
   MAP.canvas.addEventListener('wheel', (e)=>{ if(!MAP.expanded && !MAP.blind) return; e.preventDefault(); MAP.scale=Math.max(0.05,Math.min(40,MAP.scale*(e.deltaY>0?1.1:0.9))); }, {passive:false});
   // drag-to-pan + tap (expanded only, canvas-scoped so it never touches piloting input, §5).
   // Pan is computed absolutely from the drag-start centre + total screen delta (no feedback loop),
@@ -267,6 +269,26 @@ function armRovTap(){
 function setRovLatLon(lat, lon){
   if(!MAP.hasOrigin || !MAP.origin) return false;
   const p=toLocal(lat, lon, MAP.origin.lat, MAP.origin.lon);
+  // OUT OF REACH — refuse. The cable is a hard physical limit, so a hand-placed ROV
+  // further from the operator than the tether is long is not a position that can
+  // exist. Silently clamping it would invent a location the operator did not pick;
+  // refusing says which of the two points is actually wrong, and it is nearly always
+  // the operator's own — the ROV is where they can see it.
+  const T=CONFIG.tether;
+  if(T && T.lengthM){
+    const a=tetherAnchorLocal();
+    const r=Math.hypot(p.x-a.x, p.y-a.y, MAP.depth||0);
+    if(r > T.lengthM){
+      const msg='ROV would be '+Math.round(r)+' m away — the tether is only '+T.lengthM+' m. '+
+                'Move your own position first.';
+      LOG.warn('ROV placement refused: '+msg);
+      if(typeof camToast==='function') camToast(msg, 'warn');
+      return false;
+    }
+  }
+  // A hand-placed position is a jump, not travel. Break the trace so the old path
+  // stays on the map without a line implying the sub swam there.
+  breakTrack('ROV placed by hand');
   MAP.x=p.x; MAP.y=p.y;
   pushTrack(MAP.x, MAP.y, MAP.depth);
   LOG.map('ROV placed by hand at '+p.x.toFixed(1)+','+p.y.toFixed(1)+' m from the datum'+
@@ -294,6 +316,9 @@ function armMockMeTap(){
   LOG.map('armed: next map tap places a MOCK operator position');
 }
 function setMockMe(lat, lon){
+  // Entering a planning run is a discontinuity: what follows is a different journey.
+  // Keep the old path on screen, but never draw a line into the new one.
+  breakTrack('planning started');
   MAP.me = { lat, lon, acc:0, t:Date.now(), mock:true };
   // Pre-dive, the launch point is what is being planned, so take it along.
   if(MAP.hasOrigin && MAP.origin && !diveUnderway() && typeof setOrigin==='function'){
@@ -307,6 +332,7 @@ function setMockMe(lat, lon){
 function clearMockMe(){
   MAP.mockMeTap=false;
   if(!MAP.me || !MAP.me.mock) return;
+  breakTrack('planning ended');           // leaving a plan is a discontinuity too
   // Back to the real world: the last genuine fix if we have one, otherwise nothing.
   MAP.me = MAP.meReal ? { lat:MAP.meReal.lat, lon:MAP.meReal.lon, acc:MAP.meReal.acc, t:MAP.meReal.t } : null;
   if(typeof hideOriginPrompt==='function') hideOriginPrompt();
@@ -534,12 +560,53 @@ function rebaseFrame(rx, ry){
   for(let i=0;i<MAP.track.length;i++){ MAP.track[i].x-=rx; MAP.track[i].y-=ry; }
 }
 
+/* Show / hide the plotted traces. After a few planning runs the map fills with old
+   paths, which is exactly what makes them worth keeping AND worth hiding. The sub
+   marker, origin, operator dot and tether ring are never hidden — this is about the
+   history, not the instruments. */
+const EYE_OPEN  = '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="1.8" d="M1.8 12S5.8 5.5 12 5.5 22.2 12 22.2 12 18.2 18.5 12 18.5 1.8 12 1.8 12z"/><circle cx="12" cy="12" r="3.1" fill="currentColor"/></svg>';
+const EYE_SHUT  = '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="1.8" d="M1.8 12S5.8 5.5 12 5.5 22.2 12 22.2 12 18.2 18.5 12 18.5 1.8 12 1.8 12z"/><circle cx="12" cy="12" r="3.1" fill="currentColor"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 20 20 4"/></svg>';
+function renderTrackToggle(){
+  const b=$('map-track-toggle'); if(!b) return;
+  b.innerHTML = MAP.showTrack ? EYE_OPEN : EYE_SHUT;
+  b.title = MAP.showTrack ? 'Hide the tracks' : 'Show the tracks';
+  b.style.opacity = MAP.showTrack ? '1' : '.6';
+}
+function toggleTrack(){
+  MAP.showTrack=!MAP.showTrack;
+  renderTrackToggle();
+  LOG.map('tracks '+(MAP.showTrack?'shown':'hidden')+' ('+MAP.track.length+' points held either way)');
+}
+
+/* Start a NEW track segment. Old paths stay on the map — they are real history and
+   worth seeing — but the next point must not be joined to the last one by a line.
+   A jump between two disjoint journeys drawn as a straight stroke reads as the sub
+   having travelled that line, which it never did. */
+function breakTrack(why){
+  MAP.trackBreak = true;
+  LOG.map('track break ('+why+') — drawn as a separate segment, not joined');
+}
+
+/* Track thinned for display, ALWAYS keeping the break markers. Decimation that drops
+   a break silently re-joins two journeys, which is the very thing the break exists to
+   prevent. */
+function decimatedTrack(){
+  const t=MAP.track, step=Math.max(1,Math.floor(t.length/600)), out=[];
+  for(let i=0;i<t.length;i++){ if(i%step===0 || t[i].brk) out.push(t[i]); }
+  return out;
+}
+
 function pushTrack(x,y,depth){
   if(MAP.replay || !MAP.hasOrigin) return;                // no track without an origin (§6); frozen during replay
   const t=MAP.track, last=t[t.length-1];
-  if(last && Math.hypot(x-last.x,y-last.y)<0.25) return;
-  t.push({x,y,depth});
-  if(t.length>CONFIG.map.maxTrackPoints){ const keep=[]; for(let i=0;i<t.length;i++){ if(i>t.length/2||i%2===0) keep.push(t[i]); } MAP.track=keep; }
+  // The dedupe is skipped on a break: the first point of a new segment must be kept
+  // even if it happens to land near the last point of the old one.
+  if(!MAP.trackBreak && last && Math.hypot(x-last.x,y-last.y)<0.25) return;
+  const p={x,y,depth};
+  if(MAP.trackBreak){ p.brk=true; MAP.trackBreak=false; }
+  t.push(p);
+  // Thin the stored track when it gets long — but never drop a break marker.
+  if(t.length>CONFIG.map.maxTrackPoints){ const keep=[]; for(let i=0;i<t.length;i++){ if(i>t.length/2||i%2===0||t[i].brk) keep.push(t[i]); } MAP.track=keep; }
 }
 
 /* Where the cable is anchored, in local-frame metres.
@@ -842,16 +909,18 @@ function drawTrackProjected(ctx,dpr,headingUp){
     ctx.moveTo(oS[0]-7*dpr,oS[1]);ctx.lineTo(oS[0]+7*dpr,oS[1]);ctx.moveTo(oS[0],oS[1]-7*dpr);ctx.lineTo(oS[0],oS[1]+7*dpr);ctx.stroke();
     ctx.beginPath();ctx.arc(oS[0],oS[1],10*dpr,0,7);ctx.stroke(); }
   // track: dark casing under a depth-coloured core (§5 legibility over imagery)
-  const t=MAP.track, step=Math.max(1,Math.floor(t.length/600));   // decimate for display (§4/§5)
-  if(t.length>1){
-    const pts=[]; pts.push(lonLatToScreen(...llOf(t[0])));
-    for(let i=step;i<t.length;i+=step) pts.push(lonLatToScreen(...llOf(t[i])));
+  const t=decimatedTrack();
+  if(MAP.showTrack && t.length>1){
+    const pts=t.map(p=>lonLatToScreen(...llOf(p)));
     ctx.lineJoin='round'; ctx.lineCap='round';
     ctx.strokeStyle='rgba(0,0,0,.6)'; ctx.lineWidth=6*dpr; ctx.beginPath();
-    for(let i=0;i<pts.length;i++){ const p=pts[i]; if(!p)continue; i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]); } ctx.stroke();
+    let pen=false;
+    for(let i=0;i<pts.length;i++){ const p=pts[i]; if(!p){ pen=false; continue; }
+      if(!pen || t[i].brk){ ctx.moveTo(p[0],p[1]); pen=true; } else ctx.lineTo(p[0],p[1]); }
+    ctx.stroke();
     ctx.lineWidth=3*dpr;
-    for(let i=1;i<pts.length;i++){ const a=pts[i-1],b=pts[i]; if(!a||!b)continue;
-      ctx.strokeStyle=_depthColor((t[Math.min(t.length-1,i*step)]||t[t.length-1]).depth);
+    for(let i=1;i<pts.length;i++){ const a=pts[i-1],b=pts[i]; if(!a||!b||t[i].brk) continue;  // never bridge a break
+      ctx.strokeStyle=_depthColor(t[i].depth);
       ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]); ctx.stroke(); }
   }
   // sub marker
@@ -873,13 +942,17 @@ function drawTrackMeterFrame(ctx,cx,cy,ppm,rot,headingUp){
   ctx.strokeStyle=C.origin; ctx.lineWidth=2*dpr; ctx.beginPath();
   ctx.moveTo(o[0]-7*dpr,o[1]);ctx.lineTo(o[0]+7*dpr,o[1]);ctx.moveTo(o[0],o[1]-7*dpr);ctx.lineTo(o[0],o[1]+7*dpr);ctx.stroke();
   ctx.beginPath();ctx.arc(o[0],o[1],10*dpr,0,7);ctx.stroke();
-  const t=MAP.track, step=Math.max(1,Math.floor(t.length/600));
-  if(t.length>1){ ctx.lineJoin='round'; ctx.lineCap='round';
-    ctx.strokeStyle='rgba(0,0,0,.5)'; ctx.lineWidth=6*dpr; ctx.beginPath(); let p0=L(t[0].x,t[0].y); ctx.moveTo(p0[0],p0[1]);
-    for(let i=step;i<t.length;i+=step){ const p=L(t[i].x,t[i].y); ctx.lineTo(p[0],p[1]); } ctx.stroke();
-    ctx.lineWidth=3*dpr; let prev=L(t[0].x,t[0].y);
-    for(let i=step;i<t.length;i+=step){ const p=L(t[i].x,t[i].y); ctx.strokeStyle=_depthColor(t[i].depth);
-      ctx.beginPath(); ctx.moveTo(prev[0],prev[1]); ctx.lineTo(p[0],p[1]); ctx.stroke(); prev=p; } }
+  const t=decimatedTrack();
+  if(MAP.showTrack && t.length>1){ ctx.lineJoin='round'; ctx.lineCap='round';
+    const pts=t.map(p=>L(p.x,p.y));
+    ctx.strokeStyle='rgba(0,0,0,.5)'; ctx.lineWidth=6*dpr; ctx.beginPath();
+    for(let i=0;i<pts.length;i++){ const p=pts[i];
+      if(i===0 || t[i].brk) ctx.moveTo(p[0],p[1]); else ctx.lineTo(p[0],p[1]); }
+    ctx.stroke();
+    ctx.lineWidth=3*dpr;
+    for(let i=1;i<pts.length;i++){ if(t[i].brk) continue;                 // never bridge a break
+      ctx.strokeStyle=_depthColor(t[i].depth);
+      ctx.beginPath(); ctx.moveTo(pts[i-1][0],pts[i-1][1]); ctx.lineTo(pts[i][0],pts[i][1]); ctx.stroke(); } }
   ctx.restore();
   ctx.setTransform(1,0,0,1,0,0); ctx.save(); ctx.translate(cx,cy); ctx.rotate(headingUp?0:MAP.hdg*Math.PI/180);
   ctx.fillStyle=C.sub; ctx.strokeStyle='#0c0118'; ctx.lineWidth=1.5*dpr;

@@ -312,6 +312,30 @@ is the one who can correct it by eye. The **◎** button on the map (or `NEPTUNE
 or `NEPTUNE.setRovAt(lat,lon)`) arms a tap that places the sub. It moves **only** the
 sub — the datum stays put, so the track and every earlier coordinate stay valid.
 
+A placement **further from the operator than the cable is long is refused**, with the
+range and the reason. The tether is a hard physical limit, so such a position cannot
+exist; silently clamping it would invent a location nobody chose. Refusing says which
+of the two points is actually wrong — nearly always the operator's own, since the ROV
+is the one they can see. Move your position first (or plan from one, below) and the
+same spot is then accepted.
+
+### Old paths stay, but journeys are never joined
+
+Traces accumulate across planning runs, which is the point — you can see everywhere
+you have tried. But two disjoint journeys must never be drawn as one stroke: a straight
+line between them reads as the sub having travelled it, which it never did.
+
+`breakTrack()` marks the next point as the start of a new segment, and the drawing code
+starts a fresh subpath there instead of joining. Breaks are inserted when a plan starts
+or ends and when the ROV is placed by hand — every jump that is not travel. They are
+preserved through **both** thinning passes (display decimation and the stored-track cap);
+a decimation that drops a break silently re-joins the journeys it exists to separate.
+
+The **eye button** hides and shows the traces — after a few runs the map fills up, which
+is exactly what makes them worth keeping *and* worth hiding. It only affects the history:
+the sub marker, origin, operator dot and tether ring are always drawn, and hiding
+discards nothing.
+
 There is deliberately **no accuracy halo**. It was a large translucent disc sitting on
 top of the imagery, and the imagery is the point: underwater structures and obstacles
 have to be readable. The orange tether ring is the only circle on this map.
