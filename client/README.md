@@ -165,38 +165,32 @@ CSS transform on a square, which would leave uncovered corners in the circle). S
 video shrinks to a **picture-in-picture** tile (never unmounted — no WebRTC
 reconnect). `Esc`, the ✕ button, or tapping the PiP video collapses it back.
 
-### Piloting must not wait for sensors
+### On a real link, nothing is synthesised
 
-Heading and position are shown from whichever source can honestly produce them:
+**We never fall back to SIM while a vehicle is on the link.** `vehicleLinked()`
+(`core.js`) is the switch, and it separates two things that must never be confused:
 
-| Vehicle reports | Heading | Position | Path traced |
-|---|---|---|---|
-| `mock:true` (no IMU wired) | **estimated from your steer**, client-side | integrated from your throttle | no — it is your command, not a fix |
-| `mock:false` (sensors fitted) | measured, from telemetry / `/ws/nav` | dead-reckoned by the Pi | yes |
+| | Comes from | Moves when |
+|---|---|---|
+| **Input vector** (the purple line on the dial) | `state.input` — your stick, directly | always, in every mode |
+| **Sub marker + track** on the map | the vehicle's own navigation output | only when the sub reports movement |
 
-The rule is that **heading and speed always come from the same source.** Mixing them
-is what produced *"I can only go straight"* — twice.
+The input vector is *your command* and is drawn from the raw stick every frame, so
+the dial answers immediately whether or not anything is fitted to the hull. The sub
+marker is *the vehicle*, and it moves on the sub's output or it does not move at all.
 
-The first time it was server-side: nav took speed from the *commanded* throttle while
-heading came from the hardware, so a disarmed sub advanced across the map without ever
-turning (see `api/nav/README.md`). The second time was the client's own fallback
-integrator, which had the identical pairing — `MAP.hdg` from telemetry, speed from
-`state.input.throttle`.
+The client integrator that advances the marker from commanded throttle is now
+**SIM-only, and only with no vehicle linked at all**. Running it against a real hull
+draws progress the sub may not be making: a dead thruster, a snagged tether, or a sub
+held against a wall would all keep the marker sliding forward exactly as if the dive
+were going fine. Underwater that is the one failure you cannot afford to hide — so a
+linked sub with no navigation **holds position**, and the **`NO NAV`** badge on the
+radar says why (`NO NAV · NO SENSORS` once the map is the driving view, where the
+words fit — the collapsed circle only has ~98 px of chord at that height).
 
-That one only bites on a **real link**, which is why SIM looked fine. A Pi with no
-sensors wired falls back to `MockHardware`, whose compass only moves while the
-thrusters are actually driving — so a *disarmed* vehicle reports one constant bearing
-forever. Sim integrates heading from steer with no arm gate, so it turned; the Pi
-reported 284° no matter what the stick did, and the sub travelled in a perfectly
-straight line.
-
-So `vehicleHasSensors()` (`core.js`) now decides, and only an **explicit** `mock:true`
-counts as sensorless — a server that omits the flag is trusted, so this can never
-downgrade a real fix. While the vehicle is mocked the client owns the estimate and
-ignores the Pi's nav frames for position: that nav is *also* a simulation, and an
-arm-gated one, so adopting it would overwrite the local estimate every frame and
-re-freeze the map. The SIM badge is already showing throughout — nothing here is
-presented as a measurement.
+A held marker and a working-but-stationary one look identical, which is why the badge
+is not optional. This is also why a Pi with nothing wired is worth flying: it reports
+`mock:true`, the map stays honest and still, and the dial still shows you steering.
 
 ### A submarine can't be paused (§3)
 

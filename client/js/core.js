@@ -172,14 +172,21 @@ const state = {
   lastFrame:0
 };
 
-/* Does the vehicle carry real navigation sensors, or is it a mocked hull?
-   Telemetry carries `mock` (api/hardware.py `is_mock`), and on a Pi with nothing
-   wired yet RealHardware refuses to start and `auto` falls back to the bench
-   simulator — so a connected vehicle reporting mock:true has NO compass and NO
-   depth sensor, and its heading is a constant.
+/* Is a real vehicle on the other end of the link, right now?
 
-   Only an EXPLICIT mock:true counts as "no sensors": a server that omits the flag
-   is trusted rather than second-guessed, so this can never downgrade a real fix. */
+   THE RULE: while one is, nothing on this console may be synthesised. A simulated
+   position drawn over a real dive hides the failure it is most important to see —
+   a dead thruster, a snagged tether, a sub pinned against a wall all look exactly
+   like normal progress if the map keeps advancing on commanded throttle. The map
+   moves on the SUB's output or it does not move at all. */
+function vehicleLinked(){
+  return !!(state.realTel && (Date.now()-state.realTelAt) < CONFIG.staleTimeoutMs);
+}
+
+/* Does the vehicle carry real navigation sensors, or is it a mocked hull?
+   Telemetry carries `mock` (api/hardware.py `is_mock`): on a Pi with nothing wired
+   yet RealHardware refuses to start and `auto` falls back to the bench simulator.
+   Used to SAY SO on the radar — never to fill the gap in with a guess. */
 function vehicleHasSensors(){ return !!(state.realTel && state.realTel.mock !== true); }
 
 /* ============================================================================

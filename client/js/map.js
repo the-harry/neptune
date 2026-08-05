@@ -21,7 +21,7 @@ const MAP = {
   panel:null, canvas:null, ctx:null, radar:null, dpr:1, ml:null,
   track:[], x:0, y:0, hdg:0, depth:0, scale:0.6, headingUp:true,
   expanded:false, hasArea:false, hasOrigin:false, origin:null, activeArea:null,
-  navWs:null, lastNavAt:0, lastTick:0,
+  navWs:null, lastNavAt:0, lastTick:0, _navBits:-1,   // _navBits: last NO-NAV label state
   viewLat:null, viewLon:null, follow:true,   // geographic view centre (§3); follow = track the sub
   centreline:null,                           // [[lon,lat],…] waterway overlay (§3.5)
   originTap:false,                           // one-shot: next map tap sets the origin (§2)
@@ -327,6 +327,26 @@ function updateEmptyState(){
     if(!MAP.hasArea){ if(msg)msg.textContent='NO MAP AREA LOADED'; if(btn)btn.textContent='LOAD OR DOWNLOAD'; }
     else if(!MAP.hasOrigin){ if(msg)msg.textContent='ORIGIN NOT SET'; if(btn)btn.textContent='SET ORIGIN'; }
   }
+  // NO NAV — a vehicle IS on the link but no navigation is coming back from it: no
+  // sensors fitted, or no origin set on the Pi, so there is nothing to dead-reckon
+  // from. The marker holds position rather than advancing on commanded throttle,
+  // and this is what stops a held marker reading as a sub that simply is not moving.
+  const nav=$('nav-warning');
+  if(nav){
+    const linked = typeof vehicleLinked==='function' && vehicleLinked();
+    const navFresh = (performance.now()-MAP.lastNavAt) < 1500;
+    nav.classList.toggle('on', linked && !navFresh);
+    // The collapsed radar is a 200 px circle and this badge sits near the bottom of
+    // it, where only ~99 px of chord is left — the full reason does not fit and would
+    // be clipped by the circle's overflow. Spell it out once the map is the driving
+    // view (expanded or BLIND NAV); keep the short form in the glance circle.
+    const noSensors = typeof vehicleHasSensors==='function' && !vehicleHasSensors();
+    const roomy = MAP.expanded || MAP.blind;
+    nav.innerHTML = (roomy && noSensors) ? 'NO&nbsp;NAV&nbsp;·&nbsp;NO&nbsp;SENSORS' : 'NO&nbsp;NAV';
+    nav.title = noSensors
+      ? 'No navigation: the vehicle reports no sensors fitted, so the marker holds position'
+      : 'No navigation data from the vehicle — the marker holds position';
+  }
 }
 
 /* ---- MapLibre + PMTiles (§3) — only when vendored ---- */
@@ -372,17 +392,8 @@ function connectNavWs(){
   MAP.navWs=ws;
   ws.onopen=()=>{ _navBackoff=0; };
   ws.onmessage=(ev)=>{ let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
-    if(m.type==='nav'){
-      MAP.lastNavAt=performance.now(); state.navOkAt=Date.now();   // the nav plane IS alive either way
-      // A vehicle with no sensors dead-reckons from its own mocked compass, behind
-      // the arm gate. Adopting that position would overwrite the local estimate
-      // every frame and win, freezing the sub on the map while the operator steers.
-      // Trace the real thing only when there is a real thing to trace.
-      if(vehicleHasSensors()){
-        MAP.x=m.x_m; MAP.y=m.y_m; MAP.hdg=m.heading_deg; MAP.depth=m.depth_m;
-        pushTrack(m.x_m,m.y_m,m.depth_m);
-      }
-    }
+    if(m.type==='nav'){ MAP.x=m.x_m; MAP.y=m.y_m; MAP.hdg=m.heading_deg; MAP.depth=m.depth_m;
+      MAP.lastNavAt=performance.now(); state.navOkAt=Date.now(); pushTrack(m.x_m,m.y_m,m.depth_m); }
   };
   ws.onclose=()=>{ MAP.navWs=null; scheduleNavWs(); };
   ws.onerror=()=>{ try{ ws.close(); }catch(e){} };
@@ -404,15 +415,22 @@ function pushTrack(x,y,depth){
 
 function mapTick(){
   const now=performance.now(); let dt=(now-MAP.lastTick)/1000; if(dt>0.5)dt=0.5; MAP.lastTick=now;
-  // Client integrator — runs when there is no navigation worth trusting: no nav
-  // frames at all (disk/SIM), OR a connected vehicle with no sensors, whose nav is
-  // itself an estimate and freezes whenever the thrusters are not driving.
-  // Heading and speed MUST come from the same source; mixing a commanded speed with
-  // a measured heading is precisely what made the sub travel in a straight line.
-  if(!MAP.replay && (!vehicleHasSensors() || now-MAP.lastNavAt>1500)){
+  // Client integrator — SIM ONLY, and only with no vehicle on the link at all.
+  //
+  // It advances the sub from COMMANDED throttle, which is a lie the moment a real
+  // hull exists: a dead thruster, a snagged tether or a sub held against a wall
+  // would all keep drawing forward progress. While a vehicle is linked the marker
+  // moves on the sub's own navigation output or it stays put — a stationary sub is
+  // information, and NO NAV says why (see updateEmptyState).
+  if(!MAP.replay && !vehicleLinked()){
     MAP.hdg=state.heading; const spd=(state.input.throttle||0)*CONFIG.map.subMaxSpeedMs; const h=MAP.hdg*Math.PI/180;
     MAP.x+=spd*Math.sin(h)*dt; MAP.y+=spd*Math.cos(h)*dt; MAP.depth=state.depth; pushTrack(MAP.x,MAP.y,MAP.depth);
   }
+  // Whether navigation is arriving changes with time, not just on user actions, so
+  // the NO NAV label has to be re-evaluated here — but only touched when it flips.
+  const navBits = (vehicleLinked()?1:0) | ((now-MAP.lastNavAt<1500)?2:0) | (vehicleHasSensors()?4:0)
+                | (MAP.expanded?8:0) | (MAP.blind?16:0);   // wording depends on how much room there is
+  if(navBits!==MAP._navBits){ MAP._navBits=navBits; updateEmptyState(); }
   // view centre (§3): follow the sub when collapsed/following; free pan otherwise
   if(MAP.hasOrigin && (MAP.follow || MAP.viewLat==null)){
     const g=toLatLon(MAP.x,MAP.y,MAP.origin.lat,MAP.origin.lon); MAP.viewLat=g.lat; MAP.viewLon=g.lon;

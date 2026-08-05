@@ -20,24 +20,8 @@ function simulate(dt){
   const c=s.input;
   s.left  = clamp(c.throttle + c.steer, -1, 1);
   s.right = clamp(c.throttle - c.steer, -1, 1);
-  estimateHeadingFromInput(dt);
+  s.heading = (s.heading + c.steer*sim.headingRatePerS*dt + 360)%360;
   s.batteryV = Math.max(20.0, s.batteryV - sim.batteryDrainVPerS*dt);
-}
-
-/* Heading when nothing on the vehicle can measure it.
-   Turn the operator's steer command into a heading at the same rate the simulator
-   uses, so a stick deflection always produces a visible turn.
-
-   This runs while CONNECTED too, whenever the vehicle reports mocked hardware.
-   The vehicle's own heading is a measurement taken behind the arm gate: with no
-   IMU wired, `MockHardware` only turns while the thrusters are actually driving,
-   so a disarmed sub reports one constant bearing no matter how hard you steer.
-   Pairing that frozen bearing with a map speed taken from the *commanded*
-   throttle is what put the sub on rails — it advanced and never turned. Command
-   and heading now always come from the same place. */
-function estimateHeadingFromInput(dt){
-  const s=state;
-  s.heading = (s.heading + (s.input.steer||0)*CONFIG.sim.headingRatePerS*dt + 360)%360;
 }
 
 /* Build a normalized "view" object the renderer consumes. */

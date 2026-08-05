@@ -341,6 +341,15 @@ img{display:block}
   font-family:var(--font-sans);font-size:13px;font-weight:800;letter-spacing:.12em;color:var(--secondary);
   text-shadow:0 0 8px var(--surface-dim);pointer-events:none}
 body:not(.map-expanded) #radar.empty .radar-empty{display:flex}
+/* NO NAV — a vehicle is linked but sending no navigation, so the marker holds
+   position on purpose. Sits at the bottom of the circle, clear of FWD/REV and the
+   dial centre; z-index above the dial so it is never drawn under the vector. */
+.nav-warning{position:absolute;left:50%;bottom:4px;transform:translateX(-50%);display:none;z-index:5;
+  padding:2px 8px;border-radius:9px;white-space:nowrap;pointer-events:none;
+  font-family:var(--font-sans);font-size:9px;font-weight:800;letter-spacing:.10em;
+  color:var(--error);background:rgba(12,1,24,.88);border:1px solid var(--error)}
+.nav-warning.on{display:block}
+body.map-expanded .nav-warning{bottom:auto;top:14px;font-size:12px;padding:4px 12px;letter-spacing:.14em}
 .radar-scale{font-family:var(--font-sans);font-size:11px;font-weight:700;letter-spacing:.06em;
   color:rgba(236,227,255,.72);text-shadow:0 0 6px var(--surface-dim);pointer-events:none}
 .radar-n{fill:var(--secondary);font-family:var(--font-sans);font-size:13px;font-weight:800}

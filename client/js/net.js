@@ -68,10 +68,9 @@ function onTelemetry(t){
   if(typeof t.ballast_target==='number') state.ballastTarget=t.ballast_target;
   if(typeof t.depth==='number') state.depth=t.depth;
   if(typeof t.pressure==='number') state.pressure=t.pressure;
-  // Heading is a MEASUREMENT — adopt it only from a vehicle that can actually take
-  // one. A mocked hull has no compass and reports a constant, which would overwrite
-  // the local estimate every frame and pin the map to a single bearing.
-  if(typeof t.heading==='number' && t.mock!==true) state.heading=t.heading;
+  // Heading is whatever the SUB reports, always. If its compass is not fitted the
+  // bearing does not move — and that is the truth, not something to paper over.
+  if(typeof t.heading==='number') state.heading=t.heading;
   if(typeof t.battery_v==='number') state.batteryV=t.battery_v;
   if(typeof t.cpu_c==='number') state.cpuC=t.cpu_c;
   if(typeof t.ram_pct==='number') state.ramPct=t.ram_pct;
