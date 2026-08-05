@@ -64,6 +64,14 @@ const CONFIG = {
     // usable - just a prompt to confirm it still refers to where you actually are,
     // since nothing can re-acquire it in the field without internet.
     originStaleH:   8,
+    // Open on the sharpest imagery the provider has rather than a fixed metres-per-pixel,
+    // and never upscale a coarse tile when a finer one exists. NOTE: which imagery you
+    // get is the provider's choice — Esri World Imagery is a single curated mosaic, so
+    // "a sunny day" is not something a client can request. Max resolution is.
+    startAtMaxZoom:   true,
+    preferSharpTiles: true,
+    // The ROG Ally paddles: either one ALONE zooms the map (both together = SURFACE).
+    zoomKeys:      { in:'F9', out:'F10' },
     autoOrigin:     true,        // §2 — auto-request the handheld's location on load when no origin is set
     // Keep the handheld's OWN position live (watchPosition), not just a fix on load.
     // The marker is always live; the launch point follows it only until a dive starts,

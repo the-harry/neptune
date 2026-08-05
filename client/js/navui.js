@@ -320,8 +320,16 @@ function onLiveFix(p){
 
   // _override: this path is automatic, so it must never raise the accuracy confirm.
   setOrigin({ lat, lon, accuracy:acc, source:'device-live', t:now, _override:true })
-    .then(ok=>{ if(ok!==false){ MAP.x=0; MAP.y=0;            // still at the launch point
-                                LOG.map('launch point moved with the handheld ('+Math.round(d)+' m)'); } });
+    .then(ok=>{
+      if(ok===false) return;
+      // RE-BASE the sub into the new frame instead of zeroing it. The operator moved;
+      // the ROV did not. Zeroing would drag the sub along with whoever is holding the
+      // handheld, which is exactly backwards — it is the growing gap between the two
+      // that is the tether, and that gap is what the range readout is measuring.
+      MAP.x -= rel.x; MAP.y -= rel.y;
+      LOG.map('operator moved '+Math.round(d)+' m — launch point followed, ROV held at '
+              +MAP.x.toFixed(1)+','+MAP.y.toFixed(1)+' m');
+    });
 }
 
 function offerRefine(accuracy){

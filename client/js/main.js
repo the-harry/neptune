@@ -193,6 +193,9 @@ async function boot(forced){
                            window.open(URL.createObjectURL(b), '_blank'); return b; },
     camUp, commandsBlocked,
     openOrigin:openOriginModal, openAreas:openAreaManager, requestLocation:requestDeviceLocation,
+    // The sub cannot report where it is; the operator can see it. Arm a tap, or place
+    // it straight from coordinates.
+    setRov:armRovTap, setRovAt:(lat,lon)=>setRovLatLon(lat,lon), zoomMap,
     // The DIVE LOGS button is gone from CONFIG (recorded dives live in
     // navigation_logs/), but the browser is still there rather than deleted -
     // removing a control should not silently remove the capability.

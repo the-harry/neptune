@@ -104,7 +104,13 @@ function drawTiles(ctx, w, h, centerLat, centerLon, scale, rot, dpr, area){
   const latR=centerLat*Math.PI/180;
   const world0 = 156543.03392 * Math.cos(latR);          // metres/pixel at zoom 0 (256px tiles)
   const zf = Math.log2(world0 / scale);
-  const z = Math.max(0, Math.min(p.maxzoom, Math.round(zf)));
+  // Round UP by default, not to nearest. Rounding to nearest picks a coarser tile
+  // whenever the view sits just past a zoom boundary and then UPSCALES it — visibly
+  // soft, and this imagery is being read for underwater structures and obstacles.
+  // Ceil downsamples a sharper tile instead, which is the best the provider has.
+  // Still clamped to maxzoom, so it can never ask for a level that does not exist.
+  const want = (CONFIG.map.preferSharpTiles===false) ? Math.round(zf) : Math.ceil(zf-0.001);
+  const z = Math.max(0, Math.min(p.maxzoom, want));
   const resZ = world0 / (1<<z);                          // metres per tile-pixel at centre
   const k = resZ / scale * dpr;                          // device px per tile-pixel (>dpr ⇒ overzoom, blurry not blank)
   const worldTP = 256 * (1<<z);

@@ -249,19 +249,37 @@ put in, which is exactly when the reachable circle matters most.
 
 Two things move, and they are **not** the same thing:
 
-| | What it is | When it moves |
-|---|---|---|
-| `MAP.me` | where the handheld is now, drawn with its accuracy halo | always |
-| `MAP.origin` | the datum the sub is dead-reckoned **from** | only before a dive |
+| | What it is | Colour | When it moves |
+|---|---|---|---|
+| `MAP.me` | **the operator** — where the handheld is now | green dot | always, automatically |
+| sub marker | **the ROV** | purple arrow | only on the sub's own navigation, or when you pinpoint it |
+| `MAP.origin` | the datum the sub is dead-reckoned **from** | orange cross | only before a dive |
 
 The origin follows the handheld while no track exists — you are still choosing a
 departure point. Once a dive is under way the datum **freezes**: moving it would shift
 every coordinate already plotted, so the sub would appear to jump sideways and the
-recorded track would be a lie. After that the live marker simply diverges from the
-origin, which is the truth — you walked, the sub did not.
+recorded track would be a lie.
 
-The **tether anchors on `MAP.me`**, not the datum, because the cable is held by whoever
-is holding the handheld. Walk 20 m up the bank and the reachable circle walks with you.
+When the origin does follow, the sub is **re-based into the new frame**, not zeroed.
+The operator moved; the ROV did not. Zeroing dragged the sub along with whoever was
+holding the handheld, which is exactly backwards — the growing gap between the two
+*is* the tether, and that gap is what the range readout measures.
+
+The **tether anchors on the operator**, not the datum, because the cable is held by
+whoever holds the handheld. Walk 20 m up the bank and the reachable circle walks with
+you and the range updates.
+
+**Pinpointing the ROV.** The operator's position is known; the sub's is not — there is
+no GNSS underwater and, until the IMU is wired, nothing on board can say where it
+drifted to. So the default assumption is the only honest one available: the ROV is
+where the operator was when the launch point was set. That is a guess, and the operator
+is the one who can correct it by eye. The **◎** button on the map (or `NEPTUNE.setRov()`,
+or `NEPTUNE.setRovAt(lat,lon)`) arms a tap that places the sub. It moves **only** the
+sub — the datum stays put, so the track and every earlier coordinate stay valid.
+
+There is deliberately **no accuracy halo**. It was a large translucent disc sitting on
+top of the imagery, and the imagery is the point: underwater structures and obstacles
+have to be readable. The orange tether ring is the only circle on this map.
 
 Guards: it never prompts (the watch only starts once permission is already granted, and
 picks it up live via `permissions.onchange` if you grant it later); movement under
@@ -272,8 +290,32 @@ beyond `originMoveM` you are somewhere else entirely, which still gets the expli
 
 > **On the ROG Ally this is Wi-Fi positioning, not GNSS.** The handheld has no GPS
 > receiver, so fixes are coarse (tens of metres) and will not track walking the way a
-> phone does. The accuracy halo is drawn at whatever the fix claims, so a ±60 m guess
-> looks like a guess. Tapping the map to set the origin is still the precise route.
+> phone does. Tapping the map to set the origin remains the precise route, and the
+> ORIGIN tile shows the claimed accuracy so you can judge the fix before trusting it.
+
+### Zoom: maximum imagery, and the paddles
+
+The map **opens on the sharpest imagery the provider has** rather than a fixed
+metres-per-pixel. Mercator resolution is latitude-dependent, so the scale that lands on
+the deepest tile zoom is computed once a view centre exists (`maxZoomScale`) — at 51.5°N,
+z19 is 0.186 m/px against the old fixed 0.600. It is a one-shot pin: after that the
+operator owns the zoom and nothing moves it under them. Tile selection also **rounds up**
+now (`preferSharpTiles`), so a coarse tile is never upscaled when a finer one exists.
+
+> Which imagery you get is the provider's choice, not ours. Esri World Imagery is a
+> single curated, largely cloud-free mosaic — there is no way for a client to ask for
+> "a sunny day" or a particular capture date. Maximum resolution is what *is* selectable,
+> and that is what this does. Downloading an offline area caches whatever that mosaic
+> currently holds for the bbox.
+
+The **ROG Ally paddles zoom the map**: `F9` in, `F10` out (`CONFIG.map.zoomKeys`), and
+they zoom whichever view is on screen — the radar has its own scale, so zooming the big
+map from the collapsed view would look like a dead control.
+
+They fire on **release**, not press, and only if the other paddle was never touched
+during the hold. Both paddles held together is SURFACE; zooming on keydown would mean
+every attempt at that combo started by zooming the map, and an emergency has to feel
+like one deliberate gesture.
 
 ### A submarine can't be paused (§3)
 

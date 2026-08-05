@@ -26,12 +26,13 @@ const MAP = {
   viewLat:null, viewLon:null, follow:true,   // geographic view centre (§3); follow = track the sub
   centreline:null,                           // [[lon,lat],…] waterway overlay (§3.5)
   originTap:false,                           // one-shot: next map tap sets the origin (§2)
+  rovTap:false,                              // one-shot: next map tap places the ROV by hand
   drag:null, selReadout:null,                // pan drag state; area-selection readout callback (§4)
   replay:false,                              // viewing a saved dive — freeze live integration (§1)
   blind:false, blindSince:0, videoOkSince:0, videoWasLive:false,   // BLIND NAV (map as the driving view)
 };
 const C = { grid:'rgba(180,107,255,0.13)', origin:'#ff8c1a', sub:'#b46bff',
-           me:'#1f9dff',                       // the handheld — the operator, live
+           me:'#4dffa6',                       // the OPERATOR — green, live, auto-tracked
            shallow:'#4dffa6', deep:'#1f9dff' };
 
 function navFetch(path, opts){ return fetch((state.httpBase||'') + path, opts); }
@@ -49,8 +50,15 @@ function initMap(){
   // The full-screen views (expanded, blind nav) are explorable and get the adjustable
   // one. Sharing a single value meant zooming the big map silently rescaled the radar -
   // and after blind nav gained zoom controls, that happened constantly.
-  MAP.scale = CONFIG.map.metersPerPixel;        // expanded / blind nav (zoomable)
+  // Open at the BEST imagery the provider has, not at a fixed metres-per-pixel. The
+  // map is being read for underwater structures and bank detail, so the useful default
+  // is maximum resolution; zooming out is one keypress away, recovering detail that was
+  // never requested is not. Recomputed once a view centre exists, since the scale that
+  // lands on the deepest tile zoom is latitude-dependent (see maxZoomScale).
+  MAP.scale = CONFIG.map.startAtMaxZoom===false
+            ? CONFIG.map.metersPerPixel : maxZoomScale(0);
   MAP.radarScale = CONFIG.map.radarMetersPerPixel || CONFIG.map.metersPerPixel;  // collapsed radar (fixed glance zoom)
+  MAP._zoomPinned = false;                      // becomes true once pinned at a real latitude
   MAP.headingUp = CONFIG.map.headingUp;
   document.documentElement.style.setProperty('--radar-px', (CONFIG.map.radarPx||200)+'px');
   resizeMap(); window.addEventListener('resize', resizeMap);
@@ -88,7 +96,8 @@ function initMap(){
   const zi=$('map-zoom-in'), zo=$('map-zoom-out'), rc=$('map-recenter');
   if(zi) zi.addEventListener('click', (e)=>{ e.stopPropagation(); MAP.scale=Math.max(0.1,MAP.scale/1.3); });
   if(zo) zo.addEventListener('click', (e)=>{ e.stopPropagation(); MAP.scale=Math.min(20,MAP.scale*1.3); });
-  if(rc) rc.addEventListener('click', (e)=>{ e.stopPropagation(); MAP.scale=CONFIG.map.metersPerPixel; });
+  if(rc) rc.addEventListener('click', (e)=>{ e.stopPropagation(); MAP.scale=bestScaleNow(); });  // reset = best imagery, not a fixed m/px
+  const sr=$('map-set-rov'); if(sr) sr.addEventListener('click', (e)=>{ e.stopPropagation(); armRovTap(); });
   MAP.canvas.addEventListener('wheel', (e)=>{ if(!MAP.expanded && !MAP.blind) return; e.preventDefault(); MAP.scale=Math.max(0.05,Math.min(40,MAP.scale*(e.deltaY>0?1.1:0.9))); }, {passive:false});
   // drag-to-pan + tap (expanded only, canvas-scoped so it never touches piloting input, §5).
   // Pan is computed absolutely from the drag-start centre + total screen delta (no feedback loop),
@@ -212,14 +221,50 @@ function collapseMap(){
   MAP.expanded=false; MAP.follow=true;                          // radar re-centres on the sub
   document.body.classList.remove('map-expanded'); document.body.classList.add('map-collapsed');
   const banner=$('all-stop-banner'); if(banner) banner.classList.remove('on');
-  MAP.scale=CONFIG.map.metersPerPixel;                          // radar back to its glance zoom
+  MAP.scale=bestScaleNow();                                     // back to max imagery zoom
   updateEmptyState(); afterResize();
   LOG.state('map collapsed — control returned');
 }
-/* a non-drag tap in the expanded map: place the origin when armed (§2) */
+/* PINPOINT THE ROV.
+
+   The operator's position is known — the handheld reports it. The sub's is not: there
+   is no GNSS underwater and, until the IMU is wired, nothing on board can say where it
+   drifted to. So the default assumption is the only honest one available: the ROV is
+   where the operator was when they set the launch point. That is a starting guess, not
+   a fix, and the operator is the one who can correct it by eye — "it surfaced over
+   there" — which is what this arms.
+
+   Sets only the sub's position in the local frame. It does NOT touch the origin: the
+   datum stays put, so the track and every previous coordinate remain valid. */
+function armRovTap(){
+  if(!MAP.hasOrigin){ if(typeof openOriginModal==='function') openOriginModal(); return; }
+  MAP.rovTap=true; MAP.originTap=false;
+  if(!MAP.expanded && typeof expandMap==='function') expandMap();
+  if(typeof showOriginPrompt==='function')
+    showOriginPrompt('TAP WHERE THE ROV IS',
+      'The sub cannot report its own position yet. Tap its actual place on the map.',
+      { label:'CANCEL', run:()=>{ MAP.rovTap=false; if(typeof hideOriginPrompt==='function') hideOriginPrompt(); } });
+  LOG.map('armed: next map tap places the ROV');
+}
+function setRovLatLon(lat, lon){
+  if(!MAP.hasOrigin || !MAP.origin) return false;
+  const p=toLocal(lat, lon, MAP.origin.lat, MAP.origin.lon);
+  MAP.x=p.x; MAP.y=p.y;
+  pushTrack(MAP.x, MAP.y, MAP.depth);
+  LOG.map('ROV placed by hand at '+p.x.toFixed(1)+','+p.y.toFixed(1)+' m from the datum'+
+          ' — tether now '+tetherRangeM().toFixed(1)+' m');
+  return true;
+}
+/* a non-drag tap in the expanded map: place the origin, or the ROV, when armed (§2) */
 function onMapTap(clientX, clientY){
-  if(!MAP.originTap) return;
+  if(!MAP.originTap && !MAP.rovTap) return;
   const g=screenToLatLon(MAP.canvas, clientX, clientY); if(!g) return;
+  if(MAP.rovTap){
+    MAP.rovTap=false;
+    setRovLatLon(g.lat, g.lon);
+    if(typeof hideOriginPrompt==='function') hideOriginPrompt();
+    return;
+  }
   MAP.originTap=false;
   setOrigin({ lat:g.lat, lon:g.lon, accuracy:8, source:'map_tap', t:Date.now() }).then(ok=>{
     if(ok!==false){ MAP.x=0; MAP.y=0; MAP.follow=true; if(typeof hideOriginPrompt==='function') hideOriginPrompt(); }
@@ -323,7 +368,7 @@ function updateEmptyState(){
   const compact=$('radar-empty'); if(compact) compact.innerHTML = !MAP.hasArea ? 'NO&nbsp;MAP' : 'NO&nbsp;ORIGIN';
   const full=$('map-empty'), msg=$('map-empty-msg'), btn=$('map-empty-btn');  // full explanation in the expanded view
   // …but don't dim the imagery while the operator is actively tapping an origin or selecting an area
-  const suppress = MAP.expanded && (MAP.originTap || MAP.selectMode);
+  const suppress = MAP.expanded && (MAP.originTap || MAP.rovTap || MAP.selectMode);
   if(full){
     full.classList.toggle('on', empty && !suppress);
     if(!MAP.hasArea){ if(msg)msg.textContent='NO MAP AREA LOADED'; if(btn)btn.textContent='LOAD OR DOWNLOAD'; }
@@ -502,6 +547,14 @@ function mapTick(){
   if(MAP.hasOrigin && (MAP.follow || MAP.viewLat==null)){
     const g=toLatLon(MAP.x,MAP.y,MAP.origin.lat,MAP.origin.lon); MAP.viewLat=g.lat; MAP.viewLon=g.lon;
   }
+  // Pin to the provider's deepest zoom once we know WHERE we are — Mercator resolution
+  // is latitude-dependent, so this cannot be a constant. One-shot: after this the
+  // operator owns the zoom and nothing moves it under them.
+  if(!MAP._zoomPinned && MAP.viewLat!=null && CONFIG.map.startAtMaxZoom!==false){
+    MAP._zoomPinned=true;
+    MAP.scale=bestScaleNow();
+    LOG.map('map opened at maximum imagery zoom — '+MAP.scale.toFixed(3)+' m/px');
+  }
   // heading-up: the North indicator on the ring rotates opposite to heading (FWD stays up)
   const north=$('radar-north');
   if(north){ const rot=(!MAP.expanded && MAP.headingUp)? -MAP.hdg : 0; north.setAttribute('transform','rotate('+rot.toFixed(1)+')'); }
@@ -630,20 +683,43 @@ function drawCentreline(ctx,dpr){
    point. Drawn around the ORIGIN, not the sub — the question it answers is "is this
    a good place to put in", which is a question about the launch point. Radius is the
    horizontal budget left at the current depth, so it closes in as the sub descends. */
-/* "You are here" — the handheld, live. Distinct from the origin cross (which is the
-   dead-reckoning datum) because after launch the two separate, and the difference is
-   the whole point: the operator walked, the sub did not. The accuracy halo is drawn
-   honestly at whatever the fix claims, so a ±60 m Wi-Fi guess LOOKS like a guess. */
-function drawMeMarker(ctx,dpr,x,y,ppm,acc){
+/* THE OPERATOR — green dot, live, auto-tracked. The purple arrow is the ROV.
+   These are two different things and are drawn as two different things: after launch
+   the operator walks and the sub does not, and the gap between them is the tether.
+
+   No accuracy halo. It was a large translucent disc sitting on top of the imagery,
+   and the imagery is the point — underwater structures and obstacles have to be
+   readable. The orange tether ring is the only circle on this map. */
+function drawMeMarker(ctx,dpr,x,y){
   ctx.save();
-  const rpx=(acc||0)*ppm;
-  if(rpx>6 && rpx<4000){
-    ctx.fillStyle='rgba(31,157,255,.10)'; ctx.beginPath(); ctx.arc(x,y,rpx,0,Math.PI*2); ctx.fill();
-    ctx.strokeStyle='rgba(31,157,255,.35)'; ctx.lineWidth=1*dpr; ctx.stroke();
-  }
   ctx.fillStyle=C.me; ctx.strokeStyle='#0c0118'; ctx.lineWidth=2*dpr;
-  ctx.beginPath(); ctx.arc(x,y,5*dpr,0,Math.PI*2); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(x,y,5.5*dpr,0,Math.PI*2); ctx.fill(); ctx.stroke();
   ctx.restore();
+}
+
+/* Zoom whichever view is actually on screen. The collapsed radar has its own scale
+   (a glance instrument), the expanded/blind map has another; zooming the wrong one
+   looks like the control is dead. */
+function zoomMap(dir){
+  const f = dir>0 ? 1/1.3 : 1.3;
+  const cl = v => Math.max(0.03, Math.min(40, v*f));
+  if(MAP.expanded || MAP.blind) MAP.scale = cl(MAP.scale);
+  else MAP.radarScale = cl(MAP.radarScale);
+  LOG.map('map zoom '+(dir>0?'in':'out')+' -> '+curScale().toFixed(3)+' m/px');
+}
+
+/* Best imagery this provider has, expressed as metres/pixel at a given latitude.
+   Mercator resolution is latitude-dependent, so a fixed m/px would land on a
+   different tile zoom in different places — this pins the view to the deepest zoom
+   that actually exists, which is what "max zoom" has to mean. */
+function maxZoomScale(lat){
+  const p=_provider(MAP.activeArea);
+  const z=(p && p.maxzoom) || 19;
+  return 156543.03392 * Math.cos((lat||0)*Math.PI/180) / (1<<z);
+}
+function bestScaleNow(){
+  const lat = (MAP.viewLat!=null) ? MAP.viewLat : (MAP.origin ? MAP.origin.lat : 0);
+  return maxZoomScale(lat);
 }
 function drawTetherRing(ctx,dpr,ox,oy,ppm){
   const T=CONFIG.tether; if(!T || !T.showRing) return;
@@ -665,7 +741,7 @@ function drawTrackProjected(ctx,dpr,headingUp){
   const meS = MAP.me ? lonLatToScreen(MAP.me.lat,MAP.me.lon) : null;
   const aS = meS || oS;
   if(aS) drawTetherRing(ctx,dpr,aS[0],aS[1],dpr/curScale());
-  if(meS) drawMeMarker(ctx,dpr,meS[0],meS[1],dpr/curScale(),MAP.me.acc);
+  if(meS) drawMeMarker(ctx,dpr,meS[0],meS[1]);
   if(oS){ ctx.strokeStyle=C.origin; ctx.lineWidth=2*dpr; ctx.beginPath();
     ctx.moveTo(oS[0]-7*dpr,oS[1]);ctx.lineTo(oS[0]+7*dpr,oS[1]);ctx.moveTo(oS[0],oS[1]-7*dpr);ctx.lineTo(oS[0],oS[1]+7*dpr);ctx.stroke();
     ctx.beginPath();ctx.arc(oS[0],oS[1],10*dpr,0,7);ctx.stroke(); }
@@ -697,7 +773,7 @@ function drawTrackMeterFrame(ctx,cx,cy,ppm,rot,headingUp){
   const o=L(0,0);
   const an=tetherAnchorLocal(), aP=L(an.x,an.y);
   drawTetherRing(ctx,dpr,aP[0],aP[1],ppm);
-  if(MAP.me) drawMeMarker(ctx,dpr,aP[0],aP[1],ppm,MAP.me.acc);
+  if(MAP.me) drawMeMarker(ctx,dpr,aP[0],aP[1]);
   ctx.strokeStyle=C.origin; ctx.lineWidth=2*dpr; ctx.beginPath();
   ctx.moveTo(o[0]-7*dpr,o[1]);ctx.lineTo(o[0]+7*dpr,o[1]);ctx.moveTo(o[0],o[1]-7*dpr);ctx.lineTo(o[0],o[1]+7*dpr);ctx.stroke();
   ctx.beginPath();ctx.arc(o[0],o[1],10*dpr,0,7);ctx.stroke();

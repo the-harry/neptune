@@ -169,6 +169,7 @@ const state = {
   mode:'sim', /* sim | real | stale */
   surfaceUntil:0,
   surfaceComboStart:0, surfaceComboFired:false,   // gamepad SURFACE combo hold (both paddles)
+  zoomArm:{},                 // paddle pressed alone → zooms the map on release (see input.js)
   lastFrame:0
 };
 

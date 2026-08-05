@@ -209,6 +209,21 @@ function typingInField(e){
   const t=e.target;
   return t && (t.tagName==='INPUT' || t.tagName==='TEXTAREA' || t.isContentEditable);
 }
+/* The paddles do double duty: BOTH held for 3 s is SURFACE, either one ALONE is map
+   zoom. So the zoom fires on RELEASE, not press, and only if the other paddle was
+   never touched during the hold. Zooming on keydown would mean every attempt at the
+   SURFACE combo started by zooming the map — harmless, but it would look like a bug,
+   and the combo must feel like a deliberate single gesture. */
+function zoomKeyFor(code){
+  const zk=(CONFIG.map && CONFIG.map.zoomKeys) || {};
+  if(code===zk.in)  return +1;
+  if(code===zk.out) return -1;
+  return 0;
+}
+function otherPaddleHeld(code){
+  const keys=CONFIG.surfaceComboKeys||[];
+  return keys.some(k=>k!==code && state.keys.has(k));
+}
 window.addEventListener('keydown', (e)=>{
   if(typingInField(e)) return;            // don't hijack typing in the config host field
   if(state.learn.active){                 // capture a key for the mapper
@@ -218,6 +233,20 @@ window.addEventListener('keydown', (e)=>{
   }
   // swallow the default for movement/brightness keys and the surface paddles (F9/F10)
   if(MOVE_KEYS.has(e.code) || (CONFIG.surfaceComboKeys||[]).indexOf(e.code)>=0) e.preventDefault();
+  if(!e.repeat && zoomKeyFor(e.code)){
+    // Arm this paddle for a zoom on release — unless the other is already down, in
+    // which case the operator is going for SURFACE and neither should zoom.
+    state.zoomArm[e.code] = !otherPaddleHeld(e.code);
+    if(!state.zoomArm[e.code]) for(const k in state.zoomArm) state.zoomArm[k]=false;
+  }
   state.keys.add(e.code);
 });
-window.addEventListener('keyup', (e)=>{ state.keys.delete(e.code); });
+window.addEventListener('keyup', (e)=>{
+  state.keys.delete(e.code);
+  const dir=zoomKeyFor(e.code);
+  if(dir && state.zoomArm[e.code]){
+    state.zoomArm[e.code]=false;
+    // Not if the combo just fired, and not while the mapper is capturing keys.
+    if(!state.surfaceComboFired && !state.learn.active && typeof zoomMap==='function') zoomMap(dir);
+  }
+});
