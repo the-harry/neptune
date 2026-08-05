@@ -651,7 +651,7 @@ aside > button .material-symbols-outlined{font-size:20px}
    dive is live, so the vehicle behind it has to stay visible. Backdrop is dimmed
    rather than opaque for the same reason. */
 #logview{position:fixed;inset:0;z-index:70;display:none;align-items:center;justify-content:center;
-  background:rgba(6,2,16,.45);backdrop-filter:blur(2px)}
+  background:rgba(6,2,16,.62)}
 #logview.show{display:flex}
 #logview .lv-card{width:min(1000px,82vw);height:min(620px,72vh);display:flex;flex-direction:column;
   background:rgba(12,1,24,.94);border:1px solid var(--outline-variant);border-radius:.5rem;
@@ -680,3 +680,46 @@ aside > button .material-symbols-outlined{font-size:20px}
 #logview .lv-err  .lv-tag,#logview .lv-err  .lv-m{color:var(--error)}
 #logview .lv-foot{flex:0 0 auto;padding:6px 10px;border-top:1px solid var(--outline-variant);
   font-family:var(--font-sans);font-size:10px;color:var(--on-surface-variant);background:rgba(0,0,0,.25)}
+
+/* ============================================================================
+   REDUCED GPU  (body.reduce-gpu, default ON - see CONFIG.ui.reduceGpu)
+
+   The AMD kernel display driver on this handheld bugchecks the WHOLE MACHINE:
+
+     0x133 DPC_WATCHDOG_VIOLATION   Failure.Bucket: 0x133_ISR_amdkmdag!unknown_function
+     amdkmdag.sys 32.0.23027.3001
+
+   confirmed from C:\Windows\MEMORY.DMP, not guessed. That is a driver defect and
+   nothing here can repair it - but it is a LOAD-triggered one, and this dashboard
+   was asking for a lot: two permanently visible full-size `backdrop-filter:
+   blur(16px)` surfaces (the instrument bar and the control rail) composited over a
+   live H.264 video every single frame, plus a full-width scan line animating
+   forever on top of it.
+
+   Blur over video is the most expensive thing a page can ask a compositor to do
+   continuously. On a dark theme it is also nearly invisible: raising the panel
+   opacity instead looks the same and costs nothing per frame.
+
+   Losing a little glass is not a trade at all when the alternative is the machine
+   freezing with a vehicle in the water.
+   ============================================================================ */
+body.reduce-gpu .backdrop-blur-lg,
+body.reduce-gpu .glass-panel,
+body.reduce-gpu .hud-chip,
+body.reduce-gpu .map-btn,
+body.reduce-gpu #logview,
+body.reduce-gpu #mapper-modal,
+body.reduce-gpu .modal-backdrop{
+  -webkit-backdrop-filter:none !important;
+  backdrop-filter:none !important;
+}
+/* Blur was doing the legibility work over the video, so the surfaces have to carry
+   it themselves now. */
+body.reduce-gpu #topbar{background:rgba(12,1,24,.88)}
+body.reduce-gpu .glass-panel{background:rgba(18,4,38,.9)}
+body.reduce-gpu .hud-chip{background:rgba(18,4,38,.88)}
+body.reduce-gpu .map-btn{background:rgba(18,4,38,.9)}
+/* A full-width bar translating across the video forever, for decoration. */
+body.reduce-gpu .scanning-line{display:none}
+/* Whole-viewport gradients over the feed are another always-composited layer. */
+body.reduce-gpu #video-layer .bg-gradient-to-t{display:none}

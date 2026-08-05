@@ -108,6 +108,47 @@ $n141 = @(Get-WinEvent -FilterHashtable @{LogName='Application';Id=1001;StartTim
           Where-Object { $_.Message -match 'LiveKernelEvent' }).Count
 Info "LiveKernelEvent (GPU timeout) reports in the last 24h: $n141"
 
+# ---------------------------------------------------------------------------
+# ANALYSE the dump. This is the step that ends the guessing: it names the driver.
+#
+# It has already been run once, and the answer was:
+#
+#     DPC_WATCHDOG_VIOLATION (0x133)
+#     Failure.Bucket: 0x133_ISR_amdkmdag!unknown_function
+#     amdkmdag.sys  32.0.23027.3001   (AMD Radeon kernel display driver)
+#
+# so the fault is the AMD display driver overrunning in its interrupt handler.
+# Nothing in this repo can repair that - the fix is an AMD driver change - but the
+# dashboard no longer piles sustained compositing load onto it (CONFIG.ui.reduceGpu).
+Write-Host "`n[4/4] Analyse the crash dump" -ForegroundColor Cyan
+$dump = "C:\Windows\MEMORY.DMP"
+if (-not (Test-Path $dump)) {
+  Info "no MEMORY.DMP yet - nothing to analyse"
+} else {
+  $kd = Get-ChildItem "$env:ProgramFiles\WindowsApps" -Directory -ErrorAction SilentlyContinue |
+        Where-Object Name -like 'Microsoft.WinDbg*' |
+        ForEach-Object { Join-Path $_.FullName "amd64\kd.exe" } |
+        Where-Object { Test-Path $_ } | Select-Object -First 1
+  if (-not $kd) {
+    Nope "WinDbg not installed - install it, then re-run this script:"
+    Info  "  winget install --id Microsoft.WinDbg -e"
+  } else {
+    $report = Join-Path $env:TEMP "neptune-bugcheck.txt"
+    Info "analysing $dump (symbols download on first run; this takes a minute)..."
+    & $kd -z $dump -y "srv*C:\Symbols*https://msdl.microsoft.com/download/symbols" `
+          -c ".symfix; .reload; !analyze -v; q" 2>&1 | Out-File -FilePath $report -Encoding utf8
+    $bucket = Select-String -Path $report -Pattern 'Failure\.Bucket' | Select-Object -First 1
+    $img    = Select-String -Path $report -Pattern '^IMAGE_NAME:|^MODULE_NAME:' | Select-Object -First 2
+    if ($bucket) { OK "$($bucket.Line.Trim())" }
+    foreach ($i in $img) { Info $i.Line.Trim() }
+    Info "full report: $report"
+  }
+}
+
 Write-Host "`nDone. REBOOT for the dump and TDR settings to take effect." -ForegroundColor Magenta
-Write-Host "After the next crash, C:\Windows\MEMORY.DMP will name the faulting driver." -ForegroundColor DarkGray
+Write-Host "KNOWN CAUSE: amdkmdag.sys (AMD display driver) overruns its ISR -> 0x133." -ForegroundColor Yellow
+Write-Host "  The real fix is an AMD driver change: update via AMD Software (Adrenalin)," -ForegroundColor DarkGray
+Write-Host "  or roll back if the current one is newer than the last stable build." -ForegroundColor DarkGray
+Write-Host "  Current: $((Get-CimInstance Win32_VideoController | Select-Object -First 1).DriverVersion)" -ForegroundColor DarkGray
+Write-Host "The dashboard already avoids sustained GPU compositing (CONFIG.ui.reduceGpu)." -ForegroundColor DarkGray
 Write-Host "Also try:  Neptune.bat -SafeGraphics   (keeps the GPU video engine out of the path)`n" -ForegroundColor DarkGray

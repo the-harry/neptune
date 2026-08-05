@@ -134,6 +134,13 @@ function bindExit(){
 /* ---- BOOTSTRAP ---- */
 async function boot(forced){
   if(!forced && fileProtocolGuard()) return;
+  // Before anything renders: the display driver on this handheld takes the whole
+  // machine down under sustained compositing load, so the expensive always-on
+  // effects are off by default. See CONFIG.ui.reduceGpu and the note in styles.css.
+  if(!CONFIG.ui || CONFIG.ui.reduceGpu !== false){
+    document.body.classList.add('reduce-gpu');
+    LOG.state('reduced-GPU rendering ON (backdrop blur + scan line disabled) - CONFIG.ui.reduceGpu');
+  }
   resolveHost();
   enableAppFullscreen();
   LOG.state('boot — host="'+ (state.host||'(none, disk mode)') +'"  http="'+(state.httpBase||'(relative)')+'"  ws="'+(state.wsBase||'(none)')+'"');

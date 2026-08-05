@@ -23,6 +23,35 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
   *Verified on the Pi:* steer RIGHT `284.0 → 301.9`, steer LEFT `301.9 → 278.5`, straight
   `4.20 m` in `6.1 s`, auto dive log `dive-20260805-014654.jsonl` written unasked.
 
+## Stability
+
+- ✅ **Named the thing that has been freezing the handheld, and stopped feeding it.**
+  `0x133 DPC_WATCHDOG_VIOLATION` had been recurring for weeks with no cause. `C:\Windows\MEMORY.DMP`
+  finally captured one and `!analyze -v` was unambiguous:
+
+      Failure.Bucket : 0x133_ISR_amdkmdag!unknown_function
+      amdkmdag.sys   : 32.0.23027.3001   (AMD Radeon kernel display driver)
+
+  The AMD display driver overruns in its **interrupt service routine**. That is a driver
+  defect and nothing in this repo can repair it - the fix is an AMD driver update or
+  rollback. Worth recording that there were **zero** `4101` display-timeout events, which is
+  why "GPU" was never confirmed before: it never TDR'd, it went straight to a bugcheck.
+
+  What this repo *could* fix is how much it was asking of that driver. The dashboard had
+  **two permanently visible full-size `backdrop-filter: blur(16px)` surfaces** - the
+  instrument bar and the control rail - composited over a live H.264 video every frame, plus
+  a full-width scan line animating forever on top. Blur over video is the most expensive
+  thing a page can ask a compositor to do continuously, and on a dark theme it is very nearly
+  invisible: raising the panel opacity looks the same and costs nothing per frame.
+  `CONFIG.ui.reduceGpu` (default ON) drops all of it.
+  This does not make the driver correct, and the machine can still bugcheck with the
+  dashboard closed - it has before. It removes this application as a contributor.
+  *Verified: nothing in the page requests `backdrop-filter` any more, the bar and rail are
+  opaque enough to stay legible without it, and the top bar, map, LOGS overlay, PIC and
+  controls all still work (14 checks).*
+  `crash-diagnostics.ps1` now runs the dump analysis itself, so the next one is one command
+  rather than an afternoon.
+
 ## Diagnostics
 
 - 🧪 **Make the log answer questions it was not prepared for, and readable mid-dive.**
@@ -337,7 +366,7 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 
 | | Item | Owner |
 |---|---|---|
-| ⚠️ | **`DPC_WATCHDOG_VIOLATION`** — kernel dumps now enabled; `MEMORY.DMP` needs WinDbg `!analyze -v` to name the driver | hardware |
+| ⚠️ | **`DPC_WATCHDOG_VIOLATION` — IDENTIFIED: `amdkmdag.sys` (AMD display driver) overruns its ISR.** `Failure.Bucket: 0x133_ISR_amdkmdag!unknown_function`, driver `32.0.23027.3001`. The dashboard no longer adds sustained compositing load, but the defect itself needs an AMD driver update or rollback | hardware |
 | ⚠️ | **USB tether NIC drops off the bus** (`Present: False`), needs a physical replug; suspect the hub/port/power path | hardware |
 | ⚠️ | **`RealHardware` is a stub** — depth, pressure, heading and pack voltage are simulated; only Pi health is real. `TODO(hardware)` in `api/hardware.py` | firmware |
 | ⚠️ | **No GNSS on the Ally** — Wi-Fi positioning needs internet, so the field workflow is tap-on-map. A USB GNSS on the Pi feeding `/api/origin` is the real answer | hardware |

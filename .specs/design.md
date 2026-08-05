@@ -520,6 +520,32 @@ collapsing them into one word is part of why the scripted-path bug survived so l
 
 ---
 
+### The GPU driver, and what the dashboard stopped doing to it
+The handheld froze repeatedly with `0x133 DPC_WATCHDOG_VIOLATION`. The dump names it:
+
+```
+Failure.Bucket : 0x133_ISR_amdkmdag!unknown_function
+amdkmdag.sys   : 32.0.23027.3001      (AMD Radeon kernel display driver)
+```
+
+The AMD display driver overruns in its **ISR**. Nothing here can repair that; the fix is an
+AMD driver update or rollback. Note there were **no `4101` display-timeout events at all** -
+it never TDR'd, it went straight to a bugcheck, which is why raising `TdrDelay` never helped
+and why "GPU" stayed unconfirmed for so long.
+
+What the dashboard *was* contributing: two permanently visible full-size
+`backdrop-filter: blur(16px)` surfaces - the instrument bar and the control rail - composited
+over a live H.264 video every frame, plus a full-width scan line animating forever above it.
+Continuous blur over video is the most expensive thing a page can ask of a compositor.
+
+`CONFIG.ui.reduceGpu` (default **on**) drops the blurs, the scan line and the full-viewport
+gradient, and raises panel opacity so legibility survives. On a dark theme the visual
+difference is almost nil. Losing a little glass is not a trade when the alternative is the
+machine freezing with a vehicle in the water.
+
+This does not make the driver correct. The machine has bugchecked with the dashboard closed.
+It removes this application as a contributor, which is the only part that was ours.
+
 ## 10. The tether, and the machine underneath it
 
 A direct Ally↔Pi cable has **no DHCP server**. Left on automatic, both ends fall back to

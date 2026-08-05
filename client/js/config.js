@@ -118,6 +118,16 @@ const CONFIG = {
   },
 
   /* ---- BLACKBOX client recorder (logging addendum) ----------------------- */
+  /* ---- rendering --------------------------------------------------------- */
+  ui: {
+    // The AMD display driver on this handheld bugchecks the machine under
+    // sustained compositing load (0x133 ISR amdkmdag, confirmed from the crash
+    // dump). Reduced mode drops the full-screen backdrop blurs and the scan line,
+    // which is where nearly all of the per-frame GPU cost was. Set false to get
+    // the glass back on hardware that can take it.
+    reduceGpu: true,
+  },
+
   /* ---- LOGS overlay ------------------------------------------------------ */
   log: {
     // Rows kept in the overlay's DOM. The in-memory ring is larger, and the file

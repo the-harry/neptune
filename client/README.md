@@ -231,6 +231,33 @@ instruments — thrust, steering, video — fully live**. The map never captures
 gamepad/keyboard piloting input (handlers are scoped to the canvas; MapLibre, if ever
 vendored, is `keyboard:false`).
 
+## Reduced GPU rendering (default ON)
+
+The handheld froze repeatedly with `0x133 DPC_WATCHDOG_VIOLATION`. The crash dump names it:
+
+```
+Failure.Bucket : 0x133_ISR_amdkmdag!unknown_function
+amdkmdag.sys   : 32.0.23027.3001      (AMD Radeon kernel display driver)
+```
+
+The AMD display driver overruns in its interrupt handler. **Nothing in this client can repair
+that** - the fix is an AMD driver update or rollback - but it is a load-triggered fault, and
+this dashboard was asking for a lot: two permanently visible full-size
+`backdrop-filter: blur(16px)` surfaces (the instrument bar and the control rail) composited
+over a live H.264 video every frame, plus a full-width scan line animating forever above it.
+
+Continuous blur over video is the most expensive thing a page can ask of a compositor, and on
+a dark theme it is almost invisible - raising panel opacity looks the same and costs nothing
+per frame. `CONFIG.ui.reduceGpu` (default `true`) drops the blurs, the scan line and the
+full-viewport gradient. Set it `false` to get the glass back on hardware that can take it.
+
+There were **no `4101` display-timeout events at all**, which is why "GPU" went unconfirmed
+for so long: it never TDR'd, it went straight to a bugcheck - so raising `TdrDelay` was never
+going to help.
+
+`launch/crash-diagnostics.ps1` now runs the dump analysis itself, so the next bugcheck is one
+command rather than an afternoon.
+
 ## LOGS - reading the log without leaving the dive
 
 A fault underwater has to be diagnosed while the vehicle is still in the water, and the
