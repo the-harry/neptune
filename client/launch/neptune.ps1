@@ -39,7 +39,8 @@ $icon      = Join-Path $root "icon.ico"
 $hostFile  = Join-Path $PSScriptRoot "neptune-host.txt"
 # The camera AP's SSID (or any distinctive part of it). Used by /__wifi to answer
 # "can the HANDHELD see the camera", which is the only way to tell a dead Pi
-# antenna from a dead camera.
+# antenna from a dead camera. The Pi has its own copy in install.sh (CAM_SSID),
+# because that runs from a curl pipe with the client stripped out - change both.
 $camSsidFile = Join-Path $PSScriptRoot "neptune-camera-ssid.txt"
 
 # Profile directories are PER BROWSER.
@@ -345,11 +346,12 @@ try {
       # handheld is standing right there with a Wi-Fi radio of its own. This bridges
       # `netsh wlan show networks` into something the page can fetch.
       #
-      # Cached, because netsh takes a second or two and Windows throttles scans anyway
-      # (results can be up to ~30 s old however often you ask). The page polls slowly.
+      # Cached for a few seconds, because netsh takes a second or two and Windows
+      # throttles scans regardless. Shorter than the page's poll interval, or the
+      # page would only ever re-read the same cached answer.
       if ($path -eq "/__wifi") {
         $now = [DateTime]::UtcNow
-        if (-not $shared.wifiAt -or ($now - $shared.wifiAt).TotalSeconds -gt 20) {
+        if (-not $shared.wifiAt -or ($now - $shared.wifiAt).TotalSeconds -gt 6) {
           $shared.wifiAt = $now
           $ssids = @()
           $err = $null

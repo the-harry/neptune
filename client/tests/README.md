@@ -5,7 +5,7 @@ dependencies, no build step — the same rule the client itself follows. Python
 standard library plus a Chrome that is already installed.
 
 ```bash
-python client/tests/run.py                # every suite  (~95 s, 245 checks)
+python client/tests/run.py                # every suite  (~95 s, 249 checks)
 python client/tests/run.py tether         # one suite (substring match)
 python client/tests/run.py map view       # several
 python client/tests/run.py --headed       # watch it happen in a real window

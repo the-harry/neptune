@@ -99,8 +99,11 @@ checks backend availability for a dependency it doesn't have.
   | 🟡 open, **blinking** | the camera's radio is there but the Pi is getting nothing from it | wait, or power-cycle the camera |
   | 🔴 crossed | no radio and no camera | the map is the driving view now |
 
-  **Two observers, because one is not enough.** The Pi's own `wlan0` association says
-  whether *it* is connected — but if the Pi's antenna dies while the camera is happily
+  **Two observers, because one is not enough.** The Pi's own association (`iwgetid`, via
+  `deep.ssid`) says whether *it* is connected — note *association*, not `camera.up`,
+  which only means wlan0 is enabled and is true on any Pi that has ever booted; reading
+  that as a sighting pinned the eye to amber permanently, camera powered off in another
+  building included — but if the Pi's antenna dies while the camera is happily
   broadcasting, the Pi sees nothing and would report the camera dead. The handheld is
   standing right there with a radio of its own, so the launcher exposes **`/__wifi`**
   (`netsh wlan show networks`, cached ~20 s) and the page asks it whether the camera's
@@ -108,8 +111,19 @@ checks backend availability for a dependency it doesn't have.
   side and the camera is fine: **amber, not red**.
 
   Put the camera AP's SSID (or any distinctive part of it) in
-  `launch/neptune-camera-ssid.txt`. A browser cannot scan Wi-Fi itself, which is why
-  this goes through the launcher.
+  `launch/neptune-camera-ssid.txt` — currently `ActionCam_b981`, matching `CAM_SSID` in
+  `install.sh`. Both copies exist because `install.sh` runs on the Pi from a curl pipe
+  with the client stripped out; change them together. A browser cannot scan Wi-Fi
+  itself, which is why this goes through the launcher at all.
+
+  **The scan only runs while the camera is NOT connected**, every `apScanMs` (5 s).
+  Green means the answer cannot change anything, and a scan costs a radio sweep on a
+  handheld that is flying a submarine — so it idles at a cheap re-check and starts again
+  by itself the moment the eye goes red.
+
+  A sighting older than `apScanMaxAgeMs` (20 s) is **dropped rather than believed**, so
+  carrying the camera out of range turns the eye red instead of leaving it amber on the
+  strength of a minute-old answer.
 
   Only a **positive** sighting counts. No launcher, radio off, or no SSID configured all
   mean *cannot tell*, and cannot-tell is never evidence of absence — the eye falls back
@@ -184,7 +198,7 @@ client/
 ## Tests
 
 ```bash
-python client/tests/run.py          # 245 checks, ~95 s, exit 0 only if all pass
+python client/tests/run.py          # 249 checks, ~95 s, exit 0 only if all pass
 python client/tests/run.py tether   # one suite
 ```
 

@@ -124,6 +124,8 @@ systemctl enable --now avahi-daemon >/dev/null 2>&1 || warn "avahi-daemon not av
 # ---- 2c. camera WiFi (wlan0 joins the camera AP, never the default route) ---
 # Solves the §1 routing constraint at the source: ipv4.never-default keeps the
 # camera hop off the default route so the tether (eth0) stays the way topside.
+# The camera's AP. Also needed TOPSIDE, in client/launch/neptune-camera-ssid.txt, so the
+# handheld can scan for it and tell a dead Pi antenna from a dead camera. Change both.
 CAM_SSID="${NEPTUNE_CAM_SSID:-ActionCam_b981}"
 CAM_PSK="${NEPTUNE_CAM_PSK:-12345678}"
 if command -v nmcli >/dev/null 2>&1; then

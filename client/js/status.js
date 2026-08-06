@@ -85,14 +85,22 @@ STATUS.tick = function(){
   // is standing right there with a radio of its own, so the launcher scans for the
   // camera's SSID (/__wifi) and that second opinion settles it: AP visible, Pi silent
   // means the fault is on the Pi's side and the camera is fine. Amber, not red.
-  const camNet = (state.sys && state.sys.net && state.sys.net.camera) || null;
-  const camWifi = (camNet && camNet.wifi) || {};
-  const piSeesRadio = !!(camWifi.associated || camWifi.signal_dbm != null ||
-                         (camNet && camNet.up));
-  // Only a POSITIVE sighting counts. An unavailable scan (no launcher, radio off, no
-  // SSID configured) must never drag the state down — it means "cannot tell", and
-  // "cannot tell" is not evidence of absence.
-  const allySeesAp = !!(state.camAp && state.camAp.visible === true);
+  // What counts as "the Pi can see the camera's radio" is ASSOCIATION, not an
+  // interface being enabled. `camera.up` only means wlan0 exists and is not down,
+  // which is true on every Pi that has ever been booted — so using it pinned the eye
+  // to amber forever, including with the camera switched off in another building.
+  // iwgetid returns nothing unless genuinely joined to an AP, and TCP 554 answering
+  // is stronger still.
+  const deep = (state.sys && state.sys.deep) || {};
+  const piSeesRadio = !!((deep.ssid && String(deep.ssid).trim()) || deep.camera_reachable);
+  // Only a POSITIVE and FRESH sighting counts. An unavailable scan (no launcher, radio
+  // off, no SSID configured) means "cannot tell", which is not evidence of absence —
+  // but neither is a sighting from a minute ago evidence of presence. A stale result
+  // is dropped rather than believed, so the eye goes back to red when the camera is
+  // carried out of range rather than sitting on amber until the next poll lands.
+  const apFresh = !!(state.camAp && state.camAp.at &&
+                     (now - state.camAp.at) < (CONFIG.camera.apScanMaxAgeMs || 20000));
+  const allySeesAp = !!(apFresh && state.camAp.visible === true);
   STATUS.camBy = allySeesAp ? 'ally' : (piSeesRadio ? 'pi' : 'none');
   if(STATUS.cam === 'ok' || STATUS.cam === 'degraded') STATUS.camLink = 'connected';
   else if(piSeesRadio || allySeesAp)                   STATUS.camLink = 'radio';
@@ -262,14 +270,20 @@ STATUS.render = function(){
    `available:false` means "cannot tell", the eye falls back to the Pi's own view, and
    nothing anywhere treats a missing second opinion as bad news. */
 function startCamApPoll(){
-  let backoff = 0, stop = false;
+  let noLauncher = 0;
   const tick = async ()=>{
-    if(stop) return;
-    try{
-      const r = await fetch('/__wifi', {cache:'no-store'});
-      if(r.ok){
+    // Ask ONLY while the camera is not connected. When it is green the answer cannot
+    // change anything, and a scan is a second of CPU and a radio sweep on a handheld
+    // that is flying a submarine. The moment it drops to red this starts again by
+    // itself, because that is when the second opinion is worth having.
+    const wanted = STATUS.camLink !== 'connected' && noLauncher < 3;
+    if(wanted){
+      try{
+        const r = await fetch('/__wifi', {cache:'no-store'});
+        if(!r.ok) throw new Error('HTTP ' + r.status);
         const j = await r.json();
-        state.camAp = { available: !!j.ok && !!j.want, visible: (j.ok && j.want) ? !!j.visible : null,
+        state.camAp = { available: !!j.ok && !!j.want,
+                        visible: (j.ok && j.want) ? !!j.visible : null,
                         want: j.want || '', ssids: j.ssids || [], error: j.error || null,
                         ageS: j.age_s, at: Date.now() };
         if(j.ok && !j.want && !state._camApWarned){
@@ -279,16 +293,18 @@ function startCamApPoll(){
                 + 'antenna from a dead camera');
         }
         if(j.error && !state._camApErr){ state._camApErr = true; LOG.warn('camera Wi-Fi scan: ' + j.error); }
-        backoff = 0;
-      } else { throw new Error('HTTP ' + r.status); }
-    }catch(e){
-      // No launcher (or it went away). Stop asking after a few tries and record that
-      // the second opinion is simply unavailable here.
-      state.camAp = { available:false, visible:null, error:'no launcher on this origin' };
-      backoff++;
-      if(backoff >= 3){ stop = true; return; }
+        noLauncher = 0;
+      }catch(e){
+        // No launcher on this origin (the Pi, GitHub Pages, disk). Give up after a
+        // few tries and record that the second opinion is simply unavailable — which
+        // is NOT the same as the camera being absent.
+        noLauncher++;
+        state.camAp = { available:false, visible:null, at:Date.now(),
+                        error:'no launcher on this origin' };
+      }
     }
-    setTimeout(tick, CONFIG.camera.apScanMs || 15000);
+    setTimeout(tick, wanted ? (CONFIG.camera.apScanMs || 5000)
+                            : (CONFIG.camera.apScanIdleMs || 15000));
   };
   tick();
 }
