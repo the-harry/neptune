@@ -764,6 +764,56 @@ quietly erased the explanations a few seconds after launch.
 
 ---
 
+## 18. The three connection glyphs, and what counts as evidence
+
+The top bar carries one icon per link the operator can actually lose. Each has a fixed
+meaning, and none of them may report a state on anything weaker than direct evidence.
+
+**WI-FI** (`st-net`) — four states, because "no card", "not joined", "joined but going
+nowhere" and "working" call for four different reactions:
+
+| state | glyph | meaning |
+|---|---|---|
+| green | wifi arcs | joined to a network *and* that network reaches the internet |
+| amber, steady | wifi arcs | a wireless adapter is present, not joined to anything |
+| amber, **blinking** | wifi arcs | joined, but the network has no internet |
+| red | wifi arcs, slashed | no wireless adapter on this handheld at all |
+
+The two amber states are told apart by the BLINK, never by colour alone. Wi-Fi is for
+map imagery and address search; it is **never** in the path of driving the sub.
+
+**TETHER** (`st-rov`) — the cable from the handheld to the vehicle. Its red state is
+about the *cable*, not the vehicle: with no wired adapter there is nothing for a sub to
+be on the end of.
+
+| state | glyph | meaning |
+|---|---|---|
+| green | submarine | wired adapter, API answering, control link up |
+| red, pulsing | submarine | the sub is answering and reporting a **leak** |
+| amber, blinking | plug | the API answers but the control link is not up yet |
+| amber, steady | plug | a wired adapter is present, nothing answering on it |
+| red | cut cable | no wired adapter — the simulator is flying this |
+| red | robot | no launcher, so the adapters cannot be checked; it says so |
+
+**A socket in `connecting` is not evidence.** It reports that state for as long as the
+handshake has not failed, which against an address that will never answer is forever —
+so it read as amber for an entire session spent in the simulator with nothing plugged in.
+Amber now requires a real adapter or a real HTTP answer.
+
+**CAMERA** (`st-video`) — green when the Pi has the camera and is transmitting; amber
+when the Pi cannot see it but *this handheld* can see its access point; red when neither
+can. Two independent observers, because a Pi with a dead antenna and a dead camera look
+identical from the Pi alone.
+
+None of this is visible to a browser: it cannot enumerate adapters, and `navigator.onLine`
+cannot tell a network from the internet. It comes from the launcher's `/__net`, which
+answers from `Get-NetAdapter -Physical` (`InterfaceType 71` = wireless),
+`Get-NetConnectionProfile` (`IPv4Connectivity`) and `netsh wlan show networks`, cached for
+6 s. When there is no launcher — the Pages demo, or the dashboard served from the Pi —
+each glyph falls back to what it can honestly prove and the tooltip states the limit.
+
+---
+
 ## 17. Bootstrap (`bootstrap.py`)
 
 One entry point that reports what a machine has and what it lacks, for both halves of the

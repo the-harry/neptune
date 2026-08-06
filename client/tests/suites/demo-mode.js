@@ -67,11 +67,18 @@
 
     // colour is never the only carrier of meaning
     ok('the ROV state is a SHAPE, not just a colour', (()=>{
-        STATUS.link='offline'; STATUS.render(); const a=$('st-rov').innerHTML;
-        STATUS.link='connecting'; STATUS.render(); const b=$('st-rov').innerHTML;
-        STATUS.link='online'; STATUS.render(); const c=$('st-rov').innerHTML;
-        return new Set([a,b,c]).size===3;
-      })(), 'robot / plug / sub are three different drawings');
+        state.net=null; STATUS.link='offline'; STATUS.render();
+        const a=$('st-rov').innerHTML;                       // no launcher: robot
+        state.net={wifi:{nic:true,up:true,internet:true,ssid:'x'},eth:{nic:true,up:true,name:'Ethernet'},at:Date.now()};
+        STATUS.render(); const b=$('st-rov').innerHTML;      // cable, silent: plug
+        state.net.eth={nic:false,up:false,name:''};
+        STATUS.render(); const c=$('st-rov').innerHTML;      // no cable: cut cable
+        state.net={wifi:{nic:true,up:true,internet:true,ssid:'x'},eth:{nic:true,up:true,name:'Ethernet'},at:Date.now()};
+        STATUS.link='online'; STATUS.render();
+        const d=$('st-rov').innerHTML;                       // answering: sub
+        state.net=null;
+        return new Set([a,b,c,d]).size===4;
+      })(), 'robot / plug / cut cable / sub are four different drawings');
 
     // ---------- nothing broken ----------
     ok('no script errors', errs.length===0, errs.join(' | ')||'none');

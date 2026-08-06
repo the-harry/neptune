@@ -131,7 +131,8 @@ $pool       = $null
 # from this scope except what is passed in. `rec` holds the live ffmpeg process so a
 # later /__record?action=stop can find the one an earlier request started.
 $shared     = [hashtable]::Synchronized(@{ quit = $false; ffmpeg = ""; rec = $null; recFile = ""; recStarted = $null;
-                                          wifiAt = $null; wifiSsids = @(); wifiErr = $null })
+                                          netAt = $null; wifiSsids = @(); wifiErr = $null; camSsidPath = "";
+                                          netWifi = $null; netEth = $null })
 
 # Everything the session produces, in one place the operator can actually find.
 #   navigation_logs/images  PIC stills
@@ -258,6 +259,16 @@ try {
   else     { Info "ffmpeg not found - screen RECORDING disabled (stills and logs are unaffected)"
              Info "  install it with: winget install Gyan.FFmpeg    then relaunch" }
 
+  # The camera SSID's PATH (not its contents) so the handler re-reads it per scan and
+  # picks up an edit without relaunching. Handlers run in a runspace pool and cannot
+  # see script scope, which is why this has to travel in $shared.
+  $shared.camSsidPath = $camSsidFile
+  if (Test-Path $camSsidFile) {
+    OK "camera AP to watch for: '$((Get-Content $camSsidFile -Raw).Trim())'"
+  } else {
+    Nope "no neptune-camera-ssid.txt - the eye cannot tell a dead Pi antenna from a dead camera"
+  }
+
   if ($Setup) {
     Write-Host "`nSetup complete. Use the Neptune desktop icon to launch.`n" -ForegroundColor Magenta
     return
@@ -338,41 +349,62 @@ try {
       $path   = ($target -split '\?')[0]
       $path   = [System.Uri]::UnescapeDataString($path)
 
-      # ---- /__wifi : is the camera's access point visible FROM THE HANDHELD? ------
+      # ---- /__net : everything the HANDHELD can see about its own radios and cables --
       #
-      # The browser cannot scan Wi-Fi, and the Pi's own view is not enough on its own:
-      # if the Pi's antenna dies while the camera is happily broadcasting, the Pi sees
-      # nothing and would report the camera dead. A SECOND observer settles it, and the
-      # handheld is standing right there with a Wi-Fi radio of its own. This bridges
-      # `netsh wlan show networks` into something the page can fetch.
+      # The browser can see NONE of this. It cannot enumerate network adapters, cannot
+      # tell a missing Wi-Fi card from a disconnected one, cannot scan for an SSID, and
+      # cannot tell "connected to a network" from "connected to the internet". Windows
+      # knows all four, so the launcher bridges them and the three connection glyphs
+      # stop having to guess.
       #
-      # Cached for a few seconds, because netsh takes a second or two and Windows
-      # throttles scans regardless. Shorter than the page's poll interval, or the
-      # page would only ever re-read the same cached answer.
-      if ($path -eq "/__wifi") {
+      # Cached a few seconds: netsh takes a second or two and Windows throttles scans
+      # regardless. Shorter than the page's poll, or the page only re-reads the cache.
+      if ($path -eq "/__net" -or $path -eq "/__wifi") {
+       try {
         $now = [DateTime]::UtcNow
-        if (-not $shared.wifiAt -or ($now - $shared.wifiAt).TotalSeconds -gt 6) {
-          $shared.wifiAt = $now
-          $ssids = @()
-          $err = $null
-          try {
-            $raw = & netsh wlan show networks 2>&1 | Out-String
-            if ($raw -match "not running|no wireless|not have any") {
-              $err = "the handheld's Wi-Fi radio is off or has no adapter"
-            } else {
+        if (-not $shared.netAt -or ($now - $shared.netAt).TotalSeconds -gt 6) {
+          $shared.netAt = $now
+          $wifiNics = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue |
+                        Where-Object { $_.InterfaceType -eq 71 -or $_.Name -match 'Wi-?Fi|Wireless' })
+          $ethNics  = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue |
+                        Where-Object { $_.InterfaceType -ne 71 -and $_.Name -notmatch 'Wi-?Fi|Wireless|Bluetooth|Loopback' })
+          $profiles = @(Get-NetConnectionProfile -ErrorAction SilentlyContinue)
+          $wifiUp   = @($wifiNics | Where-Object { $_.Status -eq 'Up' })
+          $wifiProf = @($profiles | Where-Object { $w = $_.InterfaceAlias; $wifiNics | Where-Object { $_.Name -eq $w } })
+          $ethUp    = @($ethNics  | Where-Object { $_.Status -eq 'Up' })
+          $ethProf  = @($profiles | Where-Object { $e = $_.InterfaceAlias; $ethNics  | Where-Object { $_.Name -eq $e } })
+
+          $ssids = @(); $scanErr = $null
+          if ($wifiNics.Count -gt 0) {
+            try {
+              $raw = & netsh wlan show networks 2>&1 | Out-String
               foreach ($line in ($raw -split "`r?`n")) {
                 if ($line -match '^\s*SSID\s+\d+\s*:\s*(.*)$') {
-                  $n = $Matches[1].Trim()
-                  if ($n) { $ssids += $n }
+                  $n = $Matches[1].Trim(); if ($n) { $ssids += $n }
                 }
               }
-            }
-          } catch { $err = "$($_.Exception.Message)" }
+            } catch { $scanErr = "$($_.Exception.Message)" }
+          } else { $scanErr = "no wireless adapter" }
+
+          $shared.netWifi = [ordered]@{
+            nic      = ($wifiNics.Count -gt 0)
+            up       = ($wifiUp.Count -gt 0)
+            ssid     = $(if ($wifiProf.Count -gt 0) { $wifiProf[0].Name } else { "" })
+            internet = (@($wifiProf | Where-Object { $_.IPv4Connectivity -eq 'Internet' }).Count -gt 0)
+          }
+          $shared.netEth = [ordered]@{
+            nic  = ($ethNics.Count -gt 0)
+            up   = ($ethUp.Count -gt 0)
+            name = $(if ($ethNics.Count -gt 0) { $ethNics[0].Name } else { "" })
+            ipv4 = $(if ($ethProf.Count -gt 0) { "$($ethProf[0].IPv4Connectivity)" } else { "" })
+          }
           $shared.wifiSsids = $ssids
-          $shared.wifiErr   = $err
+          $shared.wifiErr   = $scanErr
         }
         $want = ""
-        if (Test-Path $camSsidFile) { $want = (Get-Content $camSsidFile -Raw).Trim() }
+        if ($shared.camSsidPath -and (Test-Path $shared.camSsidPath)) {
+          $want = (Get-Content $shared.camSsidPath -Raw).Trim()
+        }
         $seen = $false
         if ($want) {
           foreach ($n in $shared.wifiSsids) {
@@ -380,14 +412,21 @@ try {
           }
         }
         $payload = [ordered]@{
-          ok       = ($null -eq $shared.wifiErr)
-          error    = $shared.wifiErr
-          want     = $want
-          visible  = $seen
-          ssids    = $shared.wifiSsids
-          age_s    = [int]([DateTime]::UtcNow - $shared.wifiAt).TotalSeconds
+          ok      = $true
+          wifi    = $shared.netWifi
+          eth     = $shared.netEth
+          camera  = [ordered]@{ want = $want; visible = $seen; ssids = $shared.wifiSsids; error = $shared.wifiErr }
+          # legacy shape, so a dashboard left open across a launcher update keeps working
+          want    = $want
+          visible = $seen
+          ssids   = $shared.wifiSsids
+          error   = $shared.wifiErr
+          age_s   = [int]([DateTime]::UtcNow - $shared.netAt).TotalSeconds
         }
-        $json = ($payload | ConvertTo-Json -Compress -Depth 4)
+        $json = ($payload | ConvertTo-Json -Compress -Depth 5)
+       } catch {
+        $json = (@{ ok = $false; error = "net probe failed: $($_.Exception.Message)" } | ConvertTo-Json -Compress)
+       }
         $body = [System.Text.Encoding]::UTF8.GetBytes($json)
         $head = "HTTP/1.1 200 OK`r`nContent-Type: application/json`r`nCache-Control: no-store`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n"
         $hb = [System.Text.Encoding]::ASCII.GetBytes($head)

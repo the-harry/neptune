@@ -146,6 +146,8 @@ const state = {
   navOkAt:0,                    // last nav telemetry frame
   sys:null, sysAt:0,            // last /api/system snapshot (real Pi health)
   camAp:null,                   // launcher /__wifi: can THIS handheld see the camera's AP
+  piProbe:null,                 // /api/healthz: does the sub ANSWER, control link aside
+  net:null,                     // launcher /__net: this handheld's own radios and cables
   source:'keyboard', /* keyboard | gamepad */
   gamepadIndex:null,
   keys:new Set(), padPrev:{},

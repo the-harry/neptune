@@ -31,6 +31,7 @@ const STATUS = {
   nav: 'down',          // ok | down
   camLink: 'gone',      // connected | radio | gone  (the eye)
   camBy: 'none',        // who can see the camera's radio: ally | pi | none
+  piSeen: false,        // the Pi ANSWERS on HTTP, even if the control link is not up
   vehicle: 'idle',
   _last: '', _lastGate: ''
 };
@@ -109,6 +110,17 @@ STATUS.tick = function(){
   // ---- navigation feed ---------------------------------------------------
   STATUS.nav = (state.navOkAt && (now - state.navOkAt) <= NAV_SILENT_MS) ? 'ok' : 'down';
 
+  // ---- is the Pi THERE, independently of the control link? -----------------
+  // A WebSocket sitting in `connecting` is not evidence of anything: it says that
+  // way for as long as the handshake has not failed, which against an address that
+  // will never answer is indefinitely. That is what pinned the sub icon to amber for
+  // an entire session with no Pi in the building. Amber has to mean something
+  // POSITIVE — the Pi answered — so it comes from an HTTP probe, and a stale answer
+  // is dropped rather than believed, exactly as for the camera.
+  const probeFresh = !!(state.piProbe && state.piProbe.at &&
+                        (now - state.piProbe.at) < (CONFIG.piProbeMaxAgeMs || 15000));
+  STATUS.piSeen = !!(probeFresh && state.piProbe.ok);
+
   // ---- vehicle -----------------------------------------------------------
   // There are only two states worth distinguishing at a glance: is there a real
   // vehicle on the other end, or not. "No host configured" and "host configured but
@@ -126,8 +138,10 @@ STATUS.tick = function(){
   try{ if(typeof updateBlindNav==='function') updateBlindNav(); }
   catch(e){ LOG.warn('blind-nav update failed:', e && e.message); }
 
+  const nwv = (state.net && state.net.wifi) || {}, nev = (state.net && state.net.eth) || {};
   const sig = [STATUS.internet, STATUS.link, STATUS.video, STATUS.cam, STATUS.nav,
-               STATUS.vehicle, STATUS.camLink, STATUS.camBy].join('|');
+               STATUS.vehicle, STATUS.camLink, STATUS.camBy, STATUS.piSeen,
+               nwv.nic, nwv.up, nwv.internet, nwv.ssid, nev.nic, nev.up].join('|');
   if(sig !== STATUS._last){
     STATUS._last = sig;
     STATUS.render();
@@ -197,6 +211,19 @@ const ROV_ROBOT = '<svg viewBox="0 0 24 24"><rect x="4.5" y="8.5" width="15" hei
 const ROV_PLUG  = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M7.5 10.5h9v5.5a2.5 2.5 0 0 1-2.5 2.5h-4a2.5 2.5 0 0 1-2.5-2.5z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 10.5V4"/><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" d="M10 12.5v2M12 12.5v2M14 12.5v2"/></svg>';
 const ROV_SUB   = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 12c0-2.2 3.6-4 8-4s8 1.8 8 4-3.6 4-8 4-8-1.8-8-4z"/><circle cx="9" cy="12" r="1.1" fill="#0c0118"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 8V5M9 5h6"/></svg>';
 
+/* WI-FI, in one glyph. Four states, because "no card", "not joined", "joined but no
+   internet" and "working" need four different reactions and only the last is fine.
+   The middle two are both amber; the BLINK separates them, so colour alone never has
+   to carry it. All of it comes from the launcher (/__net): a browser cannot enumerate
+   adapters, and navigator.onLine cannot tell a network from the internet. */
+const WIFI_SVG  = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M2 8.5a15 15 0 0 1 20 0M5 12a10 10 0 0 1 14 0M8 15.5a5 5 0 0 1 8 0"/><circle cx="12" cy="19" r="1.4" fill="currentColor"/></svg>';
+const WIFI_NONE = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M2 8.5a15 15 0 0 1 20 0M5 12a10 10 0 0 1 14 0M8 15.5a5 5 0 0 1 8 0"/><circle cx="12" cy="19" r="1.4" fill="currentColor"/><path stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M3.5 20.5 20.5 3.5"/></svg>';
+
+/* THE TETHER — the cable from this handheld to the sub. Its red state is deliberately
+   about the CABLE, not the vehicle: with no ethernet-style adapter on the handheld
+   there is nothing for a sub to be on the end of. */
+const TETH_NONE = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M3 12h5M16 12h5"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M8 9.5h2.5v5H8zM13.5 9.5H16v5h-2.5z"/><path stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M4 20 20 4"/></svg>';
+
 /* THE CAMERA, in one glyph.
    
    Three states, because there are three genuinely different situations and the
@@ -219,7 +246,31 @@ const EYE_BLIND_SVG = '<svg viewBox="0 0 24 24"><path fill="none" stroke="curren
 STATUS.render = function(){
   const set = (id, cls, title)=>{ const el = $(id); if(!el) return;
     el.className = 'st-ic ' + cls; liveTitle(el, title); };
-  set('st-net', STATUS.internet ? 'ok' : 'warn', 'Internet: ' + (STATUS.internet ? 'online' : 'offline'));
+  // WI-FI. With no launcher to ask, all we have is navigator.onLine, which knows there
+  // is a connection but not whether it reaches anything - so the no-card and
+  // no-internet states cannot be told apart there, and the tooltip says so.
+  const nw = (state.net && state.net.wifi) || null;
+  const nEl = $('st-net');
+  let nCls, nGlyph, nTitle;
+  if(nw){
+    if(!nw.nic){
+      nCls='down'; nGlyph=WIFI_NONE; nTitle='no wireless adapter on this handheld';
+    } else if(!nw.up){
+      nCls='warn'; nGlyph=WIFI_SVG;  nTitle='wireless adapter present, not joined to a network';
+    } else if(!nw.internet){
+      nCls='warn blink'; nGlyph=WIFI_SVG;
+      nTitle='joined to "' + (nw.ssid||'a network') + '", but it has no internet';
+    } else {
+      nCls='ok'; nGlyph=WIFI_SVG;
+      nTitle='connected to "' + (nw.ssid||'a network') + '" with internet';
+    }
+  } else {
+    nCls = STATUS.internet ? 'ok' : 'warn'; nGlyph = WIFI_SVG;
+    nTitle = (STATUS.internet ? 'online' : 'offline') +
+             ' (no launcher here, so the adapter itself cannot be checked)';
+  }
+  if(nEl && nEl.dataset.glyph !== nCls){ nEl.dataset.glyph = nCls; nEl.innerHTML = nGlyph; }
+  set('st-net', nCls, nTitle);
 
 
   // THE CAMERA — one eye, three states. This is the ONLY camera indicator: the
@@ -247,21 +298,74 @@ STATUS.render = function(){
 
   // ONE ROV icon: shape for the state, colour to match. A leak keeps the sub shape
   // (there IS a vehicle) but goes pulsing red, so a fault never looks like a dropout.
+  // THE TETHER, from this handheld's side. Ordered by how much of the path works:
+  //   green   the sub's API is answering - the whole chain is good
+  //   amber   a cable-style adapter is there, but nothing is answering on it
+  //   red     no such adapter at all: no cable for a sub to be on the end of
+  // A socket sitting in `connecting` is NOT evidence and never reaches amber: it says
+  // that for as long as the handshake has not failed, which against an address that
+  // will never answer is indefinitely. That is what pinned this to amber all session.
+  const ne = (state.net && state.net.eth) || null;
   const rov=$('st-rov');
   let rGlyph, rCls, rTitle;
-  if(STATUS.link === 'connecting'){
-    rGlyph=ROV_PLUG;  rCls='warn'; rTitle='ROV link: connecting…';
-  } else if(STATUS.link === 'online'){
+  if(STATUS.link === 'online'){
+    // Green is the whole chain: cable, API, and the control link carrying commands.
     rGlyph=ROV_SUB;
-    if(STATUS.vehicle === 'fault'){ rCls='bad'; rTitle='Vehicle: FAULT — leak detected'; }
-    else { rCls='ok'; rTitle='Vehicle: connected (' + STATUS.vehicle + ')'; }
+    if(STATUS.vehicle === 'fault'){ rCls='bad'; rTitle='FAULT - leak detected'; }
+    else { rCls='ok'; rTitle='connected to the sub (' + STATUS.vehicle + ')'; }
+  } else if(STATUS.piSeen){
+    // Answers on HTTP but the control socket is not up: booting, API restarting.
+    // Same PLUG as the cable-only case, because it is the same story - something is
+    // there and it is not talking to us yet - only further along.
+    rGlyph=ROV_PLUG; rCls='warn blink';
+    rTitle='the sub answers, but the control link is not up yet'
+         + (state.piProbe && state.piProbe.ms!=null ? ' (' + state.piProbe.ms + ' ms)' : '');
+  } else if(ne && ne.nic){
+    rGlyph=ROV_PLUG; rCls='warn';
+    rTitle='cable adapter "' + (ne.name||'?') + '" is there, but nothing is answering on it';
+  } else if(ne){
+    rGlyph=TETH_NONE; rCls='down';
+    rTitle='no cable: this handheld has no ethernet-style adapter - the simulator is flying this';
   } else {
+    // No launcher, so the adapters cannot be checked at all. Say that, rather than
+    // claiming a cable is missing on evidence we do not have.
     rGlyph=ROV_ROBOT; rCls='sim';
-    rTitle='No vehicle — simulating (link ' + STATUS.link + ')';
+    rTitle = !state.wsBase
+      ? 'no sub configured - the simulator is flying this'
+      : 'nothing answering at ' + state.host + ' - the simulator is flying this';
   }
   if(rov && rov.dataset.glyph !== rCls){ rov.dataset.glyph = rCls; rov.innerHTML = rGlyph; }
+  // The old pulse keyed on STATUS.link==='connecting', which had the same problem.
+  document.body.classList.toggle('link-connecting', false);
   set('st-rov', rCls, rTitle);
 };
+
+/* ---- Is the Pi THERE? (HTTP, independently of the control WebSocket) ---------
+
+   Same shape as the camera probe and for the same reason: amber must mean the sub
+   answered, not that a socket has not given up yet. Runs ONLY while the control link
+   is down — once it is online the answer cannot change anything — and its result
+   expires, so a Pi that is unplugged goes red rather than sitting amber on the
+   strength of a probe from a minute ago. */
+function startPiProbe(){
+  const tick = async ()=>{
+    const wanted = !!state.wsBase && state.wsStatus !== 'online';
+    if(wanted){
+      const t0 = performance.now();
+      const ctl = (typeof AbortController!=='undefined') ? new AbortController() : null;
+      const killer = ctl ? setTimeout(()=>{ try{ ctl.abort(); }catch(e){} }, 2500) : null;
+      try{
+        const r = await fetch((state.httpBase||'') + '/api/healthz',
+                              Object.assign({cache:'no-store'}, ctl ? {signal:ctl.signal} : {}));
+        state.piProbe = { ok: r.ok, at: Date.now(), ms: Math.round(performance.now()-t0) };
+      }catch(e){
+        state.piProbe = { ok:false, at: Date.now(), ms:null };
+      }finally{ if(killer) clearTimeout(killer); }
+    }
+    setTimeout(tick, wanted ? (CONFIG.piProbeMs || 4000) : (CONFIG.piProbeIdleMs || 10000));
+  };
+  tick();
+}
 
 /* ---- The HANDHELD's own view of the camera's Wi-Fi (launcher /__wifi) --------
 
@@ -276,15 +380,21 @@ function startCamApPoll(){
     // change anything, and a scan is a second of CPU and a radio sweep on a handheld
     // that is flying a submarine. The moment it drops to red this starts again by
     // itself, because that is when the second opinion is worth having.
-    const wanted = STATUS.camLink !== 'connected' && noLauncher < 3;
+    // Keep asking even when the camera is green: this call now also carries the Wi-Fi
+    // and cable state, which change on their own and are never "settled". It is one
+    // cached HTTP call to loopback. Only the RATE backs off once the camera is up.
+    const wanted = noLauncher < 3;
+    const hot = STATUS.camLink !== 'connected';
     if(wanted){
       try{
-        const r = await fetch('/__wifi', {cache:'no-store'});
+        const r = await fetch('/__net', {cache:'no-store'});
         if(!r.ok) throw new Error('HTTP ' + r.status);
         const j = await r.json();
-        state.camAp = { available: !!j.ok && !!j.want,
-                        visible: (j.ok && j.want) ? !!j.visible : null,
-                        want: j.want || '', ssids: j.ssids || [], error: j.error || null,
+        const cam = j.camera || j;                     // new shape, or the old flat one
+        state.net = j.ok ? { wifi: j.wifi || null, eth: j.eth || null, at: Date.now() } : null;
+        state.camAp = { available: !!j.ok && !!cam.want,
+                        visible: (j.ok && cam.want) ? !!cam.visible : null,
+                        want: cam.want || '', ssids: cam.ssids || [], error: cam.error || null,
                         ageS: j.age_s, at: Date.now() };
         if(j.ok && !j.want && !state._camApWarned){
           state._camApWarned = true;
@@ -299,12 +409,13 @@ function startCamApPoll(){
         // few tries and record that the second opinion is simply unavailable — which
         // is NOT the same as the camera being absent.
         noLauncher++;
+        state.net = null;
         state.camAp = { available:false, visible:null, at:Date.now(),
                         error:'no launcher on this origin' };
       }
     }
-    setTimeout(tick, wanted ? (CONFIG.camera.apScanMs || 5000)
-                            : (CONFIG.camera.apScanIdleMs || 15000));
+    setTimeout(tick, hot ? (CONFIG.camera.apScanMs || 5000)
+                         : (CONFIG.camera.apScanIdleMs || 15000));
   };
   tick();
 }
@@ -343,6 +454,7 @@ function startSystemPoll(){
 
 function initStatus(){
   startCamApPoll();
+  startPiProbe();
   setInterval(STATUS.tick, 500);
   STATUS.tick();
   startSystemPoll();

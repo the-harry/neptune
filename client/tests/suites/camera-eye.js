@@ -100,6 +100,75 @@
         return t.includes('green') && t.includes('amber') && t.includes('red');
       })(), '"'+(eye().getAttribute('title')||'').slice(0,80)+'..."');
 
+    // ---------- THE SUB: same grammar, from the handheld's side ----------
+    // A socket stuck in `connecting` is not evidence the Pi is there — it says that
+    // for as long as the handshake has not failed, which against an address that will
+    // never answer is forever. Amber must mean it ANSWERED.
+    const rov=()=>$('st-rov');
+    const setPi=(wsStatus, answers)=>{
+      state.wsBase = 'ws://192.168.42.1:8000';
+      state.host = '192.168.42.1:8000';
+      state.wsStatus = wsStatus;
+      state.piProbe = answers===null ? null : { ok:!!answers, at:Date.now(), ms:7 };
+      STATUS.tick();
+      return { cls: rov().className, html: rov().innerHTML, seen: STATUS.piSeen };
+    };
+    const connecting = setPi('connecting', false);
+    ok('a socket merely CONNECTING is not amber',
+       connecting.cls.split(' ').includes('sim'),
+       'class="'+connecting.cls+'" — nothing answered, so it reads as no vehicle');
+    const answering = setPi('connecting', true);
+    ok('the sub ANSWERING is amber (a plug, not a sub)',
+       answering.cls.split(' ').includes('warn') && answering.seen===true &&
+       /M12 10.5V4/.test(answering.html),
+       'class="'+answering.cls+'" piSeen='+answering.seen+' glyph=plug');
+    ok('...and it blinks, like the camera’s middle state',
+       answering.cls.split(' ').includes('blink'), 'class="'+answering.cls+'"');
+    const linked = setPi('online', true);
+    ok('control link up is green', linked.cls.split(' ').includes('ok'), 'class="'+linked.cls+'"');
+    const stalePi = (()=>{ state.wsStatus='connecting';
+      state.piProbe = { ok:true, at: Date.now() - (CONFIG.piProbeMaxAgeMs + 5000), ms:7 };
+      STATUS.tick(); return { cls: rov().className, seen: STATUS.piSeen }; })();
+    ok('a stale answer is dropped, not believed', stalePi.cls.split(' ').includes('sim'),
+       'class="'+stalePi.cls+'" — an unplugged sub goes red, not amber forever');
+    ok('the three sub states are three different shapes',
+       new Set([connecting.html, answering.html, linked.html]).size===3,
+       'nothing / plug / sub');
+
+    // The RED case is about the CABLE, not the vehicle: no ethernet-style adapter on
+    // the handheld means there is nothing for a sub to be on the end of.
+    state.net = { wifi:{nic:true,up:true,internet:true,ssid:'x'}, eth:{nic:false,up:false,name:''}, at:Date.now() };
+    state.wsStatus='offline'; state.piProbe=null; STATUS.tick();
+    ok('no cable adapter reads as RED', $('st-rov').className.split(' ').includes('down'),
+       'class="'+$('st-rov').className+'" — no eth NIC on this handheld');
+    state.net = { wifi:{nic:true,up:true,internet:true,ssid:'x'}, eth:{nic:true,up:true,name:'Ethernet'}, at:Date.now() };
+    STATUS.tick();
+    ok('a cable with nothing answering reads as AMBER',
+       $('st-rov').className.split(' ').includes('warn'),
+       'class="'+$('st-rov').className+'" — cable present, API silent');
+
+    // ---------- WI-FI: four states ----------
+    const wifiCase=(nic,up,internet)=>{
+      state.net = { wifi:{nic:nic,up:up,internet:internet,ssid:'BT-8WACRF'},
+                    eth:{nic:false,up:false,name:''}, at:Date.now() };
+      STATUS.tick();
+      return $('st-net').className;
+    };
+    ok('no wireless adapter -> RED', wifiCase(false,false,false).split(' ').includes('down'),
+       'class="'+$('st-net').className+'"');
+    ok('adapter but not joined -> AMBER, steady', (()=>{
+        const c=wifiCase(true,false,false).split(' ');
+        return c.includes('warn') && !c.includes('blink');
+      })(), 'class="'+$('st-net').className+'"');
+    ok('joined but no internet -> AMBER, BLINKING', (()=>{
+        const c=wifiCase(true,true,false).split(' ');
+        return c.includes('warn') && c.includes('blink');
+      })(), 'class="'+$('st-net').className+'"');
+    ok('joined with internet -> GREEN', wifiCase(true,true,true).split(' ').includes('ok'),
+       'class="'+$('st-net').className+'"');
+    state.net=null;
+    state.wsBase=''; state.host=''; state.wsStatus='offline'; state.piProbe=null; STATUS.tick();
+
     // ---------- top bar spacing ----------
     const bar=$('topbar');
     const kids=[...bar.children].filter(el=>{

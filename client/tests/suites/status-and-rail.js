@@ -104,20 +104,36 @@
     // ---------- 4b. ONE ROV icon, three shapes ----------
     ok('link and vehicle are one icon now', !!$('st-rov') && !$('st-pi') && !$('st-veh'),
        'st-rov present; st-pi/st-veh gone');
+    // A cable IS plugged in for this block, so "trying to connect" has something to be
+    // amber ABOUT. Without one the honest answer is the robot: a socket stuck in
+    // `connecting` proves nothing, and reading it as amber is what left the tether
+    // light permanently yellow while flying the simulator.
+    state.net={wifi:{nic:true,up:true,internet:true,ssid:'x'},eth:{nic:true,up:true,name:'Ethernet'},at:Date.now()};
     const rovState=(link,veh)=>{ STATUS.link=link; STATUS.vehicle=veh; STATUS.render();
       const el=$('st-rov'); return {cls:el.className, html:el.innerHTML}; };
     const off=rovState('offline','sim'), conn=rovState('connecting','sim'),
           on=rovState('online','idle'), leak=rovState('online','fault');
-    ok('disconnected shows a RED robot', /rect/.test(off.html) && /sim/.test(off.cls),
-       'class="'+off.cls+'" glyph=robot');
-    ok('connecting shows an AMBER plug', /M12 10.5V4/.test(conn.html) && /warn/.test(conn.cls),
-       'class="'+conn.cls+'" glyph=plug');
+    ok('a cable with nothing answering shows an AMBER plug',
+       /M12 10.5V4/.test(off.html) && /warn/.test(off.cls),
+       'class="'+off.cls+'" glyph=plug');
+    ok('and "connecting" alone does NOT promote it', conn.cls===off.cls && conn.html===off.html,
+       'class="'+conn.cls+'" — an unanswered handshake is not evidence of a sub');
+    ok('no cable at all shows a RED cut cable', (()=>{
+        state.net={wifi:{nic:true,up:true,internet:true,ssid:'x'},eth:{nic:false,up:false,name:''},at:Date.now()};
+        STATUS.link='offline'; STATUS.render(); const el=$('st-rov');
+        const r={cls:el.className, html:el.innerHTML}; state.net={wifi:{nic:true,up:true,internet:true,ssid:'x'},eth:{nic:true,up:true,name:'Ethernet'},at:Date.now()}; return r;
+      })().cls.split(' ').includes('down'), 'no wired adapter on this handheld');
+    ok('and with no launcher to ask, a RED robot', (()=>{
+        state.net=null; STATUS.link='offline'; STATUS.render();
+        const el=$('st-rov'); const r={cls:el.className, html:el.innerHTML}; state.net={wifi:{nic:true,up:true,internet:true,ssid:'x'},eth:{nic:true,up:true,name:'Ethernet'},at:Date.now()}; return r;
+      })().html.includes('rect'), 'glyph=robot — cannot check the adapters, so it does not claim to');
     ok('connected shows a GREEN sub', /M4 12c0-2.2/.test(on.html) && /ok/.test(on.cls),
        'class="'+on.cls+'" glyph=sub');
     ok('a leak keeps the sub but goes red', /M4 12c0-2.2/.test(leak.html) && /bad/.test(leak.cls),
        'class="'+leak.cls+'" — a fault must not look like a dropout');
-    ok('all three states are visually distinct', new Set([off.html,conn.html,on.html]).size===3,
-       'robot / plug / sub are three different shapes');
+    ok('all three states are visually distinct',
+       new Set([off.html, on.html, leak.html]).size===2 && off.html!==on.html,
+       'plug / sub are different shapes; the leak keeps the sub and turns red');
 
     // ---------- 5. right-stick axis resolution ----------
     const mk=(mapping,n)=>({index:0,id:'Pad',connected:true,mapping,

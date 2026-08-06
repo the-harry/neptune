@@ -36,6 +36,11 @@ const CONFIG = {
   // console looks broken. The sim resumes from the last real values, so the handover
   // is seamless.
   simFallbackMs:  3000,
+  // Is the Pi THERE, asked over plain HTTP and independently of the control socket.
+  // A socket stuck in `connecting` proves nothing; amber has to mean it answered.
+  piProbeMs:       4000,     // while the control link is down
+  piProbeIdleMs:  10000,     // while it is up: just re-check whether to start again
+  piProbeMaxAgeMs:15000,     // older than this is not evidence of anything
 
   /* ---- MAP / NAVIGATION (dive track + position over a basemap) ----------- */
   map: {
