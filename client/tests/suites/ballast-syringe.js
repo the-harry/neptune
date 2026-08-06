@@ -36,6 +36,36 @@
         const f=flange.getBoundingClientRect(), w=well.getBoundingClientRect();
         return f.width >= w.width;   // barrel is clipped to 17%..83% of the same box
       })(), 'flange='+Math.round(flange.getBoundingClientRect().width)+'px');
+    // DIRECTION. Dispatched as real pointer events on the real element, because the
+    // thing worth guarding is what a finger does, not what a variable holds.
+    const inset=parseFloat(cs(track).getPropertyValue('--syr-flange'))||0;
+    const drag=(frac)=>{ const r=track.getBoundingClientRect();
+      const y=r.top+inset+(r.height-inset)*frac;
+      track.dispatchEvent(new MouseEvent('mousedown',{clientX:r.left+r.width/2,clientY:y,bubbles:true}));
+      window.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
+      return state.ballastTargetRaw; };
+    const atTop=drag(0.02), atBottom=drag(0.98), mid=drag(0.5);
+    ok('dragging UP draws water in, like a syringe', atTop>0.9,
+       'top of the barrel -> ' + atTop.toFixed(3));
+    ok('dragging DOWN pushes it out', atBottom<0.1,
+       'bottom of the barrel -> ' + atBottom.toFixed(3));
+    ok('and the middle is the middle', Math.abs(mid-0.5)<0.04, 'mid -> '+mid.toFixed(3));
+    ok('the liquid is anchored to the TIP, not the top',
+       cs(fill).bottom==='0px' && cs(fill).top!=='0px',
+       'bottom='+cs(fill).bottom+' top='+cs(fill).top);
+    ok('the arrows point the way the water goes', (()=>{
+        const rTop=$('btn-ballast-fill').getBoundingClientRect(),
+              rBot=$('btn-ballast-empty').getBoundingClientRect();
+        return rTop.top < rBot.top &&                       // FILL sits above EMPTY
+               /M6 15l6-6 6 6/.test($('btn-ballast-fill').innerHTML) &&   // chevron up
+               /M6 9l6 6 6-6/.test($('btn-ballast-empty').innerHTML);     // chevron down
+      })(), 'FILL on top with an up chevron, EMPTY below with a down one');
+    ok('a full tank stops under the flange, never over it', (()=>{
+        state.ballastLevel=1; renderUI(viewFromState(true));
+        const f=fill.getBoundingClientRect(), fl=flange.getBoundingClientRect();
+        return f.top >= fl.top;      // the well starts below the flange, so the liquid does
+      })(), 'liquid top vs flange top');
+
     ok('the liquid cannot overflow the barrel',
        cs(well).overflow==='hidden' && fill.parentElement===well,
        'fill is inside the clipped well, overflow='+cs(well).overflow);

@@ -113,9 +113,15 @@ checks backend availability for a dependency it doesn't have.
   **BALLAST is a syringe**, because that is what the tank is: a barrel of water with a
   plunger. Flat solid flange across a square top, a barrel, and a V tapering to a centred
   point — no needle, because the water does not leave the sub. The liquid *is* the
-  plunger. Wall and liquid are cut from one `clip-path`, so the fill can never square off
-  the taper or spill past the barrel, and the drag maps to the visible barrel rather than
-  the element box so the first few percent do not land behind the flange.
+  plunger: it sits in the taper when empty and rises up the barrel as it fills. Wall and
+  liquid are cut from one `clip-path`, so the fill can never square off the taper or spill
+  past the barrel, and the drag maps to the visible barrel rather than the element box so
+  a full tank does not end up part-hidden behind the flange.
+
+  **Drag UP to fill**, the way a syringe is drawn. Down-to-fill made sense while this was
+  a bar — down means go down — and stopped making sense the moment it looked like a
+  syringe: pushing a plunger down expels the liquid. FILL is the top arrow now, EMPTY the
+  bottom one.
 
   **One colour means one thing.** The map draws the dive track in twelve depth bands; the
   ballast fill and the Depth / Pressure / Ballast readouts wear the same bands. In SIM

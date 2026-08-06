@@ -117,19 +117,19 @@
 <div id="gauge-white" class="absolute bottom-0 left-0 right-0 bg-on-surface-variant/40" style="height:20%"></div>
 </div>
 </div>
-<!-- BALLAST — water syringe: 0 = surface (empty), drag DOWN = more water (dive). Light blue. -->
+<!-- BALLAST — water syringe: empty at the tip, drag UP to draw water in and dive. -->
 <span class="font-label-caps text-label-caps text-on-surface-variant text-center">BALLAST</span>
 <div class="flex flex-col items-center gap-1 flex-1 min-h-0 w-full">
-<button id="btn-ballast-empty" data-needs="link" class="material-symbols-outlined text-primary active:bg-primary/20 rounded flex-shrink-0" title="LESS WATER - the sub rises." aria-label="LESS WATER - the sub rises."><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 15l6-6 6 6"/></svg></button>
-<div id="ballast-track" data-needs="link" class="rail-slider syringe flex-1 min-h-0" style="touch-action:none" title="BALLAST TANK - a syringe: the barrel is the tank and the liquid is the plunger. Drag down to take on water and dive, up to empty it and surface. The liquid is coloured by the depth that much water buys, using the same twelve colours as the dive track on the map." aria-label="BALLAST TANK - a syringe: the barrel is the tank and the liquid is the plunger. Drag down to take on water and dive, up to empty it and surface. The liquid is coloured by the depth that much water buys, using the same twelve colours as the dive track on the map.">
+<button id="btn-ballast-fill" data-needs="link" class="material-symbols-outlined text-primary active:bg-primary/20 rounded flex-shrink-0" title="MORE WATER - the sub dives." aria-label="MORE WATER - the sub dives."><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 15l6-6 6 6"/></svg></button>
+<div id="ballast-track" data-needs="link" class="rail-slider syringe flex-1 min-h-0" style="touch-action:none" title="BALLAST TANK - a syringe: the barrel is the tank and the liquid is the plunger. Drag UP to draw water in and dive, DOWN to push it out and surface, the way a syringe actually works. The liquid is coloured by the depth that much water buys, using the same twelve colours as the dive track on the map." aria-label="BALLAST TANK - a syringe: the barrel is the tank and the liquid is the plunger. Drag UP to draw water in and dive, DOWN to push it out and surface, the way a syringe actually works. The liquid is coloured by the depth that much water buys, using the same twelve colours as the dive track on the map.">
 <div class="syr-glass"></div>
 <div class="syr-well">
-<div id="ballast-fill" class="absolute top-0 left-0 right-0 border-b-2" style="height:0%;background:var(--water);border-color:var(--water-edge);box-shadow:0 0 8px var(--water)"></div>
-<div id="ballast-target-mark" class="absolute left-0 right-0" style="top:0%;height:2px;background:var(--secondary);box-shadow:0 0 6px var(--secondary)"></div>
+<div id="ballast-fill" class="absolute bottom-0 left-0 right-0 border-t-2" style="height:0%;background:var(--water);border-color:var(--water-edge);box-shadow:0 -1px 4px var(--water)"></div>
+<div id="ballast-target-mark" class="absolute left-0 right-0" style="bottom:0%;height:2px;background:var(--secondary);box-shadow:0 0 6px var(--secondary)"></div>
 </div>
 <div class="syr-flange"></div>
 </div>
-<button id="btn-ballast-fill" data-needs="link" class="material-symbols-outlined text-primary active:bg-primary/20 rounded flex-shrink-0" title="MORE WATER - the sub dives." aria-label="MORE WATER - the sub dives."><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg></button>
+<button id="btn-ballast-empty" data-needs="link" class="material-symbols-outlined text-primary active:bg-primary/20 rounded flex-shrink-0" title="LESS WATER - the sub rises." aria-label="LESS WATER - the sub rises."><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg></button>
 </div>
 <!-- CONFIG -->
 <button id="btn-config" class="w-full py-1 rounded border border-outline-variant text-on-surface-variant flex flex-col items-center gap-0.5 active:bg-surface-variant transition-colors" title="SETTINGS - the sub's address, input mapping, and the log viewer." aria-label="SETTINGS - the sub's address, input mapping, and the log viewer.">

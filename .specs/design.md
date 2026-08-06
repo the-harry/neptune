@@ -693,7 +693,7 @@ shipping client byte for byte plus that tag, so the suites drive the same `MAP`,
 `STATUS`, `CONFIG` and `state` the operator drives. Standard library and an installed
 Chrome — no framework, no dependencies, matching the client's own rule.
 
-Twelve suites, 280 checks, ~110 s, exit 0 only if every one passes.
+Twelve suites, 286 checks, ~110 s, exit 0 only if every one passes.
 
 ### The visual layer, and why its tolerance is measured
 
@@ -768,8 +768,14 @@ quietly erased the explanations a few seconds after launch.
 
 The tank is a syringe, so the control is one: a flat solid flange across a square top, a
 barrel, and a V that tapers to a centred point. **No needle** — a needle would say the
-water leaves the sub, and it does not. The liquid *is* the plunger; it rises and falls in
-the barrel and runs down into the taper.
+water leaves the sub, and it does not. The liquid *is* the plunger: it sits in the taper
+when the tank is empty and rises up the barrel as it fills.
+
+**Drag UP to fill.** Down-to-fill was defensible while this was a bar — down means go
+down — and became wrong the moment it looked like a syringe, because pushing a plunger
+down expels the liquid rather than drawing it in. The water is drawn up from the tip so
+the gesture and the picture agree, and the arrows follow: FILL on top with an up chevron,
+EMPTY below with a down one.
 
 The wall, the inside and therefore the liquid are all cut from **one declared shape**
 (`--syr-shape`, a `clip-path` polygon on `.rail-slider.syringe`). Drawing the outline and
@@ -777,8 +783,9 @@ the fill separately is what lets a fill square off a taper it is supposed to fol
 spill past a barrel it is supposed to sit in; there is only one shape here, so it cannot.
 
 The barrel starts *below* the flange, and `bindVerticalControl` takes an `insetTop` so the
-drag maps to the visible barrel rather than the element box. Without it the first few
-percent of water land behind a solid bar: you drag, the number moves, and nothing appears.
+drag maps to the visible barrel rather than the element box. Without it a full tank is
+one a few percent of which sits behind a solid bar, and the top of the travel is a band
+where dragging moves the number and nothing appears.
 
 ### One colour for depth
 

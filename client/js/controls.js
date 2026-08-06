@@ -88,10 +88,12 @@ function bindOnScreen(){
     get:()=>state.lights.green.level, set:v=>setLightLevel('green',v), step:CONFIG.ledStep, rampPerS:CONFIG.ledRampPerS });
   bindVerticalControl({ track:$('track-white'),
     get:()=>state.lights.white.level, set:v=>setLightLevel('white',v), step:CONFIG.ledStep, rampPerS:CONFIG.ledRampPerS });
-  // Ballast: INVERTED (water syringe) — top=surface(0), drag DOWN = more water. The
-  // "dive" arrow (btn-ballast-fill) increases; "surface" (btn-ballast-empty) decreases.
-  bindVerticalControl({ track:$('ballast-track'), axis:'y-inv', upBtn:$('btn-ballast-fill'), downBtn:$('btn-ballast-empty'),
-    // the syringe's flange is solid; the water starts under it
+  // Ballast: DRAG UP TO FILL, like drawing a syringe. It used to be the other way
+  // round, which was defensible while this was a bar (down = go down) and became wrong
+  // the moment it looked like a syringe: pushing a plunger down expels the liquid, it
+  // does not draw it in. The water is drawn up from the tip to match the gesture.
+  bindVerticalControl({ track:$('ballast-track'), upBtn:$('btn-ballast-fill'), downBtn:$('btn-ballast-empty'),
+    // the syringe's flange is solid; a full tank stops under it
     insetTop:(el)=>parseFloat(getComputedStyle(el).getPropertyValue('--syr-flange'))||0,
     get:()=>state.ballastTargetRaw, set:v=>{ state.ballastTargetRaw=clamp(v,0,1); }, step:CONFIG.ballastStep, rampPerS:CONFIG.ballastRampPerS });
   bindSurfaceHold();       // top-bar SURFACE emergency (hold to fire)

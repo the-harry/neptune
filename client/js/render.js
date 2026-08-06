@@ -176,9 +176,10 @@ function renderUI(v){
     _tint.fill = tint.ballast;
     fill.style.background  = tint.ballast || 'var(--water)';
     fill.style.borderColor = tint.ballast || 'var(--water-edge)';
-    // Tight, not a halo: an 8px bloom spilled a whole band of colour down the empty
-    // barrel and the water level stopped having an edge.
-    fill.style.boxShadow   = '0 1px 4px ' + (tint.ballast || 'var(--water)');
+    // Tight, not a halo, and thrown UPWARD off the meniscus: an 8px bloom spilled a
+    // whole band of colour through the empty barrel and the water level stopped
+    // having an edge.
+    fill.style.boxShadow   = '0 -1px 4px ' + (tint.ballast || 'var(--water)');
   }
   paintMetric('ballast-pct',  tint.ballast);
   paintMetric('depth-val',    tint.depth,
@@ -186,10 +187,10 @@ function renderUI(v){
   paintMetric('pressure-val', tint.pressure,
     'no pressure reading is arriving, so this number is NOT tracking a sensor');
   // Target marker = where the operator SET it (the goal). The fill (actual level)
-  // chases it smoothly via the slewed command. Inverted fill grows from the top.
+  // chases it smoothly via the slewed command. The fill grows UP from the tip.
   const tgt=clamp(state.ballastTargetRaw,0,1);
   const mark=$('ballast-target-mark');
-  mark.style.top = (tgt*100)+'%';
+  mark.style.bottom = (tgt*100)+'%';   // measured from the tip, like the liquid
   mark.style.opacity = (Math.abs(tgt-(v.ballastLevel||0))<0.01) ? '0' : '1';
   // SONAR: plot the movement input as a vector (steer = x, throttle = y-up).
   // Scale 62 keeps full diagonal (~88) inside the outer ring (92).
