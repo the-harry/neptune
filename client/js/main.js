@@ -141,6 +141,7 @@ async function boot(forced){
     document.body.classList.add('reduce-gpu');
     LOG.state('reduced-GPU rendering ON (backdrop blur + scan line disabled) - CONFIG.ui.reduceGpu');
   }
+  captureHelp();          // must precede every renderer that writes a title
   resolveHost();
   enableAppFullscreen();
   LOG.state('boot — host="'+ (state.host||'(none, disk mode)') +'"  http="'+(state.httpBase||'(relative)')+'"  ws="'+(state.wsBase||'(none)')+'"');

@@ -167,7 +167,8 @@ const EYE_LIVE_SVG  = '<svg viewBox="0 0 24 24"><path fill="none" stroke="curren
 const EYE_BLIND_SVG = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M1.8 12S5.8 5.5 12 5.5 22.2 12 22.2 12 18.2 18.5 12 18.5 1.8 12 1.8 12z"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/><path stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M3.5 20.5 20.5 3.5"/></svg>';
 
 STATUS.render = function(){
-  const set = (id, cls, title)=>{ const el = $(id); if(!el) return; el.className = 'st-ic ' + cls; el.title = title; };
+  const set = (id, cls, title)=>{ const el = $(id); if(!el) return;
+    el.className = 'st-ic ' + cls; liveTitle(el, title); };
   set('st-net', STATUS.internet ? 'ok' : 'warn', 'Internet: ' + (STATUS.internet ? 'online' : 'offline'));
 
 

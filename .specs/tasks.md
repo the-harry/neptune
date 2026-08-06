@@ -373,3 +373,32 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 | ⚠️ | **Chrome geolocation policy unverified** — kept as belt-and-braces; nothing depends on it | topside |
 | ⚠️ | **Blind nav zoom/dial size are judgement calls** — `radarMetersPerPixel`, `blindSpanM` and the dial size were tuned by measurement, not by driving | field trial |
 | ⚠️ | **Nav track unexercised in the field** — needs an origin set at a real site and a dive | field trial |
+
+---
+
+## Since the last spec pass — what now exists
+
+- **Tests are real** (`client/tests/`): 10 suites, 225 browser checks against the shipping
+  dashboard, plus a screenshot + drift layer with a measured 0.1% tolerance. Exit 0 only
+  if everything passes. Previously there were none at all.
+- **Dive logs can be calibrated** (`api/nav/calibrate.py`): the sample carries the control
+  channels, and the analyser derives turn rate, depth and speed — refusing to answer where
+  the data cannot support it.
+- **A public simulator demo** ships from `client/` on every push (`?sim=1`), with every
+  glyph and number carrying a written explanation.
+- **`bootstrap.py`** reports what a machine has and lacks, for both halves of the system.
+
+### Still open — and honest about it
+
+- **`RealHardware` is a stub.** Every readback is a `TODO(hardware)`, so `NEPTUNE_HW=auto`
+  falls back to the bench simulator. Until it is wired, a "real" dive has no IMU, no depth
+  sensor and no encoder — which is why `calibrate` will refuse most numbers, and why the
+  operator dot, not the sub, is the only position the system actually knows.
+- **The motion constants are guesses.** `subMaxSpeedMs`, `headingRatePerS` and the
+  ballast→depth curve have never been measured against water. The tooling to fix that now
+  exists; the measurement does not.
+- **No GNSS on the ROG Ally**, and no internet on a sealed tether, so browser geolocation
+  cannot produce a fix at all. Tap-to-set is the accurate path, not the fallback.
+- **The AMD display driver** (`amdkmdag.sys`) bugchecks the handheld under sustained
+  compositing load. Mitigated by `CONFIG.ui.reduceGpu`; not fixed, and not fixable here.
+- **The USB tether NIC drops off the bus** under load — a hardware fault, logged in §10.

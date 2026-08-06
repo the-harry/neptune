@@ -1,0 +1,56 @@
+# Publish the CLIENT to GitHub Pages as a playable simulator demo.
+#
+# It serves client/ DIRECTLY. No demo/ copy and no symlinks:
+#   - a copy drifts from the real thing the first time someone forgets to sync it,
+#     and a demo that lies about the product is worse than no demo;
+#   - symlinks fail twice over here — this repo is developed on Windows, where git
+#     checks them out as plain text files (core.symlinks=false), and GitHub Pages
+#     does not follow them either.
+# Publishing the real directory on every push means the demo cannot go stale.
+#
+# The demo needs no backend: the client is offline-first and flies its own simulator
+# when there is no vehicle, which is exactly what ?sim=1 selects.
+name: Demo (GitHub Pages)
+
+on:
+  push:
+    branches: [master]
+    paths: ['client/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Land on the simulator
+        # Anyone arriving at the bare URL gets the demo, not a dashboard hunting for
+        # a Pi that does not exist. index.html itself is untouched.
+        run: |
+          cp client/index.html client/dashboard.html
+          cat > client/index.html <<'HTML'
+          <!doctype html><meta charset="utf-8"><title>Neptune — simulator</title>
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <meta http-equiv="refresh" content="0; url=./dashboard.html?sim=1">
+          <body style="background:#0c0118;color:#ece3ff;font-family:system-ui;padding:2rem">
+          <p>Starting the Neptune simulator…
+             <a style="color:#b46bff" href="./dashboard.html?sim=1">continue</a></p>
+          HTML
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: client
+      - id: deploy
+        uses: actions/deploy-pages@v4

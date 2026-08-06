@@ -35,43 +35,43 @@
 <!-- EXIT - first on the left, hard against the edge and away from every other control:
      the handheld has no keyboard, so this is the only way out, and it must never be
      next to something you might be reaching for mid-dive. -->
-<button id="btn-exit" title="Close the dashboard and stop the local server">&#10005;</button>
+<button id="btn-exit" title="CLOSE - shut the dashboard down and stop the local server." aria-label="CLOSE - shut the dashboard down and stop the local server.">&#10005;</button>
 <div id="status-tri">
-  <span id="st-net" class="st-ic" title="Internet"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M2 8.5a15 15 0 0 1 20 0M5 12a10 10 0 0 1 14 0M8 15.5a5 5 0 0 1 8 0"/><circle cx="12" cy="19" r="1.4" fill="currentColor"/></svg></span>
+  <span id="st-net" class="st-ic" title="INTERNET - green when this handheld is online (needed for map imagery and address search, never for driving the sub)." aria-label="INTERNET - green when this handheld is online (needed for map imagery and address search, never for driving the sub)."><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M2 8.5a15 15 0 0 1 20 0M5 12a10 10 0 0 1 14 0M8 15.5a5 5 0 0 1 8 0"/><circle cx="12" cy="19" r="1.4" fill="currentColor"/></svg></span>
   <!-- ROV: one glyph, three shapes. The link and the vehicle were two icons for
        one question - is there a sub on the end of this cable - so they are one.
        Shape carries the state, not just colour: red robot = nothing there,
        yellow plug = connecting, green sub = a real vehicle. Set by STATUS.render. -->
-  <span id="st-rov" class="st-ic" title="ROV"></span>
+  <span id="st-rov" class="st-ic" title="THE SUB - red robot: nothing on the end of the cable, you are flying the simulator. Amber plug: connecting. Green submarine: a real vehicle is answering. Red pulsing submarine: a leak." aria-label="THE SUB - red robot: nothing on the end of the cable, you are flying the simulator. Amber plug: connecting. Green submarine: a real vehicle is answering. Red pulsing submarine: a leak."></span>
   <!-- VIDEO: an eye. Open + green = live feed; struck through + red = blind, the map
        is the driving view. Glyph set by STATUS.render. -->
-  <span id="st-video" class="st-ic" title="Video"></span>
+  <span id="st-video" class="st-ic" title="CAMERA VIEW - green open eye: live video. Red crossed eye: no picture, so the map becomes the driving view." aria-label="CAMERA VIEW - green open eye: live video. Red crossed eye: no picture, so the map becomes the driving view."></span>
 </div>
 <!-- LEAK: icon-only — green drop (normal) / red crossed drop (leak). Set by renderLeak. -->
-<span id="leak-icon" title="Leak sensor"></span>
-<div class="metric"><span class="m-label">Depth</span><span id="depth-val" class="m-val glow-cyan">1.3 m</span></div>
-<div class="metric"><span class="m-label">Pressure</span><span id="pressure-val" class="m-val glow-cyan">14.7 PSI</span></div>
-<div class="metric"><span class="m-label">Ballast</span><span id="ballast-pct" class="m-val">40%</span></div>
-<div class="metric"><span class="m-label">HDG</span><span id="heading-val" class="m-val">284&deg;</span></div>
-<div class="metric" id="origin-tile" style="cursor:pointer" title="Set / adjust the launch origin"><span class="m-label">Origin</span><span id="origin-val" class="m-val" style="color:var(--secondary)">NOT SET</span></div>
+<span id="leak-icon" title="LEAK SENSOR - green crossed drop means dry. A red drop means water is inside the hull: surface immediately." aria-label="LEAK SENSOR - green crossed drop means dry. A red drop means water is inside the hull: surface immediately."></span>
+<div class="metric"><span class="m-label">Depth</span><span id="depth-val" class="m-val glow-cyan" title="DEPTH - how far below the surface the sub is, in metres. Measured from water pressure, never guessed." aria-label="DEPTH - how far below the surface the sub is, in metres. Measured from water pressure, never guessed.">1.3 m</span></div>
+<div class="metric"><span class="m-label">Pressure</span><span id="pressure-val" class="m-val glow-cyan" title="PRESSURE - raw water pressure in PSI. 14.7 is the surface (one atmosphere); every extra 1.42 PSI is roughly one metre down." aria-label="PRESSURE - raw water pressure in PSI. 14.7 is the surface (one atmosphere); every extra 1.42 PSI is roughly one metre down.">14.7 PSI</span></div>
+<div class="metric"><span class="m-label">Ballast</span><span id="ballast-pct" class="m-val" title="BALLAST - how full the water tank is. 0% = empty, the sub floats. 100% = full, it sinks. Drag the BALLAST slider on the right." aria-label="BALLAST - how full the water tank is. 0% = empty, the sub floats. 100% = full, it sinks. Drag the BALLAST slider on the right.">40%</span></div>
+<div class="metric"><span class="m-label">HDG</span><span id="heading-val" class="m-val" title="HEADING - the compass bearing the sub is pointing. 0 deg = north, 90 = east, 180 = south, 270 = west." aria-label="HEADING - the compass bearing the sub is pointing. 0 deg = north, 90 = east, 180 = south, 270 = west.">284&deg;</span></div>
+<div class="metric" id="origin-tile" style="cursor:pointer" title="ORIGIN - the launch point every distance is measured from, and how accurate that fix is (smaller is better). Click to set or move it. Amber means it is getting old." aria-label="ORIGIN - the launch point every distance is measured from, and how accurate that fix is (smaller is better). Click to set or move it. Amber means it is getting old."><span class="m-label">Origin</span><span id="origin-val" class="m-val" style="color:var(--secondary)">NOT SET</span></div>
 <div class="m-sep"></div>
-<div class="metric"><span class="m-label">Cam Batt</span><span id="cam-battery" class="m-val">--</span></div>
-<div class="metric"><span class="m-label">SD</span><span id="cam-sd" class="m-val">--</span></div>
-<div class="metric"><span class="m-label">Res</span><span id="cam-quality" class="m-val">--</span></div>
-<div class="metric"><span class="m-label">WB</span><span id="cam-awb" class="m-val">--</span></div>
-<div class="metric"><span class="m-label">EV</span><span id="cam-ev" class="m-val">--</span></div>
-<div class="metric"><span class="m-label">Shots</span><span id="cam-remaining" class="m-val">--</span></div>
-<div class="metric"><span class="m-label">Mode</span><span id="cam-mode" class="m-val">--</span></div>
+<div class="metric"><span class="m-label">Cam Batt</span><span id="cam-battery" class="m-val" title="CAMERA BATTERY - charge left in the camera itself, separate from the sub's pack." aria-label="CAMERA BATTERY - charge left in the camera itself, separate from the sub's pack.">--</span></div>
+<div class="metric"><span class="m-label">SD</span><span id="cam-sd" class="m-val" title="SD CARD - the camera's memory card. READY means it can record; anything else means it cannot." aria-label="SD CARD - the camera's memory card. READY means it can record; anything else means it cannot.">--</span></div>
+<div class="metric"><span class="m-label">Res</span><span id="cam-quality" class="m-val" title="RESOLUTION - the video size the camera is recording at." aria-label="RESOLUTION - the video size the camera is recording at.">--</span></div>
+<div class="metric"><span class="m-label">WB</span><span id="cam-awb" class="m-val" title="WHITE BALANCE - how the camera compensates for the colour of the light. Water swallows red first, so this changes with depth and lamp choice." aria-label="WHITE BALANCE - how the camera compensates for the colour of the light. Water swallows red first, so this changes with depth and lamp choice.">--</span></div>
+<div class="metric"><span class="m-label">EV</span><span id="cam-ev" class="m-val" title="EXPOSURE - brighter (+) or darker (-) than the camera's own guess." aria-label="EXPOSURE - brighter (+) or darker (-) than the camera's own guess.">--</span></div>
+<div class="metric"><span class="m-label">Shots</span><span id="cam-remaining" class="m-val" title="SHOTS LEFT - how many more stills fit on the camera's card." aria-label="SHOTS LEFT - how many more stills fit on the camera's card.">--</span></div>
+<div class="metric"><span class="m-label">Mode</span><span id="cam-mode" class="m-val" title="CAMERA MODE - what the camera is currently set to do (video, photo, and so on)." aria-label="CAMERA MODE - what the camera is currently set to do (video, photo, and so on).">--</span></div>
 <div class="m-sep"></div>
-<div class="metric"><span class="m-label">Pack</span><span id="battery-v" class="m-val">--</span></div>
-<div class="metric"><span class="m-label">Link</span><span id="link-ms" class="m-val">-- ms</span></div>
+<div class="metric"><span class="m-label">Pack</span><span id="battery-v" class="m-val" title="PACK VOLTAGE - the sub's main battery. A fully charged pack reads near 25 V; under about 21 V it is time to surface." aria-label="PACK VOLTAGE - the sub's main battery. A fully charged pack reads near 25 V; under about 21 V it is time to surface.">--</span></div>
+<div class="metric"><span class="m-label">Link</span><span id="link-ms" class="m-val" title="LINK LATENCY - round trip to the sub in milliseconds. Lower is better. Dashes mean there is no link at all." aria-label="LINK LATENCY - round trip to the sub in milliseconds. Lower is better. Dashes mean there is no link at all.">-- ms</span></div>
 <!-- Pi system health - real readings from /api/system; dashes until the Pi actually answers. -->
-<div class="metric" title="Pi CPU temperature"><span class="m-label">CPU</span><span id="cpu-c" class="m-val">--</span></div>
-<div class="metric" title="Pi CPU load"><span class="m-label">Load</span><span id="cpu-pct" class="m-val">--</span></div>
-<div class="metric" title="Pi memory used"><span class="m-label">RAM</span><span id="ram-pct" class="m-val">--</span></div>
-<div class="metric" title="Pi free disk"><span class="m-label">Disk</span><span id="disk-gb" class="m-val">--</span></div>
-<div class="metric" title="Tether link (Pi eth0)"><span class="m-label">Tether</span><span id="net-eth" class="m-val">--</span></div>
-<div class="metric" title="Camera Wi-Fi (Pi wlan0)"><span class="m-label">Cam WiFi</span><span id="net-wlan" class="m-val">--</span></div>
+<div class="metric" title="Pi CPU temperature"><span class="m-label">CPU</span><span id="cpu-c" class="m-val" title="PI TEMPERATURE - how hot the computer inside the sub is running." aria-label="PI TEMPERATURE - how hot the computer inside the sub is running.">--</span></div>
+<div class="metric" title="Pi CPU load"><span class="m-label">Load</span><span id="cpu-pct" class="m-val" title="PI LOAD - how busy that computer is." aria-label="PI LOAD - how busy that computer is.">--</span></div>
+<div class="metric" title="Pi memory used"><span class="m-label">RAM</span><span id="ram-pct" class="m-val" title="PI MEMORY - how much of its memory is in use." aria-label="PI MEMORY - how much of its memory is in use.">--</span></div>
+<div class="metric" title="Pi free disk"><span class="m-label">Disk</span><span id="disk-gb" class="m-val" title="PI DISK - free space left for recordings and logs." aria-label="PI DISK - free space left for recordings and logs.">--</span></div>
+<div class="metric" title="Tether link (Pi eth0)"><span class="m-label">Cable</span><span id="net-eth" class="m-val" title="CABLE - the wired network link down the tether to the sub. This is the data connection, not the cable's length." aria-label="CABLE - the wired network link down the tether to the sub. This is the data connection, not the cable's length.">--</span></div>
+<div class="metric" title="Camera Wi-Fi (Pi wlan0)"><span class="m-label">Cam WiFi</span><span id="net-wlan" class="m-val" title="CAMERA WI-FI - signal strength between the sub's computer and its camera, in dBm. Closer to zero is stronger; below -70 the video will struggle." aria-label="CAMERA WI-FI - signal strength between the sub's computer and its camera, in dBm. Closer to zero is stronger; below -70 the video will struggle.">--</span></div>
 </header>
 <!-- Camera fault channel (WarningMSG / degraded) — hidden unless there's a fault -->
 <div id="cam-warning" class="fixed left-1/2 -translate-x-1/2 z-50" style="top:64px"></div>
@@ -83,17 +83,17 @@
 <!-- RIGHT CONTROL RAIL — stacked; LED + ballast sliders flex to fill the height -->
 <aside class="fixed right-0 top-0 h-full w-[84px] z-50 glass-panel flex flex-col px-3 gap-1.5 overflow-hidden no-scrollbar border-l border-white/20 glow-shadow-rail" style="padding-top:10px;padding-bottom:10px">
 <!-- REC -->
-<button id="cam-rec" class="relative w-full py-1 rounded border-2 border-error bg-error/10 text-error flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="Record toggle (polled confirmation)">
+<button id="cam-rec" class="relative w-full py-1 rounded border-2 border-error bg-error/10 text-error flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="RECORD - red: no camera and nothing recording. Blue: camera ready. Amber: only one of the two recorders is running. Green: camera card and handheld screen both recording." aria-label="RECORD - red: no camera and nothing recording. Blue: camera ready. Amber: only one of the two recorders is running. Green: camera card and handheld screen both recording.">
 <span class="material-symbols-outlined"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" fill="currentColor"/></svg></span>
 <span class="cam-rec-txt font-label-caps text-[10px]">OFF</span>
 </button>
 <!-- STILL (picture) -->
-<button id="cam-capture" class="w-full py-1 rounded border-2 btn-photo flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="Capture a still: saved topside, and to the camera SD card when there is a camera">
+<button id="cam-capture" class="w-full py-1 rounded border-2 btn-photo flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="PHOTO - take a still. Saved to the handheld, and to the camera's card when a camera is connected. The button flashes when the shutter fires." aria-label="PHOTO - take a still. Saved to the handheld, and to the camera's card when a camera is connected. The button flashes when the shutter fires.">
 <span class="material-symbols-outlined"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>
 <span class="font-label-caps text-[10px]">PIC</span>
 </button>
 <!-- SURFACE emergency — HOLD to activate -->
-<button id="btn-surface" data-needs="link" class="relative overflow-hidden w-full py-1 rounded border-2 btn-hazard flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="⚠ EMERGENCY SURFACE — blows ballast to the surface fast. Can breach/damage the craft. Use ONLY on a leak. Hold to fire." style="touch-action:none">
+<button id="btn-surface" data-needs="link" class="relative overflow-hidden w-full py-1 rounded border-2 btn-hazard flex flex-col items-center gap-0.5 active:scale-95 transition-all" style="touch-action:none" title="EMERGENCY SURFACE - blows the ballast to bring the sub up fast. HOLD to fire. Can damage the craft, so use it on a leak, not for convenience." aria-label="EMERGENCY SURFACE - blows the ballast to bring the sub up fast. HOLD to fire. Can damage the craft, so use it on a leak, not for convenience.">
 <span id="surface-fill" class="absolute inset-y-0 left-0" style="width:0%;background:color-mix(in srgb,var(--hazard) 45%,transparent)"></span>
 <span class="material-symbols-outlined text-2xl" style="position:relative"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M12 3 L22 20 H2 Z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 17 V10 M9 12.5 L12 9.5 L15 12.5"/></svg></span>
 <span class="font-label-caps text-[10px]" style="position:relative">SURFACE</span>
@@ -102,34 +102,34 @@
 <span class="font-label-caps text-label-caps text-on-surface-variant text-center">LIGHTS</span>
 <!-- Green LED -->
 <div class="flex flex-col items-center gap-1 flex-1 min-h-0 w-full">
-<button id="btn-light-green" data-needs="link" class="w-8 h-8 rounded-full flex items-center justify-center bg-tertiary/30 border-2 border-tertiary glow-shadow-md active:scale-95 transition-all flex-shrink-0" title="Toggle green LED">
+<button id="btn-light-green" data-needs="link" class="w-8 h-8 rounded-full flex items-center justify-center bg-tertiary/30 border-2 border-tertiary glow-shadow-md active:scale-95 transition-all flex-shrink-0" title="GREEN LAMP on/off. The slider below sets brightness." aria-label="GREEN LAMP on/off. The slider below sets brightness.">
 <span id="icon-light-green" class="material-symbols-outlined text-tertiary"></span>
 </button>
-<div id="track-green" data-needs="link" class="rail-slider flex-1 min-h-0" title="Drag to set brightness" style="touch-action:none">
+<div id="track-green" data-needs="link" class="rail-slider flex-1 min-h-0" style="touch-action:none" title="GREEN LAMP BRIGHTNESS - drag up for brighter." aria-label="GREEN LAMP BRIGHTNESS - drag up for brighter.">
 <div id="gauge-green" class="absolute bottom-0 left-0 right-0 bg-tertiary glow-shadow-sm" style="height:80%"></div>
 </div>
 </div>
 <!-- White LED -->
 <div class="flex flex-col items-center gap-1 flex-1 min-h-0 w-full">
-<button id="btn-light-white" data-needs="link" class="w-8 h-8 rounded-full flex items-center justify-center bg-surface-variant border-2 border-outline-variant active:scale-95 transition-all flex-shrink-0" title="Toggle white LED">
+<button id="btn-light-white" data-needs="link" class="w-8 h-8 rounded-full flex items-center justify-center bg-surface-variant border-2 border-outline-variant active:scale-95 transition-all flex-shrink-0" title="WHITE LAMP on/off. The slider below sets brightness." aria-label="WHITE LAMP on/off. The slider below sets brightness.">
 <span id="icon-light-white" class="material-symbols-outlined text-on-surface-variant"></span>
 </button>
-<div id="track-white" data-needs="link" class="rail-slider flex-1 min-h-0" title="Drag to set brightness" style="touch-action:none">
+<div id="track-white" data-needs="link" class="rail-slider flex-1 min-h-0" style="touch-action:none" title="WHITE LAMP BRIGHTNESS - drag up for brighter." aria-label="WHITE LAMP BRIGHTNESS - drag up for brighter.">
 <div id="gauge-white" class="absolute bottom-0 left-0 right-0 bg-on-surface-variant/40" style="height:20%"></div>
 </div>
 </div>
 <!-- BALLAST — water syringe: 0 = surface (empty), drag DOWN = more water (dive). Light blue. -->
 <span class="font-label-caps text-label-caps text-on-surface-variant text-center">BALLAST</span>
 <div class="flex flex-col items-center gap-1 flex-1 min-h-0 w-full">
-<button id="btn-ballast-empty" data-needs="link" class="material-symbols-outlined text-primary active:bg-primary/20 rounded flex-shrink-0" title="Surface — less water (click or hold)"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 15l6-6 6 6"/></svg></button>
-<div id="ballast-track" data-needs="link" class="rail-slider flex-1 min-h-0" title="Drag down = more water (dive)" style="touch-action:none">
+<button id="btn-ballast-empty" data-needs="link" class="material-symbols-outlined text-primary active:bg-primary/20 rounded flex-shrink-0" title="LESS WATER - the sub rises." aria-label="LESS WATER - the sub rises."><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 15l6-6 6 6"/></svg></button>
+<div id="ballast-track" data-needs="link" class="rail-slider flex-1 min-h-0" style="touch-action:none" title="BALLAST TANK - drag down to take on water and dive, up to empty it and surface." aria-label="BALLAST TANK - drag down to take on water and dive, up to empty it and surface.">
 <div id="ballast-fill" class="absolute top-0 left-0 right-0 border-b-2" style="height:0%;background:var(--water);border-color:var(--water-edge);box-shadow:0 0 8px var(--water)"></div>
 <div id="ballast-target-mark" class="absolute left-0 right-0" style="top:0%;height:2px;background:var(--secondary);box-shadow:0 0 6px var(--secondary)"></div>
 </div>
-<button id="btn-ballast-fill" data-needs="link" class="material-symbols-outlined text-primary active:bg-primary/20 rounded flex-shrink-0" title="Dive — more water (click or hold)"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg></button>
+<button id="btn-ballast-fill" data-needs="link" class="material-symbols-outlined text-primary active:bg-primary/20 rounded flex-shrink-0" title="MORE WATER - the sub dives." aria-label="MORE WATER - the sub dives."><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg></button>
 </div>
 <!-- CONFIG -->
-<button id="btn-config" class="w-full py-1 rounded border border-outline-variant text-on-surface-variant flex flex-col items-center gap-0.5 active:bg-surface-variant transition-colors" title="Open config &amp; input mapping">
+<button id="btn-config" class="w-full py-1 rounded border border-outline-variant text-on-surface-variant flex flex-col items-center gap-0.5 active:bg-surface-variant transition-colors" title="SETTINGS - the sub's address, input mapping, and the log viewer." aria-label="SETTINGS - the sub's address, input mapping, and the log viewer.">
 <span class="material-symbols-outlined"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54A.5.5 0 0 0 13.4 2h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.58.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L1.77 8.48a.5.5 0 0 0 .12.64l2.03 1.58c-.05.31-.09.63-.09.94s.02.63.07.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.58-.24 1.13-.56 1.62-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg></span>
 <span class="font-label-caps text-[10px]">CONFIG</span>
 </button>
@@ -140,7 +140,7 @@
      ON TOP of the live basemap; THROTTLE/STEER readouts to the right (unmoved). -->
 <div id="radar-wrap" class="fixed bottom-edge-margin left-edge-margin z-40 flex items-end gap-3">
 <div class="radar-col">
-<div id="radar" title="Tap to expand the map">
+<div id="radar" title="MAP - where the sub is, the path it has taken, and the circle showing how far the cable reaches. Click to open it full screen." aria-label="MAP - where the sub is, the path it has taken, and the circle showing how far the cable reaches. Click to open it full screen.">
   <!-- MAP: the single map instance — clipped to the circle when collapsed, fullscreen when expanded -->
   <div id="map-panel">
     <canvas id="map-canvas"></canvas>
@@ -171,16 +171,16 @@
       <div id="as-prog" class="as-prog"></div>
     </div>
     <div id="map-ctl" class="map-ctl">
-      <button id="map-zoom-in" class="map-btn" title="Zoom in">+</button>
-      <button id="map-zoom-out" class="map-btn" title="Zoom out">&minus;</button>
-      <button id="map-recenter" class="map-btn" title="Reset to maximum imagery zoom">&#8982;</button>
+      <button id="map-zoom-in" class="map-btn" title="ZOOM IN (or press the right paddle, F10)." aria-label="ZOOM IN (or press the right paddle, F10).">+</button>
+      <button id="map-zoom-out" class="map-btn" title="ZOOM OUT (or press the left paddle, F9)." aria-label="ZOOM OUT (or press the left paddle, F9).">&minus;</button>
+      <button id="map-recenter" class="map-btn" title="RESET ZOOM to the sharpest imagery available." aria-label="RESET ZOOM to the sharpest imagery available.">&#8982;</button>
       <!-- The sub cannot report where it is; the operator can see it. -->
-      <button id="map-set-rov" class="map-btn" title="Pinpoint the ROV on the map">&#9678;</button>
+      <button id="map-set-rov" class="map-btn" title="PINPOINT THE SUB - the sub cannot report where it is underwater, so if you can see it, tap its real position on the map." aria-label="PINPOINT THE SUB - the sub cannot report where it is underwater, so if you can see it, tap its real position on the map.">&#9678;</button>
       <!-- Plan from somewhere you are not standing. Toggles back to the live fix. -->
-      <button id="map-mock-me" class="map-btn" title="Plan from a mocked position (dot turns red) — click again for the live fix">&#9873;</button>
+      <button id="map-mock-me" class="map-btn" title="PLAN FROM ELSEWHERE - move your own dot somewhere you are not standing, to check whether a spot is reachable. Your dot turns red while you do." aria-label="PLAN FROM ELSEWHERE - move your own dot somewhere you are not standing, to check whether a spot is reachable. Your dot turns red while you do.">&#9873;</button>
       <!-- Hide the traces when the map gets busy. The sub marker always stays. -->
-      <button id="map-track-toggle" class="map-btn" title="Hide the tracks"></button>
-      <button id="map-close" class="map-btn" title="Collapse map (Esc)">&#10005;</button>
+      <button id="map-track-toggle" class="map-btn" title="SHOW OR HIDE the paths already travelled." aria-label="SHOW OR HIDE the paths already travelled."></button>
+      <button id="map-close" class="map-btn" title="CLOSE the full-screen map." aria-label="CLOSE the full-screen map.">&#10005;</button>
     </div>
   </div>
   <!-- DIAL overlay: rings + input vector + FWD/REV + rotating North — drawn OVER the map (collapsed) -->
@@ -195,10 +195,10 @@
     <!-- How much input is going each way, 0-100, one number per direction. Replaces the
          FWD/REV labels: the numbers say the same thing and say how much. Dim at rest so
          the dial stays clean, lit on the side actually being driven. -->
-    <text id="in-fwd" class="sonar-num" x="0" y="-70" text-anchor="middle">0</text>
-    <text id="in-rev" class="sonar-num" x="0" y="80" text-anchor="middle">0</text>
-    <text id="in-right" class="sonar-num" x="76" y="5" text-anchor="middle">0</text>
-    <text id="in-left" class="sonar-num" x="-76" y="5" text-anchor="middle">0</text>
+    <text id="in-fwd" class="sonar-num" x="0" y="-70" text-anchor="middle" title="How hard you are pushing FORWARD, 0 to 100." aria-label="How hard you are pushing FORWARD, 0 to 100.">0</text>
+    <text id="in-rev" class="sonar-num" x="0" y="80" text-anchor="middle" title="How hard you are pushing BACKWARD, 0 to 100." aria-label="How hard you are pushing BACKWARD, 0 to 100.">0</text>
+    <text id="in-right" class="sonar-num" x="76" y="5" text-anchor="middle" title="How hard you are steering RIGHT, 0 to 100." aria-label="How hard you are steering RIGHT, 0 to 100.">0</text>
+    <text id="in-left" class="sonar-num" x="-76" y="5" text-anchor="middle" title="How hard you are steering LEFT, 0 to 100." aria-label="How hard you are steering LEFT, 0 to 100.">0</text>
     <!-- North indicator sits at the ring edge (radially clear of FWD, which is inset) -->
     <g id="radar-north"><line class="radar-n-tick" x1="0" y1="-92" x2="0" y2="-84"></line><text class="radar-n" x="0" y="-77" text-anchor="middle">N</text></g>
   </svg>
@@ -215,7 +215,7 @@
 <div class="sonar-readout">
 <!-- Straight-line range from the launch point against the cable you have. SIM is
      clamped to it; on a real link this only warns — the launch point can move. -->
-<div class="metric" style="align-items:flex-start"><span class="m-label">Tether</span><span id="sonar-teth" class="m-val">0 m</span></div>
+<div class="metric" style="align-items:flex-start"><span class="m-label">Tether</span><span id="sonar-teth" class="m-val" title="TETHER RANGE - how far the sub is from you in a straight line, against the length of cable you have. Amber approaching the limit, red at it." aria-label="TETHER RANGE - how far the sub is from you in a straight line, against the length of cable you have. Amber approaching the limit, red at it.">0 m</span></div>
 <!-- The range is measured from the operator dot, so it is only as honest as that dot:
      PLANNED when the position is mocked, LAST KNOWN when the fix has gone cold. -->
 <div id="teth-src" class="teth-src"></div>

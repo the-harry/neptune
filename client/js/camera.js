@@ -113,12 +113,12 @@ function renderCam(){
     btn.classList.toggle('recording', anyRec);
     const t=btn.querySelector('.cam-rec-txt');
     if(t) t.textContent = anyRec ? (st==='all' ? 'ON' : 'PART') : (camOn ? 'OFF' : 'NO CAM');
-    btn.title = anyRec
+    liveTitle(btn, anyRec
       ? 'Recording: ' + [c.recording ? 'camera card' : null,
                          state.screenRec.active ? 'handheld screen' : null].filter(Boolean).join(' + ')
         + (st==='all' ? '' : ' — the other one is NOT recording')
       : (camOn ? 'Ready — record the camera card and the handheld screen'
-               : 'No camera: only the handheld screen can be recorded');
+               : 'No camera: only the handheld screen can be recorded'));
   }
   // camera battery
   const b = $('cam-battery'); if(b) b.textContent = (c.battery!=null ? c.battery+'%' : '--');
@@ -126,7 +126,7 @@ function renderCam(){
   const sd = $('cam-sd'); if(sd){ sd.textContent = c.sd || '--'; sd.style.color = c.sd==='READY' ? 'var(--tertiary)' : (c.sd ? 'var(--error)' : ''); }
   // live camera settings (mode-dependent: still res in CAMERA, video res otherwise)
   const q = $('cam-quality'); if(q) q.textContent = (c.mode==='CAMERA' ? c.imageRes : c.videoRes) || '--';
-  const wb = $('cam-awb'); if(wb){ wb.textContent = shortAwb(c.awb); wb.title = c.awb || ''; }
+  const wb = $('cam-awb'); if(wb){ wb.textContent = shortAwb(c.awb); liveTitle(wb, c.awb || ''); }
   const ev = $('cam-ev'); if(ev) ev.textContent = c.ev || '--';
   const rem = $('cam-remaining'); if(rem) rem.textContent = (c.remaining!=null ? c.remaining : '--');
   const md = $('cam-mode'); if(md) md.textContent = c.mode || '--';

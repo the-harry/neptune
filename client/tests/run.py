@@ -141,10 +141,14 @@ def make_handler(suite_path: Path, result_box: dict, done: threading.Event):
             self.wfile.write(body)
 
         def do_GET(self):
-            if self.path.startswith("/__suite.js"):
+            # Match on the PATH, not the whole request line: a suite may ask for
+            # ?sim=1, and an exact-string check silently stops injecting the suite
+            # at all — which shows up as a timeout with no other clue.
+            path = self.path.split("?", 1)[0]
+            if path.startswith("/__suite.js"):
                 self._send(PREAMBLE + suite_path.read_bytes(), "application/javascript")
                 return
-            if self.path in ("/", "/index.html"):
+            if path in ("/", "/index.html"):
                 # The ONLY modification to the page under test: one extra script tag.
                 html = (CLIENT / "index.html").read_text(encoding="utf-8")
                 html = html.replace("</body>", '<script src="/__suite.js"></script></body>')
@@ -172,6 +176,19 @@ def make_handler(suite_path: Path, result_box: dict, done: threading.Event):
     return H
 
 
+def suite_url_suffix(suite: Path) -> str:
+    """A suite may ask for a specific URL, e.g. `// @url ?sim=1` on any early line.
+
+    Some behaviour IS the URL — demo mode is a query parameter — and there is no way
+    to test that from inside a page already loaded without one.
+    """
+    head = suite.read_text(encoding="utf-8", errors="replace")[:600]
+    for line in head.splitlines():
+        if "@url" in line:
+            return line.split("@url", 1)[1].strip()
+    return ""
+
+
 def run_suite(suite: Path, chrome: str, timeout: float, headed: bool, keep: bool,
               shots: bool = True):
     port = free_port()
@@ -185,7 +202,8 @@ def run_suite(suite: Path, chrome: str, timeout: float, headed: bool, keep: bool
     args = [chrome, f"--user-data-dir={profile}", "--no-first-run",
             "--no-default-browser-check", "--disable-background-networking",
             f"--remote-debugging-port={cdp_port}",
-            "--window-size=1280,800", f"http://127.0.0.1:{port}/index.html"]
+            "--window-size=1280,800",
+            f"http://127.0.0.1:{port}/index.html{suite_url_suffix(suite)}"]
     if not headed:
         args[1:1] = ["--headless=new", "--disable-gpu"]
     proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

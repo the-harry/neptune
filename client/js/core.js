@@ -173,6 +173,29 @@ const state = {
   lastFrame:0
 };
 
+/* TOOLTIPS THAT SURVIVE.
+
+   Every glyph and number carries a written explanation, because for most people
+   this dashboard is the first submarine control they have ever seen and there is
+   nobody beside them to translate. But the renderers also want the title for LIVE
+   state ("Video: live feed"), and whoever wrote last used to win — which quietly
+   erased the explanation a few seconds after boot.
+
+   So the explanation is captured once into data-help and the live text is appended
+   to it. Both survive, and the HTML stays the single place the wording lives. */
+function captureHelp(){
+  document.querySelectorAll('[title]').forEach(el=>{
+    if(!el.dataset.help) el.dataset.help = el.getAttribute('title') || '';
+  });
+}
+function liveTitle(el, live){
+  if(typeof el === 'string') el = $(el);
+  if(!el) return;
+  const help = el.dataset.help || '';
+  el.title = help ? (help + (live ? '   —   ' + live : '')) : (live || '');
+  if(help) el.setAttribute('aria-label', el.title);
+}
+
 /* Is a real vehicle on the other end of the link, right now?
 
    THE RULE: while one is, nothing on this console may be synthesised. A simulated
@@ -202,6 +225,15 @@ function resolveHost(){
   let host=null, secureParam=null;
   try{
     const params=new URLSearchParams(location.search);
+    // ?sim=1 — DEMO MODE. There is deliberately no vehicle to look for, so the
+    // simulator takes over immediately instead of spending three seconds failing to
+    // reach a Pi that was never there. This is what the public demo is served with;
+    // everything on screen is honest about being simulated (red robot, SIM badge).
+    if(params.get('sim')==='1'){
+      state.demo = true;
+      LOG.state('DEMO MODE (?sim=1) — no vehicle, everything is the simulator');
+      return;                                             // no host, no ws: pure sim
+    }
     const p=params.get('host');
     if(p){ host=p; localStorage.setItem('rov_host', p); } // explicit override wins (and is remembered)
     secureParam=params.get('secure');                     // ?secure=0 forces plain http/ws (dev against a mock)

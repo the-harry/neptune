@@ -436,7 +436,7 @@ function renderOriginTile(){
   const tile=$('origin-tile');
   if(!MAP.hasOrigin){
     el.textContent='NOT SET'; el.style.color='var(--secondary)';
-    if(tile) tile.title='Set the launch origin';
+    if(tile) liveTitle(tile,'Set the launch origin');
     return;
   }
   // An origin does not expire, but it does STOP BEING TRUE the moment the handheld is
@@ -456,12 +456,11 @@ function renderOriginTile(){
     const age = ageH >= 48 ? Math.round(ageH/24)+'d' : Math.round(ageH)+'h';
     el.textContent = acc+'·'+age;
     el.style.color = 'var(--hazard)';
-    if(tile) tile.title='Origin was set '+age+' ago, possibly at another site. '+
-                        'Tap to re-set it to where you are now.';
+    if(tile) liveTitle(tile,'set '+age+' ago, possibly at another site — tap to re-set it to where you are now');
   } else {
     el.textContent = acc;
     el.style.color = 'var(--tertiary)';
-    if(tile) tile.title='Launch origin (set '+(ageH<1 ? Math.max(1,Math.round(ageMs/60000))+' min' : Math.round(ageH)+'h')+' ago). Tap to adjust.';
+    if(tile) liveTitle(tile,'set '+(ageH<1 ? Math.max(1,Math.round(ageMs/60000))+' min' : Math.round(ageH)+'h')+' ago');
   }
 }
 function updateEmptyState(){
@@ -580,7 +579,7 @@ const EYE_SHUT  = '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="n
 function renderTrackToggle(){
   const b=$('map-track-toggle'); if(!b) return;
   b.innerHTML = MAP.showTrack ? EYE_OPEN : EYE_SHUT;
-  b.title = MAP.showTrack ? 'Hide the tracks' : 'Show the tracks';
+  liveTitle(b, MAP.showTrack ? 'showing' : 'hidden');
   b.style.opacity = MAP.showTrack ? '1' : '.6';
 }
 function toggleTrack(){

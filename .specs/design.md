@@ -3,6 +3,64 @@
 How the requirements are met, and **why** each decision is the way it is. Where a choice
 looks odd, the reason is usually a failure that has already happened on this hardware.
 
+
+---
+
+## 0. What this system is for
+
+**The client is not a dashboard. It is the system that commands a set of instruments,
+and its mission is to bring the ROV back to the operator — whatever fails.**
+
+Every subsystem below the client is an *instrument*: the camera, the video feed, the
+control link, the IMU, the depth sensor, the tether encoder, the map imagery, the
+handheld's own GPS. Instruments are not infrastructure. They are fallible by nature and
+they **will** fail — in cold water, on a long cable, on a handheld with a display driver
+that bugchecks, on a Pi that browns out. Designing as though they will not is how you get
+a console that is confident and wrong.
+
+So the client treats every one of them the same way:
+
+1. **Assume it fails.** Not "handle the error" — assume the steady state includes it
+   being gone. Losing the camera is not an exception path; it is Tuesday.
+2. **Fail alone.** One instrument going dark takes nothing else with it. Losing the ROV
+   link must not disable the camera buttons, the map, the logs or the settings.
+3. **Say so, in one glance.** Every instrument has exactly one indicator, and the
+   indicator changes *shape*, not just colour, so it survives sunlight, a cracked screen
+   and an operator who is also driving.
+4. **Never invent its reading.** A missing number is `--`, never `0`. A vehicle that
+   cannot measure its heading does not get a heading drawn for it. This rule has been
+   broken twice in this repo and both times it produced a console that looked healthy
+   while hiding the failure it existed to show.
+5. **Degrade to the next mechanism, automatically.** No retry buttons, no dialogs, no
+   asking. The operator has a sub to fly.
+
+### The fallback chain
+
+The mission is *get the ROV home*. Each step is what remains when the one above it dies:
+
+| When this fails | What takes over |
+|---|---|
+| Camera video | **BLIND NAV** — the map becomes the full-screen driving view, heading-up, throttle live |
+| Map imagery | the metre-frame canvas: grid, track, tether ring, heading — no basemap needed |
+| Vehicle navigation | the sub marker **holds position** and says `NO NAV`; the dial still answers the stick |
+| The control link | the simulator keeps the console flyable, clearly badged, and the vehicle's own watchdog zeroes the thrusters within `watchdog_timeout_s` |
+| The handheld's GPS | tap the map — more accurate than Wi-Fi positioning anyway (±8 m vs ±50 m) |
+| The Pi's own dead reckoning | the tether range still bounds where the sub *can* be: a 100 m cable is a 100 m circle |
+| Everything topside | **SURFACE** blows ballast on a hold, and the drop-weight is mechanical |
+
+The last row is the point. The chain ends in a mechanism that needs no software at all,
+because a fallback chain that terminates in "and then the computer helps" is not a chain.
+
+### What this forbids
+
+- Synthesising a position, heading or depth over a real link. Ever. A simulated track
+  drawn over a real dive hides a dead thruster, a snagged tether or a sub pinned against
+  a wall — all of which look exactly like normal progress if the map keeps advancing.
+- Queuing a vehicle command. A late `throttle 100%` arriving after a reconnect is a
+  hazard, not a nicety.
+- A single "backend up/down" flag. It is always wrong about something.
+- Any control that needs the Pi to *decide* whether it is usable.
+
 ---
 
 ## 1. Shape of the system
@@ -624,3 +682,92 @@ restarts at zero every page load.
   string. `--dump-dom` will not render `chrome://policy`, headless denies geolocation outright,
   and fullscreen suppresses permission prompts — each lies in a different direction. Screenshot
   the window and measure `getBoundingClientRect()`.
+
+---
+
+## 14. Tests (`client/tests/`)
+
+Browser checks against the **real dashboard**: `run.py` serves `client/`, injects one
+suite as an extra `<script>` and drives headless Chrome. The page under test is the
+shipping client byte for byte plus that tag, so the suites drive the same `MAP`,
+`STATUS`, `CONFIG` and `state` the operator drives. Standard library and an installed
+Chrome — no framework, no dependencies, matching the client's own rule.
+
+Ten suites, 225 checks, ~95 s, exit 0 only if every one passes.
+
+### The visual layer, and why its tolerance is measured
+
+Each suite is photographed when it finishes, over a ~130-line CDP WebSocket client
+(`cdp.py`) — Chrome's `--screenshot` flag fires on load and then *exits*, so it can never
+capture a state a suite drove the page into.
+
+Two shots: the real thing (looked at) and a **layout portrait** with the live map and
+video hidden (compared). That split exists because two identical runs of the map suite
+differed by 36% and 66% as tiles arrived from the network under a moving vehicle. With
+the live surfaces hidden the floor is **0.000–0.016%**, so the threshold is **0.1%**.
+
+The number matters more than it sounds. At the 2% first reached for, the exit button
+growing from 28 px to 44 px went completely unnoticed — it is 0.13% of the screen. At
+0.1% the same change reports 0.91% drift *while all 24 numeric checks still pass*, which
+is exactly the gap a picture exists to cover. `map-zoom-and-rov` is recorded and never
+compared: a check that cannot be stable should not pretend to be.
+
+---
+
+## 15. Calibrating the model against reality (`api/nav/calibrate.py`)
+
+Every constant in the motion model is currently a guess — `subMaxSpeedMs` at 1.0 m/s,
+`headingRatePerS` at 40 °/s, the ballast→depth curve, the server's `SpeedLUT`. A guessed
+speed model is the **largest error term in dead reckoning**, because the error is not
+random: it is a constant multiplier on every metre of the track.
+
+The dive log could not fix that, because it recorded only where we *thought* we were.
+Position over time says the sub moved; only **throttle next to distance** says how fast
+it moves per unit of throttle. So the sample now carries the control channels — steer,
+thruster output, ballast level and target, raw pressure, armed — alongside the nav state.
+
+`calibrate` derives turn rate from measured heading, the depth model from measured
+pressure, and speed from tether payout or a measured run.
+
+**Speed must never be taken from the log's own x/y.** Those coordinates were produced
+*by* the speed model, so checking them against it is circular and will cheerfully confirm
+whatever is already configured. Speed needs an outside reference: a measured stretch
+(`--ground-truth 20`), a spool encoder, or GNSS on the surface. Where the data cannot
+support a number the tool says so and returns nothing — a calibration tool that always
+produces an answer is worse than none. `--selftest` proves the maths against a synthetic
+dive with known constants, including that a sensorless log yields nothing rather than a
+guess.
+
+---
+
+## 16. The public demo (`.github/workflows/pages.yml`)
+
+GitHub Pages serves `client/` **directly** on every push. Not a `demo/` copy, which
+drifts the first time someone forgets to sync it — and a demo that lies about the product
+is worse than no demo. Not symlinks either: this repo is developed on Windows, where git
+checks them out as plain text files (`core.symlinks=false`), and Pages does not follow
+them regardless.
+
+`?sim=1` is demo mode: no host, no WebSocket, the simulator immediately — rather than
+three seconds of failing to reach a Pi that was never there. Everything on screen stays
+honest about being simulated (red robot, SIM state).
+
+Because this is most people's first contact with a submarine control, **every glyph,
+number and control carries a written explanation** of what it means — not what it is
+called — in `title` and `aria-label`. The `demo-mode` suite enforces that: 44 elements
+must each have one, each must be a real sentence rather than a label, and the ROV state
+must be carried by *shape* as well as colour.
+
+The explanation lives in the HTML and is captured into `data-help` at boot, because the
+renderers also want the title for live state and whoever wrote last used to win — which
+quietly erased the explanations a few seconds after launch.
+
+---
+
+## 17. Bootstrap (`bootstrap.py`)
+
+One entry point that reports what a machine has and what it lacks, for both halves of the
+system: topside needs a browser and the launcher, the vehicle needs `install.sh`.
+Deliberately **read-only** unless asked (`--dev` builds the API venv, `--test` runs the
+suites) — a bootstrap that silently installs things is one you cannot run just to find out
+where you stand, which is the main reason to have one.

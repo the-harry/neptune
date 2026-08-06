@@ -16,6 +16,33 @@ first (fixed tether IP). See [`launch/README.md`](launch/README.md).
 (Opening from `file://` is blocked — it has no secure context and can't reach the Pi;
 that's why the launcher serves it from `localhost` instead.)
 
+## What this is
+
+**Not a dashboard — the system that commands a set of instruments, whose mission is to
+bring the ROV back to the operator whatever fails.**
+
+Everything below it is an instrument: camera, video feed, control link, IMU, depth
+sensor, tether encoder, map imagery, the handheld's own GPS. Instruments are fallible by
+nature and **will** fail — cold water, a long cable, a handheld whose display driver
+bugchecks, a Pi that browns out. So each is assumed to fail, fails *alone*, says so in one
+glance with a shape rather than only a colour, never has its reading invented, and hands
+over to the next mechanism automatically — no retry buttons, no dialogs. The operator has
+a sub to fly.
+
+The fallback chain ends somewhere that needs no software at all:
+
+| When this fails | What takes over |
+|---|---|
+| Camera video | **BLIND NAV** — the map becomes the driving view |
+| Map imagery | the metre frame: grid, track, tether ring, heading |
+| Vehicle navigation | the marker **holds** and says `NO NAV`; the dial still answers the stick |
+| The control link | the simulator keeps the console flyable, badged; the vehicle's watchdog zeroes the thrusters |
+| The handheld's GPS | tap the map — more accurate anyway (±8 m vs ±50 m) |
+| Dead reckoning | the tether still bounds where the sub *can* be: 100 m of cable is a 100 m circle |
+| Everything topside | **SURFACE** on a hold, and a mechanical drop-weight |
+
+See [`.specs/design.md` §0](../.specs/design.md) for what that forbids.
+
 ## Offline-first: the client works without the backend
 
 **Standing rule:** the only things that require the Pi are the things that *are*
