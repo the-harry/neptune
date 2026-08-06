@@ -38,9 +38,14 @@
 <button id="btn-exit" title="Close the dashboard and stop the local server">&#10005;</button>
 <div id="status-tri">
   <span id="st-net" class="st-ic" title="Internet"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M2 8.5a15 15 0 0 1 20 0M5 12a10 10 0 0 1 14 0M8 15.5a5 5 0 0 1 8 0"/><circle cx="12" cy="19" r="1.4" fill="currentColor"/></svg></span>
-  <span id="st-pi" class="st-ic" title="ROV link (tether to the Pi)"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M10.2 13.8a3.9 3.9 0 0 1 0-5.5l2.3-2.3a3.9 3.9 0 0 1 5.5 5.5l-1.1 1.1"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M13.8 10.2a3.9 3.9 0 0 1 0 5.5l-2.3 2.3a3.9 3.9 0 0 1-5.5-5.5l1.1-1.1"/></svg></span>
-  <span id="st-video" class="st-ic" title="Video"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="13" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path fill="currentColor" d="M17 11l4.5-3v8L17 13z"/></svg></span>
-  <span id="st-veh" class="st-ic" title="Vehicle"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 12c0-2.2 3.6-4 8-4s8 1.8 8 4-3.6 4-8 4-8-1.8-8-4z"/><circle cx="9" cy="12" r="1.1" fill="#0c0118"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 8V5M9 5h6"/></svg></span>
+  <!-- ROV: one glyph, three shapes. The link and the vehicle were two icons for
+       one question - is there a sub on the end of this cable - so they are one.
+       Shape carries the state, not just colour: red robot = nothing there,
+       yellow plug = connecting, green sub = a real vehicle. Set by STATUS.render. -->
+  <span id="st-rov" class="st-ic" title="ROV"></span>
+  <!-- VIDEO: an eye. Open + green = live feed; struck through + red = blind, the map
+       is the driving view. Glyph set by STATUS.render. -->
+  <span id="st-video" class="st-ic" title="Video"></span>
 </div>
 <!-- LEAK: icon-only — green drop (normal) / red crossed drop (leak). Set by renderLeak. -->
 <span id="leak-icon" title="Leak sensor"></span>

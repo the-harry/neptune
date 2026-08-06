@@ -538,7 +538,7 @@ body.map-expanded #area-select.on{display:flex}
 /* A thin dashed edge marks "this is not reaching a vehicle" without hiding the control. */
 body.link-sim aside{box-shadow:inset 3px 0 0 0 color-mix(in srgb,var(--secondary) 55%,transparent)}
 /* Reconnecting pulses, so a blip is visibly different from a settled SIM state. */
-body.link-connecting #st-pi{animation:stpulse 1.4s ease-in-out infinite}
+body.link-connecting #st-rov{animation:stpulse 1.4s ease-in-out infinite}
 /* Video is dimmed only when the VIDEO plane is down - never because the ROV link dropped. */
 body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
 

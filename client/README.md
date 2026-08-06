@@ -41,18 +41,28 @@ checks backend availability for a dependency it doesn't have.
   because they genuinely fail one at a time — **NET** (internet), **PI** (ROV control
   link), **VIDEO** (go2rtc feed), **CAM** (WOLFANG control plane), **VEH** (vehicle).
 
-  Four of them have a glyph in the top-left status row, in this order:
+  Three glyphs carry them in the top-left status row:
 
-  | | Glyph | Subsystem | Green / amber / red |
-  |---|---|---|---|
-  | 1 | signal arcs | **Internet** | online / — / offline |
-  | 2 | chain link | **ROV link** — the tether to the Pi | online / connecting / offline |
-  | 3 | eye | **Video** | live feed / connecting / blind |
-  | 4 | submarine | **Vehicle** | connected / — / simulated (pulsing on a leak) |
+  | | Glyph | Subsystem |
+  |---|---|---|
+  | 1 | signal arcs | **Internet** — green online, amber offline |
+  | 2 | **ROV** — see below | link *and* vehicle, in one |
+  | 3 | eye | **Video** — open+green live, struck-through+red blind |
 
-  The link glyph was a server-rack drawing that nobody could read on a 18 px icon; a chain
-  link is the same idea in a shape that survives the size. `CAM` no longer has its own
-  glyph — the REC button's colour carries whether a camera is present.
+  **The ROV icon changes SHAPE, not just colour**, because "is the link up" and "is there
+  a vehicle" were never two questions to the operator — they are one question about one
+  cable, and two icons for it was two things to learn:
+
+  | Shape | Colour | State |
+  |---|---|---|
+  | 🤖 robot | red | nothing on the end of the tether — the simulator is flying this |
+  | 🔌 plug | amber (pulsing) | connecting; the cable is there, the handshake is not done |
+  | 🛥 sub | green | a real vehicle is answering |
+  | 🛥 sub | red, pulsing | a **leak** — the sub shape is kept on purpose, so a fault can never be mistaken for a dropout |
+
+  Shape survives being read at a glance, in sunlight, by someone who is also driving —
+  colour alone does not. `CAM` has no glyph either: the REC button's colour carries
+  whether a camera is present.
 
   Each control declares what it needs in markup (`data-needs="link"`, `"cam"`, …) and
   **only** the controls owned by a down subsystem are greyed. Losing the ROV link no

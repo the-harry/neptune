@@ -150,6 +150,18 @@ STATUS.applyGates = function(){
   if(banner){ banner.textContent=''; banner.classList.remove('show'); }
 };
 
+/* ROV — ONE icon for what used to be two. "Is the link up" and "is there a vehicle"
+   were never separate questions to the operator: they are the same question about the
+   same cable. The SHAPE says which state we are in, so it survives being read at a
+   glance, in sunlight, by someone who is also driving:
+
+     red robot   nothing on the end of the tether — the simulator is flying this
+     amber plug  connecting; the cable is there, the handshake is not finished
+     green sub   a real vehicle is answering                                        */
+const ROV_ROBOT = '<svg viewBox="0 0 24 24"><rect x="4.5" y="8.5" width="15" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9.5" cy="13.5" r="1.4" fill="currentColor"/><circle cx="14.5" cy="13.5" r="1.4" fill="currentColor"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 8.5V5.5"/><circle cx="12" cy="4" r="1.5" fill="currentColor"/></svg>';
+const ROV_PLUG  = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M7.5 10.5h9v5.5a2.5 2.5 0 0 1-2.5 2.5h-4a2.5 2.5 0 0 1-2.5-2.5z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 10.5V4"/><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" d="M10 12.5v2M12 12.5v2M14 12.5v2"/></svg>';
+const ROV_SUB   = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 12c0-2.2 3.6-4 8-4s8 1.8 8 4-3.6 4-8 4-8-1.8-8-4z"/><circle cx="9" cy="12" r="1.1" fill="#0c0118"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 8V5M9 5h6"/></svg>';
+
 /* The video status icon. Open eye = we can see; struck-through = we cannot. */
 const EYE_LIVE_SVG  = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M1.8 12S5.8 5.5 12 5.5 22.2 12 22.2 12 18.2 18.5 12 18.5 1.8 12 1.8 12z"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/></svg>';
 const EYE_BLIND_SVG = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M1.8 12S5.8 5.5 12 5.5 22.2 12 22.2 12 18.2 18.5 12 18.5 1.8 12 1.8 12z"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/><path stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M3.5 20.5 20.5 3.5"/></svg>';
@@ -158,10 +170,6 @@ STATUS.render = function(){
   const set = (id, cls, title)=>{ const el = $(id); if(!el) return; el.className = 'st-ic ' + cls; el.title = title; };
   set('st-net', STATUS.internet ? 'ok' : 'warn', 'Internet: ' + (STATUS.internet ? 'online' : 'offline'));
 
-  const linkCls = STATUS.link === 'online' ? 'ok'
-                : STATUS.link === 'connecting' ? 'warn'
-                : STATUS.link === 'sim' ? 'sim' : 'down';
-  set('st-pi', linkCls, 'ROV link: ' + STATUS.link);
 
   // VIDEO — an EYE, because that is what it is: are we seeing the water or not.
   // Open + green = live feed. Struck through + red = blind, the map is the driving
@@ -175,14 +183,22 @@ STATUS.render = function(){
         ? 'Video: live feed'
         : 'Video: ' + STATUS.video + ' — BLIND, driving on the map');
 
-  // RED = simulating, no vehicle. GREEN = a real vehicle is connected.
-  // Pulsing red is reserved for an actual fault, so it stays distinguishable.
-  const vcls = STATUS.vehicle === 'fault' ? 'bad'
-             : (STATUS.vehicle === 'sim' ? 'sim' : 'ok');
-  const vtitle = STATUS.vehicle === 'sim'   ? 'Vehicle: SIMULATED — no vehicle connected'
-               : STATUS.vehicle === 'fault' ? 'Vehicle: FAULT — leak detected'
-               : 'Vehicle: connected (' + STATUS.vehicle + ')';
-  set('st-veh', vcls, vtitle);
+  // ONE ROV icon: shape for the state, colour to match. A leak keeps the sub shape
+  // (there IS a vehicle) but goes pulsing red, so a fault never looks like a dropout.
+  const rov=$('st-rov');
+  let rGlyph, rCls, rTitle;
+  if(STATUS.link === 'connecting'){
+    rGlyph=ROV_PLUG;  rCls='warn'; rTitle='ROV link: connecting…';
+  } else if(STATUS.link === 'online'){
+    rGlyph=ROV_SUB;
+    if(STATUS.vehicle === 'fault'){ rCls='bad'; rTitle='Vehicle: FAULT — leak detected'; }
+    else { rCls='ok'; rTitle='Vehicle: connected (' + STATUS.vehicle + ')'; }
+  } else {
+    rGlyph=ROV_ROBOT; rCls='sim';
+    rTitle='No vehicle — simulating (link ' + STATUS.link + ')';
+  }
+  if(rov && rov.dataset.glyph !== rCls){ rov.dataset.glyph = rCls; rov.innerHTML = rGlyph; }
+  set('st-rov', rCls, rTitle);
 };
 
 /* ---- REAL Pi health (/api/system) -----------------------------------------
