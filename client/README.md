@@ -74,7 +74,7 @@ checks backend availability for a dependency it doesn't have.
   |---|---|---|
   | 1 | signal arcs | **Internet** — green online, amber offline |
   | 2 | **ROV** — see below | link *and* vehicle, in one |
-  | 3 | eye | **Video** — open+green live, struck-through+red blind |
+  | 3 | eye | **The camera** — three states, see below |
 
   **The ROV icon changes SHAPE, not just colour**, because "is the link up" and "is there
   a vehicle" were never two questions to the operator — they are one question about one
@@ -88,8 +88,25 @@ checks backend availability for a dependency it doesn't have.
   | 🛥 sub | red, pulsing | a **leak** — the sub shape is kept on purpose, so a fault can never be mistaken for a dropout |
 
   Shape survives being read at a glance, in sunlight, by someone who is also driving —
-  colour alone does not. `CAM` has no glyph either: the REC button's colour carries
-  whether a camera is present.
+  colour alone does not.
+
+  **The eye is the ONLY camera indicator**, and it has three states because there are
+  three genuinely different situations and the next action differs in each:
+
+  | Eye | State | What to do |
+  |---|---|---|
+  | 🟢 open | the Pi is talking to the camera | nothing |
+  | 🟡 open, **blinking** | the camera's radio is there but the Pi is getting nothing from it | wait, or power-cycle the camera |
+  | 🔴 crossed | no radio and no camera | the map is the driving view now |
+
+  "The radio is there" is the Pi's own `wlan0` association or a readable signal from
+  `/proc/net/wireless` — a browser cannot scan Wi-Fi, and the Pi's link is the one that
+  matters anyway, since the Pi is what talks to the camera. Only the amber state blinks;
+  a permanent blink is just noise.
+
+  This replaced three components saying one thing: a `CAMERA LINK DEGRADED` banner across
+  the middle of the map (over the very view you fly when the camera is what you lost), a
+  `CAM WIFI` readout in the top bar, and the eye.
 
   Each control declares what it needs in markup (`data-needs="link"`, `"cam"`, …) and
   **only** the controls owned by a down subsystem are greyed. Losing the ROV link no
@@ -106,10 +123,9 @@ checks backend availability for a dependency it doesn't have.
 - **Blind nav (`map.js`):** when the camera feed drops for more than
   `CONFIG.map.blindAfterMs` (4 s), the map takes over the full screen as the *driving*
   view so the sub can still be flown on instruments instead of a black rectangle. The
-  **video status icon is an eye** — open and green with a live feed, struck through and
-  red when blind — so the operator can never think they are looking at water. That
-  replaced a full-width `BLIND NAV · NO CAMERA` banner: one glyph in the status row says
-  the same thing and gives the screen back.
+  **camera status icon is an eye** (three states, above), so the operator can never think
+  they are looking at water. That replaced a full-width `BLIND NAV · NO CAMERA` banner:
+  one glyph in the status row says the same thing and gives the screen back.
 
   It is deliberately **not** the expanded map: expanding engages an all-stop and switches
   to north-up, because that is a *planning* view. Blind nav keeps `MAP.expanded === false`,
