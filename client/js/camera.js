@@ -475,7 +475,18 @@ async function storeStill(t, blob, meta){
            why: (!stored && !downloaded) ? 'could not store or save the image' : '' };
 }
 
+/* A shutter has to be FELT. The PIC button flashes the instant the capture starts —
+   not when it finishes, because the camera's own capture blocks for ~2 s and feedback
+   that late reads as a button that did nothing. */
+function firePicFlash(){
+  const b=$('cam-capture'); if(!b) return;
+  b.classList.remove('shot');
+  void b.offsetWidth;                    // restart the animation even on a rapid re-press
+  b.classList.add('shot');
+  setTimeout(()=>b.classList.remove('shot'), 500);
+}
 async function camCapture(){
+  firePicFlash();
   const btn = $('cam-capture'); if(btn) btn.disabled = true;
   const t = Date.now();
   const notes = [];

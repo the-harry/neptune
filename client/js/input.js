@@ -187,8 +187,19 @@ function computeInput(dt){
     else if(cur > state.ballastTargetCmd+db) ballast='empty';
   }
 
+  // RIGHT STICK ON THE MAP. Nothing on the hull moves with it yet (camera pan/tilt is
+  // an unwired TODO), and a full-screen map you cannot move without reaching for the
+  // screen is awkward on a handheld. While the map IS the view it pans instead — and
+  // the camera is deliberately NOT commanded at the same time, or leaving the map
+  // would hand back a camera pointed somewhere the operator never chose.
+  let mapPanX=0, mapPanY=0;
+  if(typeof MAP!=='undefined' && (MAP.expanded || MAP.blind)){
+    mapPanX=pan; mapPanY=tilt; pan=0; tilt=0;
+  }
+
   const ni={ throttle:clamp(throttle,-1,1), steer:clamp(steer,-1,1),
-             pan:clamp(pan,-1,1), tilt:clamp(tilt,-1,1), ballast:ballast };
+             pan:clamp(pan,-1,1), tilt:clamp(tilt,-1,1), ballast:ballast,
+             mapPanX:clamp(mapPanX,-1,1), mapPanY:clamp(mapPanY,-1,1) };
 
   // --- §3 map-open safety: a submarine can't be "paused". While the map is expanded,
   // hold an all-stop (throttle+steer zeroed); the moment the operator commands thrust or

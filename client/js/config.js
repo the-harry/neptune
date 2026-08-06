@@ -72,6 +72,9 @@ const CONFIG = {
     preferSharpTiles: true,
     // The ROG Ally paddles: either one ALONE zooms the map (both together = SURFACE).
     zoomKeys:      { in:'F10', out:'F9' },
+    // Right stick pans the map whenever the map is the view. Screen pixels per second
+    // at full deflection — it is a view control, so it is framed in what the eye sees.
+    stickPanPxPerS: 420,
     autoOrigin:     true,        // §2 — auto-request the handheld's location on load when no origin is set
     // Keep the handheld's OWN position live (watchPosition), not just a fix on load.
     // The marker is always live; the launch point follows it only until a dive starts,

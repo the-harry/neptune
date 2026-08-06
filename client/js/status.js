@@ -143,19 +143,22 @@ STATUS.applyGates = function(){
     el.setAttribute('aria-disabled', blocked ? 'true' : 'false');
   });
 
-  // Say what the operator is actually looking at. "SIM" is the load-bearing word:
-  // the controls DO respond, they are simply not reaching a vehicle.
+  // The SIM banner is gone. It spelled out across the screen what the vehicle icon in
+  // the status row already says — a red sub means simulated, a green one means a real
+  // vehicle — and the space matters more than the repetition. Camera loss keeps a
+  // banner because nothing else states it in words, and it is not the normal case.
   const banner = $('controls-disabled');
   if(banner){
-    let msg = '';
-    if(simulated && down.cam) msg = 'SIM · NO VEHICLE LINK · NO CAMERA';
-    else if(simulated)        msg = 'SIM · NOT COMMANDING A VEHICLE';
-    else if(down.cam)         msg = 'CAMERA OFFLINE';
+    const msg = down.cam ? 'CAMERA OFFLINE' : '';
     banner.textContent = msg;
     banner.classList.toggle('show', !!msg);
     banner.classList.toggle('sim', simulated);
   }
 };
+
+/* The video status icon. Open eye = we can see; struck-through = we cannot. */
+const EYE_LIVE_SVG  = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M1.8 12S5.8 5.5 12 5.5 22.2 12 22.2 12 18.2 18.5 12 18.5 1.8 12 1.8 12z"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/></svg>';
+const EYE_BLIND_SVG = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M1.8 12S5.8 5.5 12 5.5 22.2 12 22.2 12 18.2 18.5 12 18.5 1.8 12 1.8 12z"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/><path stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M3.5 20.5 20.5 3.5"/></svg>';
 
 STATUS.render = function(){
   const set = (id, cls, title)=>{ const el = $(id); if(!el) return; el.className = 'st-ic ' + cls; el.title = title; };
@@ -166,8 +169,17 @@ STATUS.render = function(){
                 : STATUS.link === 'sim' ? 'sim' : 'down';
   set('st-pi', linkCls, 'ROV link: ' + STATUS.link);
 
+  // VIDEO — an EYE, because that is what it is: are we seeing the water or not.
+  // Open + green = live feed. Struck through + red = blind, the map is the driving
+  // view. This replaced a full-width BLIND NAV banner that ate the top of the screen
+  // to say the same thing; one glyph in a row of status icons says it as well and
+  // costs nothing. `set` is called after so the class still drives the colour.
   const vidCls = STATUS.video === 'live' ? 'ok' : (STATUS.video === 'connecting' ? 'warn' : 'down');
-  set('st-video', vidCls, 'Video: ' + STATUS.video);
+  const vEl = $('st-video');
+  if(vEl) vEl.innerHTML = (STATUS.video === 'live') ? EYE_LIVE_SVG : EYE_BLIND_SVG;
+  set('st-video', vidCls, STATUS.video === 'live'
+        ? 'Video: live feed'
+        : 'Video: ' + STATUS.video + ' — BLIND, driving on the map');
 
   const camCls = STATUS.cam === 'ok' ? 'ok' : (STATUS.cam === 'degraded' ? 'warn' : 'down');
   set('st-cam', camCls, 'Camera control: ' + STATUS.cam);

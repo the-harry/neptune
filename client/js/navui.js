@@ -194,7 +194,7 @@ async function refreshOriginOnOpen(stored){
       const adopt = ()=> setOrigin({ lat, lon, accuracy:acc, source:'device', t:Date.now() })
         .then(ok=>{
           if(ok===false){ LOG.warn('could not store the refreshed origin'); return; }
-          if(typeof MAP!=='undefined'){ MAP.x=0; MAP.y=0; }
+          if(typeof MAP!=='undefined'){ if(typeof breakTrack==='function') breakTrack('origin re-set from a new fix'); MAP.x=0; MAP.y=0; }
           hideOriginPrompt();
           if(acc>(CONFIG.map.originRefineM||30)) offerRefine(acc);
         });
@@ -242,7 +242,8 @@ function requestDeviceLocation(){
       const body={ lat:p.coords.latitude, lon:p.coords.longitude, accuracy:p.coords.accuracy, source:'device', t:Date.now() };
       setOrigin(body).then(ok=>{
         if(ok===false){ showOriginFallback({message:'could not store the fix'}); return; }
-        if(typeof MAP!=='undefined'){ MAP.x=0; MAP.y=0; }   // origin is the local frame's (0,0) — centre there
+        // A new launch point is a jump, not travel — never join the traces across it.
+        if(typeof MAP!=='undefined'){ if(typeof breakTrack==='function') breakTrack('launch point set from a device fix'); MAP.x=0; MAP.y=0; }
         // The permission was just granted on a real gesture, which is the one moment
         // Chrome will persist it — so start following from here without a reload.
         maybeStartLocationWatch();
@@ -277,7 +278,12 @@ let _geoWatch = null, _lastOriginWriteAt = 0;
 function maybeStartLocationWatch(){
   if(_geoWatch !== null) return;
   if(!CONFIG.map.followMe || state._fileSim) return;
-  if(!('geolocation' in navigator) || !window.isSecureContext) return;
+  if(!('geolocation' in navigator)){ LOG.warn('location: no geolocation API in this browser'); return; }
+  if(!window.isSecureContext){
+    LOG.warn('location: insecure origin ('+location.origin+') — browsers only expose geolocation '+
+             'on https:// or localhost. Open Neptune from the launcher, or tap the map to set the origin.');
+    return;
+  }
   const start=()=>{
     if(_geoWatch !== null) return;
     _geoWatch = navigator.geolocation.watchPosition(onLiveFix,
@@ -285,7 +291,10 @@ function maybeStartLocationWatch(){
       { enableHighAccuracy:true, timeout:20000, maximumAge:2000 });
     LOG.map('live position watch started — the launch point follows the handheld until a dive begins');
   };
-  if(!navigator.permissions){ return; }         // cannot check → do not risk a prompt
+  if(!navigator.permissions){                   // cannot check → do not risk a prompt
+    LOG.map('location: no Permissions API — automatic refresh disabled (tap ORIGIN to set it)');
+    return;
+  }
   navigator.permissions.query({name:'geolocation'})
     .then(st=>{
       if(st.state==='granted') start();
@@ -339,6 +348,33 @@ function onLiveFix(p){
     });
 }
 
+/* Why is there no position? Answers it in one call instead of leaving the operator to
+   guess between a browser permission, a Windows setting, and physics. */
+function geoCheck(){
+  const r={
+    secureContext: window.isSecureContext,
+    origin: location.origin,
+    api: 'geolocation' in navigator,
+    permissionsApi: !!navigator.permissions,
+    watching: _geoWatch !== null,
+    internet: (typeof STATUS!=='undefined') ? STATUS.internet : 'unknown',
+    lastRealFix: (typeof MAP!=='undefined' && MAP.meReal) ? MAP.meReal : null,
+    note: ''
+  };
+  // The ROG Ally has no GNSS. Without internet there is no positioning service to ask,
+  // so no amount of permission-granting will produce a fix.
+  if(r.internet === false)      r.note = 'No GPS receiver on this handheld and no internet on the tether — a fix is not obtainable. Tap the map to set the origin (more accurate anyway).';
+  else if(!r.secureContext)     r.note = 'Insecure origin: browsers expose geolocation only on https:// or localhost.';
+  else if(!r.api)               r.note = 'This browser exposes no geolocation API.';
+  if(navigator.permissions){
+    navigator.permissions.query({name:'geolocation'})
+      .then(st=>LOG.map('location permission: '+st.state))
+      .catch(()=>{});
+  }
+  LOG.map('geoCheck', r);
+  return r;
+}
+
 function offerRefine(accuracy){
   // non-blocking: the operator can see which bank they're on — a tap beats WiFi positioning (§2)
   showOriginPrompt('ORIGIN ±'+Math.round(accuracy)+' m (WiFi)',
@@ -358,8 +394,19 @@ function showOriginFallback(err){
           '"Location services" AND "Let desktop apps access your location". ' +
           'Then allow location for this page in Chrome.';
   } else if(code === 2){                // POSITION_UNAVAILABLE
-    why = 'No fix available. Windows location services may be off, or there is no ' +
-          'Wi-Fi/GNSS signal to position from. You can set the origin by tapping the map instead.';
+    // The usual cause on this handheld, and it is not fixable in software: the ROG Ally
+    // has NO GNSS receiver. Chrome positions a device like this by sending nearby Wi-Fi
+    // networks to Google's location service — which needs INTERNET. On a sealed tether
+    // there is none, so there is no fix to be had, ever. Say that plainly instead of
+    // "no signal", which sends the operator hunting for a satellite that isn't there.
+    const offline = (typeof STATUS!=='undefined') && STATUS.internet === false;
+    why = offline
+      ? 'No fix is possible here. This handheld has no GPS receiver, so the browser ' +
+        'locates it by looking up nearby Wi-Fi networks online — and the tether has no ' +
+        'internet. Tap the map to set the origin; that is the accurate way anyway (±8 m ' +
+        'against ±50 m from Wi-Fi).'
+      : 'No fix available. Windows location services may be off, or there is nothing to ' +
+        'position from. You can set the origin by tapping the map instead.';
   } else if(code === 3){                // TIMEOUT
     why = 'Timed out waiting for a fix. Indoors this is common — tap the map to set the origin.';
   } else {

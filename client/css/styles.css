@@ -289,7 +289,13 @@ img{display:block}
 
 #no-feed.reconfiguring .nf-badge{color:var(--secondary);border-color:var(--secondary);box-shadow:0 0 24px rgba(255,91,208,.3)}
 
-#cam-rec.recording{background:color-mix(in srgb,var(--error) 30%,transparent);box-shadow:0 0 22px rgba(255,92,122,.5)}
+#cam-rec.recording{background:var(--error);color:#2a0008;border-color:var(--error);
+  box-shadow:0 0 22px rgba(255,92,122,.75);animation:recpulse 1.4s ease-in-out infinite}
+@keyframes recpulse{50%{box-shadow:0 0 6px rgba(255,92,122,.35)}}
+/* PIC: a shutter needs to be FELT. One bright flash of the button on capture. */
+#cam-capture.shot{animation:picflash .45s ease-out}
+@keyframes picflash{0%{background:var(--photo);color:#0c0118;box-shadow:0 0 26px var(--photo)}
+  100%{background:transparent;box-shadow:none}}
 #cam-rec:disabled,#cam-capture:disabled{opacity:.5;cursor:default}
 
 .cam-toast{position:fixed;left:50%;transform:translateX(-50%);bottom:120px;z-index:80;pointer-events:none;
@@ -421,14 +427,7 @@ body.map-blind #video-layer{position:fixed;inset:auto;top:72px;right:120px;width
   filter:grayscale(.6) brightness(.7)}
 body.map-blind #video-layer #no-feed .nf-badge{font-size:12px;letter-spacing:.18em;padding:4px 10px}
 
-.blind-banner{position:absolute;top:76px;left:50%;transform:translateX(-50%);display:none;z-index:6;
-  font-family:var(--font-sans);font-size:13px;font-weight:800;letter-spacing:.12em;padding:7px 16px;border-radius:.4rem;
-  color:var(--hazard);border:1.5px solid var(--hazard);background:color-mix(in srgb,var(--hazard) 14%,rgba(12,1,24,.88));
-  box-shadow:0 0 18px rgba(255,140,26,.35);pointer-events:none;white-space:nowrap}
-body.map-blind .blind-banner{display:block}
-/* If the operator expands the map on top of blind nav, the expanded rules win and
-   the blind banner would be misleading (all-stop is engaged there). Hide it. */
-body.map-expanded .blind-banner{display:none}
+/* BLIND NAV banner removed - the eye icon in the top bar says it in one glyph. */
 
 /* full empty state — expanded view only (the radar uses the compact .radar-empty) */
 .map-empty{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;
@@ -499,7 +498,7 @@ body.map-expanded #area-select.on{display:flex}
 
 /* ---- degradation indicator (§3): compact icons — internet · backend · vehicle ---- */
 #status-tri{display:flex;gap:5px;align-items:center;margin-right:6px;flex:0 0 auto}
-.st-ic{display:inline-flex;width:17px;height:17px}
+.st-ic{display:inline-flex;width:18px;height:18px}
 .st-ic svg{width:100%;height:100%}
 .st-ic.ok  {color:var(--tertiary)}
 .st-ic.warn{color:var(--hazard);opacity:.85}
@@ -544,10 +543,11 @@ body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
   background:color-mix(in srgb,var(--secondary) 12%,rgba(12,1,24,.9))}
 
 /* EXIT - the only way off a fullscreen dashboard on a handheld with no keyboard. */
-#btn-exit{position:fixed;top:8px;right:118px;z-index:60;width:30px;height:30px;border-radius:.4rem;
-  display:flex;align-items:center;justify-content:center;font-family:var(--font-sans);font-size:15px;
-  font-weight:700;line-height:1;color:var(--on-surface-variant);border:1px solid var(--outline-variant);
-  background:rgba(12,1,24,.72);cursor:pointer}
+#btn-exit{flex:0 0 auto;margin-right:14px;width:28px;height:28px;border-radius:.4rem;
+  display:inline-flex;align-items:center;justify-content:center;font-size:15px;line-height:1;
+  background:var(--surface-variant);color:var(--on-surface-variant);
+  border:1px solid var(--outline-variant);cursor:pointer}
+#btn-exit:hover{border-color:var(--error);color:var(--error)}
 #btn-exit:active{background:var(--error);color:#fff;border-color:var(--error)}
 
 /* ---- STALE DATA badge (§4.2 — operator was looking at old telemetry) ---- */
@@ -661,8 +661,8 @@ body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
    fail - on top of itself. min-height keeps the usual look; wrap + auto height mean
    an unusually long set of readings costs a second row instead of legibility. */
 #topbar{height:auto;min-height:64px;flex-wrap:wrap;row-gap:2px}
-#leak-icon{display:inline-flex;width:24px;height:24px;flex:0 0 auto}
-#leak-icon svg{width:24px;height:24px}
+#leak-icon{display:inline-flex;width:18px;height:18px;flex:0 0 auto}
+#leak-icon svg{width:18px;height:18px}
 
 /* ---- flex utilities (used by the viewport-fitting rail) ---- */
 .flex-1{flex:1 1 0%}
@@ -675,7 +675,7 @@ body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
 .w-10{width:2.5rem}.h-10{height:2.5rem}
 
 /* rail: the shutter/surface/config buttons get slightly smaller icons */
-aside > button .material-symbols-outlined{font-size:20px}
+aside > button .material-symbols-outlined{font-size:17px}
 .flex-shrink-0{flex-shrink:0}
 /* rail: the 3 vertical sliders (green LED, white LED, ballast) — one shared style,
    stacked, each flex:1 so they share equal height. min-height keeps them grabbable. */

@@ -29,9 +29,13 @@
 </div>
 
 <!-- TOP APP BAR -->
-<header id="topbar" class="fixed top-0 left-0 h-16 flex justify-between items-center px-edge-margin z-50 bg-surface/30 backdrop-blur-lg border-b border-white/10" style="right:156px">
+<header id="topbar" class="fixed top-0 left-0 h-16 flex justify-between items-center px-edge-margin z-50 bg-surface/30 backdrop-blur-lg border-b border-white/10" style="right:110px">
 <!-- Degradation model (§3): every subsystem fails independently, so each gets its own icon
      (internet · ROV link · video · camera control · vehicle). Hover for the live state. -->
+<!-- EXIT - first on the left, hard against the edge and away from every other control:
+     the handheld has no keyboard, so this is the only way out, and it must never be
+     next to something you might be reaching for mid-dive. -->
+<button id="btn-exit" title="Close the dashboard and stop the local server">&#10005;</button>
 <div id="status-tri">
   <span id="st-net" class="st-ic" title="Internet"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M2 8.5a15 15 0 0 1 20 0M5 12a10 10 0 0 1 14 0M8 15.5a5 5 0 0 1 8 0"/><circle cx="12" cy="19" r="1.4" fill="currentColor"/></svg></span>
   <span id="st-pi" class="st-ic" title="ROV link"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="13" width="18" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="7" cy="7.5" r="1.1" fill="currentColor"/><circle cx="7" cy="16.5" r="1.1" fill="currentColor"/></svg></span>
@@ -65,8 +69,6 @@
 <div class="metric" title="Tether link (Pi eth0)"><span class="m-label">Tether</span><span id="net-eth" class="m-val">--</span></div>
 <div class="metric" title="Camera Wi-Fi (Pi wlan0)"><span class="m-label">Cam WiFi</span><span id="net-wlan" class="m-val">--</span></div>
 </header>
-<!-- EXIT - the handheld has no keyboard, so there is always an on-screen way out. -->
-<button id="btn-exit" title="Close the dashboard and stop the local server">&#10005;</button>
 <!-- Camera fault channel (WarningMSG / degraded) — hidden unless there's a fault -->
 <div id="cam-warning" class="fixed left-1/2 -translate-x-1/2 z-50" style="top:64px"></div>
 <!-- STALE DATA warning (§4.2) — shown when the newest telemetry the operator sees exceeds the staleness threshold -->
@@ -77,17 +79,17 @@
 <!-- RIGHT CONTROL RAIL — stacked; LED + ballast sliders flex to fill the height -->
 <aside class="fixed right-0 top-0 h-full w-[110px] z-50 glass-panel flex flex-col px-3 gap-1.5 overflow-hidden no-scrollbar border-l border-white/20 glow-shadow-rail" style="padding-top:10px;padding-bottom:10px">
 <!-- REC -->
-<button id="cam-rec" class="relative w-full py-1.5 rounded border-2 border-error bg-error/10 text-error flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="Record toggle (polled confirmation)">
+<button id="cam-rec" class="relative w-full py-1 rounded border-2 border-error bg-error/10 text-error flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="Record toggle (polled confirmation)">
 <span class="material-symbols-outlined"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" fill="currentColor"/></svg></span>
 <span class="cam-rec-txt font-label-caps text-[10px]">OFF</span>
 </button>
 <!-- STILL (picture) -->
-<button id="cam-capture" class="w-full py-1.5 rounded border-2 btn-photo flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="Capture a still: saved topside, and to the camera SD card when there is a camera">
+<button id="cam-capture" class="w-full py-1 rounded border-2 btn-photo flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="Capture a still: saved topside, and to the camera SD card when there is a camera">
 <span class="material-symbols-outlined"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>
 <span class="font-label-caps text-[10px]">PIC</span>
 </button>
 <!-- SURFACE emergency — HOLD to activate -->
-<button id="btn-surface" data-needs="link" class="relative overflow-hidden w-full py-1.5 rounded border-2 btn-hazard flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="⚠ EMERGENCY SURFACE — blows ballast to the surface fast. Can breach/damage the craft. Use ONLY on a leak. Hold to fire." style="touch-action:none">
+<button id="btn-surface" data-needs="link" class="relative overflow-hidden w-full py-1 rounded border-2 btn-hazard flex flex-col items-center gap-0.5 active:scale-95 transition-all" title="⚠ EMERGENCY SURFACE — blows ballast to the surface fast. Can breach/damage the craft. Use ONLY on a leak. Hold to fire." style="touch-action:none">
 <span id="surface-fill" class="absolute inset-y-0 left-0" style="width:0%;background:color-mix(in srgb,var(--hazard) 45%,transparent)"></span>
 <span class="material-symbols-outlined text-2xl" style="position:relative"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M12 3 L22 20 H2 Z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 17 V10 M9 12.5 L12 9.5 L15 12.5"/></svg></span>
 <span class="font-label-caps text-[10px]" style="position:relative">SURFACE</span>
@@ -96,7 +98,7 @@
 <span class="font-label-caps text-label-caps text-on-surface-variant text-center">LIGHTS</span>
 <!-- Green LED -->
 <div class="flex flex-col items-center gap-1 flex-1 min-h-0 w-full">
-<button id="btn-light-green" data-needs="link" class="w-9 h-9 rounded-full flex items-center justify-center bg-tertiary/30 border-2 border-tertiary glow-shadow-md active:scale-95 transition-all flex-shrink-0" title="Toggle green LED">
+<button id="btn-light-green" data-needs="link" class="w-8 h-8 rounded-full flex items-center justify-center bg-tertiary/30 border-2 border-tertiary glow-shadow-md active:scale-95 transition-all flex-shrink-0" title="Toggle green LED">
 <span id="icon-light-green" class="material-symbols-outlined text-tertiary"></span>
 </button>
 <div id="track-green" data-needs="link" class="rail-slider flex-1 min-h-0" title="Drag to set brightness" style="touch-action:none">
@@ -105,7 +107,7 @@
 </div>
 <!-- White LED -->
 <div class="flex flex-col items-center gap-1 flex-1 min-h-0 w-full">
-<button id="btn-light-white" data-needs="link" class="w-9 h-9 rounded-full flex items-center justify-center bg-surface-variant border-2 border-outline-variant active:scale-95 transition-all flex-shrink-0" title="Toggle white LED">
+<button id="btn-light-white" data-needs="link" class="w-8 h-8 rounded-full flex items-center justify-center bg-surface-variant border-2 border-outline-variant active:scale-95 transition-all flex-shrink-0" title="Toggle white LED">
 <span id="icon-light-white" class="material-symbols-outlined text-on-surface-variant"></span>
 </button>
 <div id="track-white" data-needs="link" class="rail-slider flex-1 min-h-0" title="Drag to set brightness" style="touch-action:none">
@@ -123,7 +125,7 @@
 <button id="btn-ballast-fill" data-needs="link" class="material-symbols-outlined text-primary active:bg-primary/20 rounded flex-shrink-0" title="Dive — more water (click or hold)"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg></button>
 </div>
 <!-- CONFIG -->
-<button id="btn-config" class="w-full py-1.5 rounded border border-outline-variant text-on-surface-variant flex flex-col items-center gap-0.5 active:bg-surface-variant transition-colors" title="Open config &amp; input mapping">
+<button id="btn-config" class="w-full py-1 rounded border border-outline-variant text-on-surface-variant flex flex-col items-center gap-0.5 active:bg-surface-variant transition-colors" title="Open config &amp; input mapping">
 <span class="material-symbols-outlined"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54A.5.5 0 0 0 13.4 2h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.58.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L1.77 8.48a.5.5 0 0 0 .12.64l2.03 1.58c-.05.31-.09.63-.09.94s.02.63.07.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.58-.24 1.13-.56 1.62-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg></span>
 <span class="font-label-caps text-[10px]">CONFIG</span>
 </button>
@@ -145,9 +147,6 @@
       <button id="map-empty-btn" class="map-empty-btn">LOAD OR DOWNLOAD</button>
     </div>
     <div id="all-stop-banner" class="all-stop-banner">ALL&nbsp;STOP — MAP&nbsp;OPEN</div>
-    <!-- BLIND NAV — the feed is gone and the map has taken over as the driving view.
-         Says so loudly, because the operator must never think they are seeing the water. -->
-    <div id="blind-banner" class="blind-banner">BLIND&nbsp;NAV&nbsp;·&nbsp;NO&nbsp;CAMERA&nbsp;—&nbsp;DRIVING&nbsp;ON&nbsp;THE&nbsp;MAP</div>
     <!-- expanded-map toolbar (§4): place search + area management -->
     <div id="map-search">
       <input id="map-search-in" placeholder="search a place (online)" autocomplete="off">

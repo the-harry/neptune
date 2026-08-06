@@ -122,13 +122,19 @@ function initMap(){
   // drag-to-pan + tap (expanded only, canvas-scoped so it never touches piloting input, §5).
   // Pan is computed absolutely from the drag-start centre + total screen delta (no feedback loop),
   // so it's smooth like a real slippy map.
-  MAP.canvas.addEventListener('pointerdown', (e)=>{ if(!MAP.expanded) return;
-    MAP.drag={ x:e.clientX, y:e.clientY, moved:0, lat0:MAP.viewLat, lon0:MAP.viewLon };
+  MAP.canvas.addEventListener('pointerdown', (e)=>{ if(!MAP.expanded && !MAP.blind) return;
+    MAP.drag={ x:e.clientX, y:e.clientY, moved:0, lat0:MAP.viewLat, lon0:MAP.viewLon, px:e.clientX, py:e.clientY };
     try{ MAP.canvas.setPointerCapture(e.pointerId); }catch(_){}
   });
-  MAP.canvas.addEventListener('pointermove', (e)=>{ if(!MAP.expanded||!MAP.drag) return;
+  MAP.canvas.addEventListener('pointermove', (e)=>{ if((!MAP.expanded && !MAP.blind)||!MAP.drag) return;
     MAP.drag.moved += Math.abs(e.clientX-MAP.drag.x)+Math.abs(e.clientY-MAP.drag.y);
-    const L=TILES.last; if(!L || MAP.drag.lat0==null) return;
+    const L=TILES.last;
+    // No imagery projection (no basemap saved, or none drawn yet) — fall back to the
+    // metre frame so a finger still moves the map instead of doing nothing at all.
+    if(!L || MAP.drag.lat0==null){
+      panMapPx((e.clientX-MAP.drag.px)*MAP.dpr, (e.clientY-MAP.drag.py)*MAP.dpr);
+      MAP.drag.px=e.clientX; MAP.drag.py=e.clientY; return;
+    }
     const dxd=(e.clientX-MAP.drag.x)*MAP.dpr, dyd=(e.clientY-MAP.drag.y)*MAP.dpr;   // total device-px delta since grab
     const c=Math.cos(-L.rot), s=Math.sin(-L.rot);                                    // undo heading-up rotation
     const rx=dxd*c - dyd*s, ry=dxd*s + dyd*c;
@@ -358,7 +364,12 @@ function onMapTap(clientX, clientY){
   }
   MAP.originTap=false;
   setOrigin({ lat:g.lat, lon:g.lon, accuracy:8, source:'map_tap', t:Date.now() }).then(ok=>{
-    if(ok!==false){ MAP.x=0; MAP.y=0; MAP.follow=true; if(typeof hideOriginPrompt==='function') hideOriginPrompt(); }
+    if(ok!==false){
+      // Setting the launch point by hand puts the sub back at 0,0 — a jump, not travel.
+      // Without a break the old trace is stroked straight into the new position.
+      breakTrack('launch point set on the map');
+      MAP.x=0; MAP.y=0; MAP.follow=true; if(typeof hideOriginPrompt==='function') hideOriginPrompt();
+    }
   });
 }
 /* §4: the bbox currently inside the fixed selection rectangle (expanded view). */
@@ -695,6 +706,12 @@ function mapTick(){
     pushTrack(MAP.x,MAP.y,MAP.depth);
   }
   renderTether();
+  // Right stick pans the map while the map IS the view (see computeInput).
+  const px=state.input.mapPanX||0, py=state.input.mapPanY||0;
+  if((px||py) && (MAP.expanded||MAP.blind)){
+    const rate=(CONFIG.map.stickPanPxPerS||420)*(MAP.dpr||1)*dt;
+    panMapPx(-px*rate, py*rate);          // push right → the view travels right
+  }
   // Whether navigation is arriving changes with time, not just on user actions, so
   // the NO NAV label has to be re-evaluated here — but only touched when it flips.
   const navBits = (vehicleLinked()?1:0) | ((now-MAP.lastNavAt<1500)?2:0) | (vehicleHasSensors()?4:0)
@@ -739,11 +756,49 @@ function resizeMap(){
 /* Trajectory colour encodes DEPTH as a hue sweep: fully emerged → neon yellow,
    fully submerged → dark neon blue, every depth in between a proportional blend —
    so you read how deep it was, not just that it was deep. */
+/* DEPTH — 20 discrete, deliberately distinguishable bands.
+
+   The old ramp swept one hue into another with matching lightness, so in practice you
+   could tell maybe four steps apart and everything between them read as "some sort of
+   green". Quantising into 20 fixed bands and moving hue, saturation AND lightness
+   together makes neighbours separable: the eye is far better at "which band is this"
+   than at "how far along a gradient is this".
+
+   Ordered warm-bright → cool-dark, so shallow still reads as shallow at a glance, and
+   the ends are unmistakable: near-white at the surface, near-black at the bottom.
+   Read the exact value off the legend the map draws (drawDepthLegend). */
+const DEPTH_RAMP = [
+  '#fdfff0','#f8f79b','#f3e250','#f6c531','#f7a520',   //  0–20%  surface → shallow
+  '#f5831c','#ef641f','#e34327','#d92544','#c81766',   // 20–40%
+  '#ad1287','#8b17a3','#6a20b4','#4c2cbd','#3341c4',   // 40–60%  →  60–80%
+  '#2159c2','#1470ad','#0d7f8e','#0a6a6e','#073f4a'    // 80–100% deepest
+];
 function _depthColor(d){
-  const f=Math.max(0,Math.min(1, d/CONFIG.map.maxDepthColorM));
-  const h=52+(230-52)*f;            // 52° neon yellow → 230° blue
-  const l=58-(58-30)*f;            // bright at the surface → dark when deep
-  return `hsl(${h.toFixed(0)},100%,${l.toFixed(0)}%)`;
+  const max=CONFIG.map.maxDepthColorM||6;
+  const f=Math.max(0,Math.min(1, (d||0)/max));
+  return DEPTH_RAMP[Math.min(DEPTH_RAMP.length-1, Math.round(f*(DEPTH_RAMP.length-1)))];
+}
+
+/* Twenty colours mean nothing without a key. A compact vertical scale, drawn only in
+   the views with room for it, with the surface at the top and the deepest band at the
+   bottom — the same way down feels. */
+function drawDepthLegend(ctx,w,h,dpr){
+  if(!(MAP.expanded || MAP.blind) || !MAP.showTrack) return;
+  const n=DEPTH_RAMP.length, bh=Math.max(5, Math.round(7*dpr)), bw=Math.round(11*dpr);
+  const x=Math.round(w-bw-58*dpr), y0=Math.round(h/2-(n*bh)/2);
+  ctx.save(); ctx.setTransform(1,0,0,1,0,0);
+  ctx.fillStyle='rgba(12,1,24,.62)';
+  ctx.fillRect(x-6*dpr, y0-16*dpr, bw+52*dpr, n*bh+30*dpr);
+  for(let i=0;i<n;i++){ ctx.fillStyle=DEPTH_RAMP[i]; ctx.fillRect(x, y0+i*bh, bw, bh); }
+  ctx.strokeStyle='rgba(255,255,255,.25)'; ctx.lineWidth=1;
+  ctx.strokeRect(x+.5, y0+.5, bw-1, n*bh-1);
+  ctx.fillStyle='rgba(236,227,255,.9)';
+  ctx.font=(9*dpr)+'px '+(getComputedStyle(document.body).fontFamily||'sans-serif');
+  ctx.textBaseline='middle';
+  ctx.fillText('DEPTH', x-2*dpr, y0-8*dpr);
+  ctx.fillText('0 m', x+bw+5*dpr, y0+bh/2);
+  ctx.fillText((CONFIG.map.maxDepthColorM||6)+' m', x+bw+5*dpr, y0+n*bh-bh/2);
+  ctx.restore();
 }
 
 /* meters that render ≈px pixels at the current zoom, snapped to 1/2/5×10ⁿ (nice scale bar) */
@@ -819,7 +874,8 @@ function drawCanvas(target){
   // 6) area-selection rectangle + live readout (§4, expanded select mode)
   if(MAP.expanded && MAP.selectMode){ drawSelectionRect(ctx,dpr); if(live && MAP.selReadout) MAP.selReadout(mapSelectionBBox()); }
 
-  // 7) imagery attribution (expanded)
+  // 7) depth key for the track colours, then imagery attribution (expanded)
+  try{ drawDepthLegend(ctx,w,h,dpr); }catch(e){/* never let the key break the map */}
   if(MAP.expanded && drewTiles) drawAttribution(ctx,w,h,dpr);
   return drewTiles;
 }
@@ -858,6 +914,21 @@ function drawMeMarker(ctx,dpr,x,y){
     ctx.beginPath(); ctx.arc(x,y,10*dpr,0,Math.PI*2); ctx.stroke();
   }
   ctx.restore();
+}
+
+/* Pan the view by a screen-space delta, in device pixels. Shared by the drag handler
+   and the right stick so both feel identical. Panning always drops follow-the-sub —
+   the operator has taken the view somewhere deliberately. */
+function panMapPx(dxDev, dyDev){
+  if(MAP.viewLat==null || !MAP.origin) return;
+  const mpp=curScale()/ (MAP.dpr||1);                 // metres per DEVICE pixel
+  const rot=(!MAP.expanded && MAP.headingUp) ? -MAP.hdg*Math.PI/180 : 0;
+  const c=Math.cos(-rot), s=Math.sin(-rot);           // undo the heading-up rotation
+  const ex=(-dxDev*c - (-dyDev)*s)*mpp;               // east metres
+  const ny=((-dxDev)*s + (-dyDev)*c)*mpp;             // north metres (screen y is down)
+  const p=toLocal(MAP.viewLat, MAP.viewLon, MAP.origin.lat, MAP.origin.lon);
+  const g=toLatLon(p.x+ex, p.y-ny, MAP.origin.lat, MAP.origin.lon);
+  MAP.viewLat=g.lat; MAP.viewLon=g.lon; MAP.follow=false;
 }
 
 /* Zoom whichever view is actually on screen. The collapsed radar has its own scale

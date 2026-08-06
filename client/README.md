@@ -55,9 +55,11 @@ checks backend availability for a dependency it doesn't have.
   automatic and silent everywhere (no retry buttons).
 - **Blind nav (`map.js`):** when the camera feed drops for more than
   `CONFIG.map.blindAfterMs` (4 s), the map takes over the full screen as the *driving*
-  view so the sub can still be flown on instruments instead of a black rectangle. A
-  `BLIND NAV · NO CAMERA` banner says so plainly — the operator must never think they
-  are looking at water.
+  view so the sub can still be flown on instruments instead of a black rectangle. The
+  **video status icon is an eye** — open and green with a live feed, struck through and
+  red when blind — so the operator can never think they are looking at water. That
+  replaced a full-width `BLIND NAV · NO CAMERA` banner: one glyph in the status row says
+  the same thing and gives the screen back.
 
   It is deliberately **not** the expanded map: expanding engages an all-stop and switches
   to north-up, because that is a *planning* view. Blind nav keeps `MAP.expanded === false`,
@@ -347,10 +349,44 @@ picks it up live via `permissions.onchange` if you grant it later); movement und
 beyond `originMoveM` you are somewhere else entirely, which still gets the explicit
 **USE MY POSITION / KEEP** prompt.
 
-> **On the ROG Ally this is Wi-Fi positioning, not GNSS.** The handheld has no GPS
-> receiver, so fixes are coarse (tens of metres) and will not track walking the way a
-> phone does. Tapping the map to set the origin remains the precise route, and the
-> ORIGIN tile shows the claimed accuracy so you can judge the fix before trusting it.
+> **On the ROG Ally there is no GNSS, and on a sealed tether there is no fix at all.**
+> The handheld has no GPS receiver, so the browser locates it by sending nearby Wi-Fi
+> networks to Google's location service — which needs **internet**. With the tether
+> offline there is nothing to ask, so no amount of granting permissions will produce a
+> position; `POSITION_UNAVAILABLE` is the correct answer, not a fault. The failure text
+> says exactly that when `STATUS.internet` is false, rather than sending you hunting for
+> a satellite that was never there.
+>
+> `NEPTUNE.geoCheck()` answers "why is there no position" in one call — secure context,
+> permission API, whether the watch is running, internet, and the last genuine fix.
+> **Tapping the map is the accurate route anyway**: ±8 m against ±50 m from Wi-Fi.
+
+### Depth reads as twenty bands, with a key
+
+The old ramp swept one hue into another at matching lightness, so about four steps were
+actually separable and everything between them read as "some sort of green". Depth is now
+quantised into **20 fixed bands** that move hue, saturation *and* lightness together —
+the eye is far better at "which band is this" than at "how far along a gradient is this".
+Warm and near-white at the surface, cool and near-black at the bottom, so shallow still
+reads as shallow at a glance.
+
+Twenty colours mean nothing without a key, so the expanded and blind views draw a compact
+vertical **depth scale** (`drawDepthLegend`), surface at the top, `maxDepthColorM` at the
+bottom. It hides with the tracks, since it is only there to explain them.
+
+### Moving the map
+
+Both full-screen views (expanded and BLIND NAV) can be **dragged with a finger**. Where
+imagery is drawn the pan is computed absolutely from the drag-start centre so it tracks
+the finger exactly; with no basemap it falls back to the metre frame, so a drag still
+moves the map instead of doing nothing.
+
+The **right stick pans too** whenever the map is the view. Nothing on the hull moves with
+that stick yet (camera pan/tilt is an unwired `TODO(hardware)`), and a full-screen map you
+can only move by reaching across the screen is awkward on a handheld. While the map has
+the stick the camera is deliberately **not** commanded — otherwise leaving the map would
+hand back a camera pointed somewhere the operator never chose. Close the map and the stick
+returns to the camera on the next frame.
 
 ### Zoom: maximum imagery, and the paddles
 
