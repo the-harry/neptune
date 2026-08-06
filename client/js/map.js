@@ -712,6 +712,22 @@ function mapTick(){
     const rate=(CONFIG.map.stickPanPxPerS||420)*(MAP.dpr||1)*dt;
     panMapPx(-px*rate, py*rate);          // push right → the view travels right
   }
+  // DRIVING RETAKES THE VIEW.
+  //
+  // Panning is a halted-operator's luxury. The moment the sub is commanded to move, the
+  // map has to be showing the sub again — otherwise the craft swims out of frame and the
+  // operator ends up flying the VIEW as well as the vehicle, which is exactly the wrong
+  // thing to be doing while under way. Any throttle or steer past the deadzone re-arms
+  // follow, so a parked view can never outlive the decision to move.
+  //
+  // The expanded map handles its own case in computeInput: driving collapses it outright
+  // (it engages ALL STOP, so it must not survive a movement command either).
+  const cmd = Math.abs(state.input.throttle||0) + Math.abs(state.input.steer||0);
+  if(cmd > (CONFIG.deadzone||0.08) && !MAP.follow){
+    MAP.follow = true;
+    LOG.map('driving — view re-centred on the sub');
+  }
+
   // Whether navigation is arriving changes with time, not just on user actions, so
   // the NO NAV label has to be re-evaluated here — but only touched when it flips.
   const navBits = (vehicleLinked()?1:0) | ((now-MAP.lastNavAt<1500)?2:0) | (vehicleHasSensors()?4:0)

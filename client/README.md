@@ -419,6 +419,14 @@ the stick the camera is deliberately **not** commanded — otherwise leaving the
 hand back a camera pointed somewhere the operator never chose. Close the map and the stick
 returns to the camera on the next frame.
 
+**Driving retakes the view.** Panning is a halted-operator's luxury: any throttle or
+steer past the deadzone re-arms `MAP.follow`, so a parked view can never outlive the
+decision to move. Without it the craft simply swims out of frame and the operator ends up
+flying the *view* as well as the vehicle — the wrong thing to be doing while under way.
+Below the deadzone nothing is stolen, so a deliberate pan survives a twitchy stick. The
+expanded map has always handled its own case in `computeInput` (driving collapses it
+outright, since it engages ALL STOP).
+
 **Which axes are the right stick is detected, not assumed.** The left stick is axes 0/1
 everywhere, which is why driving always worked. The right stick is only axes **2/3** under
 the Gamepad API's *standard* mapping, where triggers are buttons. A pad reporting a
