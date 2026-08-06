@@ -178,8 +178,8 @@ async function refreshOriginOnOpen(stored){
   // every open, which is the automatic behaviour we actually want.
   try{
     if(!navigator.permissions) return;
-    const st = await navigator.permissions.query({name:'geolocation'});
-    if(st.state !== 'granted'){
+    const st = await permState('geolocation');
+    if(!st || st.state !== 'granted'){
       LOG.map('location not granted yet - tap the ORIGIN tile once to enable automatic refresh');
       markOriginNeedsPermission();
       return;
@@ -255,6 +255,17 @@ function requestDeviceLocation(){
     {enableHighAccuracy:true, timeout:15000, maximumAge:0}
   );
 }
+/* navigator.permissions.query can REJECT (and in some engines throw outright) for a
+   name the browser will not answer for — headless Chrome does exactly that for
+   geolocation, producing an unhandled rejection nobody sees until something is
+   watching for them. One helper that always resolves, to null when it cannot tell. */
+function permState(name){
+  try{
+    if(!navigator.permissions || !navigator.permissions.query) return Promise.resolve(null);
+    return Promise.resolve(navigator.permissions.query({name})).catch(()=>null);
+  }catch(e){ return Promise.resolve(null); }
+}
+
 /* ---- The handheld's own position, kept LIVE --------------------------------
    A fix taken once on load is wrong the moment the operator walks the bank looking
    for somewhere to put in — which is exactly when the reachable circle matters most.
@@ -295,13 +306,12 @@ function maybeStartLocationWatch(){
     LOG.map('location: no Permissions API — automatic refresh disabled (tap ORIGIN to set it)');
     return;
   }
-  navigator.permissions.query({name:'geolocation'})
-    .then(st=>{
-      if(st.state==='granted') start();
-      // If it is granted later (the operator taps ORIGIN once), pick it up without a reload.
-      try{ st.onchange = ()=>{ if(st.state==='granted') start(); }; }catch(e){}
-    })
-    .catch(()=>{});
+  permState('geolocation').then(st=>{
+    if(!st){ LOG.map('location: permission state unavailable — tap ORIGIN to set it by hand'); return; }
+    if(st.state==='granted') start();
+    // If it is granted later (the operator taps ORIGIN once), pick it up without a reload.
+    try{ st.onchange = ()=>{ if(st.state==='granted') start(); }; }catch(e){}
+  });
 }
 function stopLocationWatch(){
   if(_geoWatch===null) return;
@@ -366,11 +376,7 @@ function geoCheck(){
   if(r.internet === false)      r.note = 'No GPS receiver on this handheld and no internet on the tether — a fix is not obtainable. Tap the map to set the origin (more accurate anyway).';
   else if(!r.secureContext)     r.note = 'Insecure origin: browsers expose geolocation only on https:// or localhost.';
   else if(!r.api)               r.note = 'This browser exposes no geolocation API.';
-  if(navigator.permissions){
-    navigator.permissions.query({name:'geolocation'})
-      .then(st=>LOG.map('location permission: '+st.state))
-      .catch(()=>{});
-  }
+  permState('geolocation').then(st=>LOG.map('location permission: '+(st? st.state : 'unavailable')));
   LOG.map('geoCheck', r);
   return r;
 }

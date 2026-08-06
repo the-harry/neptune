@@ -121,7 +121,24 @@ client/
     ├── map.js           # radar: camera-primary circular minimap, satellite basemap, track, expand
     ├── navui.js         # origin (device geolocation + tap-to-refine) + navigate-and-select area download
     └── main.js          # RAF frame loop + bootstrap + window.NEPTUNE console API
+└── tests/
+    ├── run.py           # browser test runner (stdlib + headless Chrome, no deps)
+    └── suites/          # one file per concern; see tests/README.md
 ```
+
+## Tests
+
+```bash
+python client/tests/run.py          # 214 checks, ~90 s, exit 0 only if all pass
+python client/tests/run.py tether   # one suite
+```
+
+Browser checks against the **real dashboard** — `run.py` serves `client/`, injects one
+suite as an extra `<script>`, and runs it in headless Chrome. Nothing is stubbed or
+rebuilt, so a passing check passed in a browser rather than in an approximation of one.
+No framework and no dependencies, same as the client. See
+[`tests/README.md`](tests/README.md) for the suites, how to add one, and the list of
+gotchas that have each produced a test which passed while the product was wrong.
 
 ### Why classic scripts (not ES modules)
 
