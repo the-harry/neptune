@@ -112,7 +112,11 @@ function renderCam(){
     btn.dataset.rec = st;
     btn.classList.toggle('recording', anyRec);
     const t=btn.querySelector('.cam-rec-txt');
-    if(t) t.textContent = anyRec ? (st==='all' ? 'ON' : 'PART') : (camOn ? 'OFF' : 'NO CAM');
+    // The word says what the RECORDER is doing, and nothing else. Whether a camera
+    // exists is already on screen twice over — the eye in the status row, and this
+    // button's own colour (red = no camera) — so spelling it out here was a third
+    // copy of the same fact, taking space on a button that has one job.
+    if(t) t.textContent = anyRec ? (st==='all' ? 'ON' : 'PART') : 'OFF';
     liveTitle(btn, anyRec
       ? 'Recording: ' + [c.recording ? 'camera card' : null,
                          state.screenRec.active ? 'handheld screen' : null].filter(Boolean).join(' + ')
