@@ -29,6 +29,7 @@ const STATUS = {
   video: 'down',        // live | connecting | down
   cam: 'down',          // ok | degraded | down
   nav: 'down',          // ok | down
+  camLink: 'gone',      // connected | radio | gone  (the eye)
   vehicle: 'idle',
   _last: '', _lastGate: ''
 };
@@ -72,6 +73,19 @@ STATUS.tick = function(){
   else if(state.cam && state.cam.degraded)                    STATUS.cam = 'degraded';
   else                                                        STATUS.cam = 'ok';
 
+  // ---- the camera, as ONE state -------------------------------------------
+  // Ordered by how much is actually working, because the operator's next move
+  // differs at each step. "The radio is there" is the Pi's own wlan0 association
+  // or a readable signal: a browser cannot scan Wi-Fi, and the Pi's link is the
+  // one that matters anyway, since the Pi is what talks to the camera.
+  const camNet = (state.sys && state.sys.net && state.sys.net.camera) || null;
+  const camWifi = (camNet && camNet.wifi) || {};
+  const radioThere = !!(camWifi.associated || camWifi.signal_dbm != null ||
+                        (camNet && camNet.up));
+  if(STATUS.cam === 'ok' || STATUS.cam === 'degraded') STATUS.camLink = 'connected';
+  else if(radioThere)                                  STATUS.camLink = 'radio';
+  else                                                 STATUS.camLink = 'gone';
+
   // ---- navigation feed ---------------------------------------------------
   STATUS.nav = (state.navOkAt && (now - state.navOkAt) <= NAV_SILENT_MS) ? 'ok' : 'down';
 
@@ -92,7 +106,7 @@ STATUS.tick = function(){
   try{ if(typeof updateBlindNav==='function') updateBlindNav(); }
   catch(e){ LOG.warn('blind-nav update failed:', e && e.message); }
 
-  const sig = [STATUS.internet, STATUS.link, STATUS.video, STATUS.cam, STATUS.nav, STATUS.vehicle].join('|');
+  const sig = [STATUS.internet, STATUS.link, STATUS.video, STATUS.cam, STATUS.nav, STATUS.vehicle, STATUS.camLink].join('|');
   if(sig !== STATUS._last){
     STATUS._last = sig;
     STATUS.render();
@@ -162,7 +176,22 @@ const ROV_ROBOT = '<svg viewBox="0 0 24 24"><rect x="4.5" y="8.5" width="15" hei
 const ROV_PLUG  = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M7.5 10.5h9v5.5a2.5 2.5 0 0 1-2.5 2.5h-4a2.5 2.5 0 0 1-2.5-2.5z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 10.5V4"/><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" d="M10 12.5v2M12 12.5v2M14 12.5v2"/></svg>';
 const ROV_SUB   = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 12c0-2.2 3.6-4 8-4s8 1.8 8 4-3.6 4-8 4-8-1.8-8-4z"/><circle cx="9" cy="12" r="1.1" fill="#0c0118"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 8V5M9 5h6"/></svg>';
 
-/* The video status icon. Open eye = we can see; struck-through = we cannot. */
+/* THE CAMERA, in one glyph.
+   
+   Three states, because there are three genuinely different situations and the
+   operator's next action differs in each:
+
+     green, open      the Pi is talking to the camera. Nothing to do.
+     amber, open,     the camera's radio is there but the Pi is not getting anything
+     blinking         from it — it is booting, dropped its association, or the control
+                      plane has gone quiet. Wait, or power-cycle the camera. Blinking
+                      because this one is transient by nature and worth noticing.
+     red, crossed     no radio and no camera. The map is the driving view now.
+
+   What "the radio is there" means in practice: wlan0 is ASSOCIATED with an AP, or
+   still reports a signal, per /proc/net/wireless on the Pi. A browser cannot scan
+   Wi-Fi itself, so the Pi's own view of its camera link is the honest source — and
+   it is the link that actually matters, since the Pi is what talks to the camera. */
 const EYE_LIVE_SVG  = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M1.8 12S5.8 5.5 12 5.5 22.2 12 22.2 12 18.2 18.5 12 18.5 1.8 12 1.8 12z"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/></svg>';
 const EYE_BLIND_SVG = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M1.8 12S5.8 5.5 12 5.5 22.2 12 22.2 12 18.2 18.5 12 18.5 1.8 12 1.8 12z"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/><path stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M3.5 20.5 20.5 3.5"/></svg>';
 
@@ -172,17 +201,25 @@ STATUS.render = function(){
   set('st-net', STATUS.internet ? 'ok' : 'warn', 'Internet: ' + (STATUS.internet ? 'online' : 'offline'));
 
 
-  // VIDEO — an EYE, because that is what it is: are we seeing the water or not.
-  // Open + green = live feed. Struck through + red = blind, the map is the driving
-  // view. This replaced a full-width BLIND NAV banner that ate the top of the screen
-  // to say the same thing; one glyph in a row of status icons says it as well and
-  // costs nothing. `set` is called after so the class still drives the colour.
-  const vidCls = STATUS.video === 'live' ? 'ok' : (STATUS.video === 'connecting' ? 'warn' : 'down');
+  // THE CAMERA — one eye, three states. This is the ONLY camera indicator: the
+  // CAM WIFI readout and the CAMERA LINK DEGRADED banner both said a piece of the
+  // same thing somewhere else on the screen, which is the repetition this interface
+  // is meant to avoid.
   const vEl = $('st-video');
-  if(vEl) vEl.innerHTML = (STATUS.video === 'live') ? EYE_LIVE_SVG : EYE_BLIND_SVG;
-  set('st-video', vidCls, STATUS.video === 'live'
-        ? 'Video: live feed'
-        : 'Video: ' + STATUS.video + ' — BLIND, driving on the map');
+  let camCls, camGlyph, camTitle;
+  if(STATUS.camLink === 'connected'){
+    camCls='ok'; camGlyph=EYE_LIVE_SVG;
+    camTitle = (STATUS.video === 'live') ? 'connected, live picture'
+                                         : 'connected to the Pi (no picture yet)';
+  } else if(STATUS.camLink === 'radio'){
+    camCls='warn blink'; camGlyph=EYE_LIVE_SVG;
+    camTitle = 'the camera’s Wi-Fi is there, but the Pi is getting nothing from it';
+  } else {
+    camCls='down'; camGlyph=EYE_BLIND_SVG;
+    camTitle = 'no camera and no Wi-Fi — BLIND, the map is the driving view';
+  }
+  if(vEl && vEl.dataset.eye !== camCls){ vEl.dataset.eye = camCls; vEl.innerHTML = camGlyph; }
+  set('st-video', camCls, camTitle);
 
   // ONE ROV icon: shape for the state, colour to match. A leak keeps the sub shape
   // (there IS a vehicle) but goes pulsing red, so a fault never looks like a dropout.

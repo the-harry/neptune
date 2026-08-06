@@ -43,9 +43,11 @@
        Shape carries the state, not just colour: red robot = nothing there,
        yellow plug = connecting, green sub = a real vehicle. Set by STATUS.render. -->
   <span id="st-rov" class="st-ic" title="THE SUB - red robot: nothing on the end of the cable, you are flying the simulator. Amber plug: connecting. Green submarine: a real vehicle is answering. Red pulsing submarine: a leak." aria-label="THE SUB - red robot: nothing on the end of the cable, you are flying the simulator. Amber plug: connecting. Green submarine: a real vehicle is answering. Red pulsing submarine: a leak."></span>
-  <!-- VIDEO: an eye. Open + green = live feed; struck through + red = blind, the map
-       is the driving view. Glyph set by STATUS.render. -->
-  <span id="st-video" class="st-ic" title="CAMERA VIEW - green open eye: live video. Red crossed eye: no picture, so the map becomes the driving view." aria-label="CAMERA VIEW - green open eye: live video. Red crossed eye: no picture, so the map becomes the driving view."></span>
+  <!-- THE CAMERA: one eye, three states — green open (connected), amber blinking
+     (radio there, no data), red crossed (nothing). The only camera indicator:
+     the CAM WIFI readout and the CAMERA LINK DEGRADED banner both said part of
+     this somewhere else. Glyph and class set by STATUS.render. -->
+  <span id="st-video" class="st-ic" title="THE CAMERA - green open eye: connected to the sub. Amber blinking eye: the camera&#39;s Wi-Fi is there but the sub is getting nothing from it. Red crossed eye: no camera at all, so the map becomes the driving view." aria-label="THE CAMERA - green open eye: connected to the sub. Amber blinking eye: the camera&#39;s Wi-Fi is there but the sub is getting nothing from it. Red crossed eye: no camera at all, so the map becomes the driving view."></span>
 </div>
 <!-- LEAK: icon-only — green drop (normal) / red crossed drop (leak). Set by renderLeak. -->
 <span id="leak-icon" title="LEAK SENSOR - green crossed drop means dry. A red drop means water is inside the hull: surface immediately." aria-label="LEAK SENSOR - green crossed drop means dry. A red drop means water is inside the hull: surface immediately."></span>
@@ -71,10 +73,7 @@
 <div class="metric" title="Pi memory used"><span class="m-label">RAM</span><span id="ram-pct" class="m-val" title="PI MEMORY - how much of its memory is in use." aria-label="PI MEMORY - how much of its memory is in use.">--</span></div>
 <div class="metric" title="Pi free disk"><span class="m-label">Disk</span><span id="disk-gb" class="m-val" title="PI DISK - free space left for recordings and logs." aria-label="PI DISK - free space left for recordings and logs.">--</span></div>
 <div class="metric" title="Tether link (Pi eth0)"><span class="m-label">Cable</span><span id="net-eth" class="m-val" title="CABLE - the wired network link down the tether to the sub. This is the data connection, not the cable's length." aria-label="CABLE - the wired network link down the tether to the sub. This is the data connection, not the cable's length.">--</span></div>
-<div class="metric" title="Camera Wi-Fi (Pi wlan0)"><span class="m-label">Cam WiFi</span><span id="net-wlan" class="m-val" title="CAMERA WI-FI - signal strength between the sub's computer and its camera, in dBm. Closer to zero is stronger; below -70 the video will struggle." aria-label="CAMERA WI-FI - signal strength between the sub's computer and its camera, in dBm. Closer to zero is stronger; below -70 the video will struggle.">--</span></div>
 </header>
-<!-- Camera fault channel (WarningMSG / degraded) — hidden unless there's a fault -->
-<div id="cam-warning" class="fixed left-1/2 -translate-x-1/2 z-50" style="top:64px"></div>
 <!-- STALE DATA warning (§4.2) — shown when the newest telemetry the operator sees exceeds the staleness threshold -->
 <div id="stale-badge" class="fixed z-50">STALE DATA <span id="stale-age"></span></div>
 <!-- Shared controls-disabled reason (§4) — shown ONCE when the backend is down (not per-control) -->

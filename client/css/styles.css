@@ -506,7 +506,7 @@ body.map-expanded #area-select.on{display:flex}
 #origin-prompt .op-btn2:hover{background:color-mix(in srgb,var(--on-surface-variant) 14%,transparent)}
 
 /* ---- degradation indicator (§3): compact icons — internet · backend · vehicle ---- */
-#status-tri{display:flex;gap:5px;align-items:center;margin-right:6px;flex:0 0 auto}
+#status-tri{display:flex;gap:10px;align-items:center;flex:0 0 auto}
 .st-ic{display:inline-flex;width:18px;height:18px}
 .st-ic svg{width:100%;height:100%}
 .st-ic.ok  {color:var(--tertiary)}
@@ -518,6 +518,11 @@ body.map-expanded #area-select.on{display:flex}
    believing you are flying the sub is the dangerous confusion this icon exists to
    prevent. Solid red, not pulsing - pulsing is reserved for an actual fault. */
 .st-ic.sim {color:var(--error)}
+/* The camera's radio is there but the Pi is getting nothing from it. Blinking
+   because that state is transient by nature - it resolves itself or it does not,
+   and either way the operator wants to notice it happening. */
+.st-ic.blink{animation:eyeblink 1.1s ease-in-out infinite}
+@keyframes eyeblink{0%,100%{opacity:1}50%{opacity:.25}}
 @keyframes stpulse{50%{opacity:.35}}
 
 /* ---- per-subsystem degradation (§3/§4) ------------------------------------
@@ -552,7 +557,7 @@ body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
   background:color-mix(in srgb,var(--secondary) 12%,rgba(12,1,24,.9))}
 
 /* EXIT - the only way off a fullscreen dashboard on a handheld with no keyboard. */
-#btn-exit{flex:0 0 auto;margin-right:14px;width:28px;height:28px;border-radius:.4rem;
+#btn-exit{flex:0 0 auto;width:28px;height:28px;border-radius:.4rem;
   display:inline-flex;align-items:center;justify-content:center;font-size:15px;line-height:1;
   background:var(--surface-variant);color:var(--on-surface-variant);
   border:1px solid var(--outline-variant);cursor:pointer}
@@ -660,17 +665,18 @@ body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
    Tiles are now content-sized and cannot shrink, the row wraps to a second line if
    it ever genuinely runs out of width, and the bar grows to fit rather than
    overlapping. Type is a touch smaller so the common case stays on one line. */
-.metric{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.15;gap:1px;padding:0 2px}
+.metric{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.15;gap:1px;padding:0}
 .m-label{font-family:var(--font-sans);font-size:9px;font-weight:700;letter-spacing:.03em;color:var(--on-surface-variant);text-transform:uppercase;white-space:nowrap}
 .m-val{font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--primary);white-space:nowrap}
 .m-val.rec{color:var(--error);animation:pulse 1s infinite}
-.m-sep{width:1px;height:28px;background:var(--outline-variant);opacity:.5;flex:0 0 auto;margin:0 1px}
+.m-sep{width:1px;height:28px;background:var(--outline-variant);opacity:.5;flex:0 0 auto;margin:0}
 /* The bar grows rather than overlapping. `h-16` pins it to 64px, which is right for
    the normal single row, but a fixed height plus nowrap tiles has only one way to
    fail - on top of itself. min-height keeps the usual look; wrap + auto height mean
    an unusually long set of readings costs a second row instead of legibility. */
-#topbar{height:auto;min-height:64px;flex-wrap:wrap;row-gap:2px}
-#leak-icon{display:inline-flex;width:18px;height:18px;flex:0 0 auto}
+#topbar{height:auto;min-height:64px;flex-wrap:wrap;row-gap:2px;
+  justify-content:flex-start;column-gap:10px}
+#leak-icon{display:inline-flex;width:18px;height:18px;flex:0 0 auto;align-self:center}
 #leak-icon svg{width:18px;height:18px}
 
 /* ---- flex utilities (used by the viewport-fitting rail) ---- */

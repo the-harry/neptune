@@ -156,7 +156,7 @@ client/
 ## Tests
 
 ```bash
-python client/tests/run.py          # 214 checks, ~90 s, exit 0 only if all pass
+python client/tests/run.py          # 237 checks, ~100 s, exit 0 only if all pass
 python client/tests/run.py tether   # one suite
 ```
 

@@ -37,7 +37,7 @@
       // every top-bar number
       'depth-val','pressure-val','ballast-pct','heading-val','origin-tile',
       'cam-battery','cam-sd','cam-quality','cam-awb','cam-ev','cam-remaining','cam-mode',
-      'battery-v','link-ms','cpu-c','cpu-pct','ram-pct','disk-gb','net-eth','net-wlan',
+      'battery-v','link-ms','cpu-c','cpu-pct','ram-pct','disk-gb','net-eth',
       // the controls
       'cam-rec','cam-capture','btn-surface','btn-config','btn-exit',
       'btn-light-green','btn-light-white','btn-ballast-empty','btn-ballast-fill',

@@ -134,13 +134,9 @@ function renderCam(){
   const ev = $('cam-ev'); if(ev) ev.textContent = c.ev || '--';
   const rem = $('cam-remaining'); if(rem) rem.textContent = (c.remaining!=null ? c.remaining : '--');
   const md = $('cam-mode'); if(md) md.textContent = c.mode || '--';
-  // WARNING banner — the primary fault channel (§4.4)
-  const warn = $('cam-warning');
-  if(warn){
-    const msg = c.degraded ? 'CAMERA LINK DEGRADED' : (c.warning || '');
-    if(msg){ warn.textContent = '⚠ ' + msg; warn.classList.add('show'); }
-    else warn.classList.remove('show');
-  }
+  // No warning banner. A degraded camera link is one of the eye's three states
+  // (amber, blinking) - saying it a second time across the middle of the map was
+  // noise over the one view the operator is actually flying on.
 }
 
 /* The HUD is a glance instrument on a 7in handheld: the top bar has ~48px per

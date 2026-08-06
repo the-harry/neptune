@@ -174,7 +174,7 @@ function renderSystem(s){
   const dash = (el)=>{ if(el){ el.textContent='--'; el.classList.add('is-stale'); } };
   const put  = (el, txt)=>{ if(el){ el.textContent=txt; el.classList.remove('is-stale'); } };
 
-  const ids = ['cpu-c','cpu-pct','ram-pct','disk-gb','net-eth','net-wlan'];
+  const ids = ['cpu-c','cpu-pct','ram-pct','disk-gb','net-eth'];
   if(!s || s.ok===false){ ids.forEach(id=>dash($(id))); return; }
 
   const cpu = s.cpu||{}, mem = s.mem||{}, disk = s.disk||{}, net = s.net||{};
@@ -197,28 +197,19 @@ function renderSystem(s){
       eth.style.color = 'var(--error)';
     }
   }
-  // Camera Wi-Fi: associated + signal, so a weak AP is visible before video dies.
-  const wl = $('net-wlan');
-  if(wl){
-    if(cam.present===false){ dash(wl); }
-    else if(cam.up && wifi.signal_dbm!=null){
-      put(wl, Math.round(wifi.signal_dbm)+' dBm');
-      wl.style.color = wifi.signal_dbm > -70 ? 'var(--tertiary)' : 'var(--secondary)';
-    } else if(cam.up){
-      put(wl, 'UP'); wl.style.color = 'var(--tertiary)';
-    } else {
-      put(wl, 'DOWN'); wl.style.color = 'var(--error)';
-    }
-  }
+  // Camera Wi-Fi has no readout of its own any more: it is one of the three
+  // states of the eye in the status row (see STATUS.camLink).
 
-  // Undervoltage / throttling is a leading indicator of the Pi 3 dropping its
-  // Ethernet mid-dive, so surface it in the existing camera-warning channel.
+  // Undervoltage / throttling is a leading indicator of the Pi dropping its Ethernet
+  // mid-dive, so it goes to the LOG. It used to borrow the camera's warning banner,
+  // which is gone \u2014 and it was never a camera fault anyway, so it never belonged
+  // there. Logged once per transition rather than on every poll.
   const d = s.deep||{}, th = d.throttled;
-  if(th && (th.undervoltage_now || th.throttled_now)){
-    const warn = $('cam-warning');
-    if(warn && !warn.classList.contains('show')){
-      warn.textContent = '\u26a0 PI ' + (th.undervoltage_now ? 'UNDER-VOLTAGE' : 'THERMAL THROTTLING');
-      warn.classList.add('show');
-    }
+  const brownout = !!(th && (th.undervoltage_now || th.throttled_now));
+  if(brownout !== renderSystem._brownout){
+    renderSystem._brownout = brownout;
+    if(brownout) LOG.warn('PI ' + (th.undervoltage_now ? 'UNDER-VOLTAGE' : 'THERMAL THROTTLING') +
+                          ' \u2014 this is what drops the tether NIC mid-dive');
+    else LOG.state('Pi power/thermal back to normal');
   }
 }

@@ -5,7 +5,7 @@ dependencies, no build step — the same rule the client itself follows. Python
 standard library plus a Chrome that is already installed.
 
 ```bash
-python client/tests/run.py                # every suite  (~90 s, 214 checks)
+python client/tests/run.py                # every suite  (~100 s, 237 checks)
 python client/tests/run.py tether         # one suite (substring match)
 python client/tests/run.py map view       # several
 python client/tests/run.py --headed       # watch it happen in a real window
@@ -43,6 +43,8 @@ and service-worker state never leak between them.
 | `hud-layout` | Depth ramp, exit button, icon sizes, the eye, REC/PIC feedback, map panning |
 | `status-and-rail` | Ramp evenness in Oklab, rail width, REC's four states, ROV icon shapes, stick-axis detection |
 | `view-follow` | Driving takes the view back from a pan |
+| `camera-eye` | The camera's three states in one glyph, nothing saying it twice, top-bar spacing |
+| `demo-mode` | `?sim=1` flies immediately, and every glyph/number/control explains itself |
 
 ## Writing a suite
 

@@ -44,14 +44,17 @@
     ok('every top-bar icon is the same size', new Set(sizes).size===1, ids.join(',')+' = '+sizes.join(' '));
 
     // ---------- 4. the eye ----------
-    STATUS.video='live'; STATUS.render();
+    // Driven by STATUS.camLink now, not STATUS.video: the eye reports the CAMERA,
+    // and a live picture is only one of the ways that can be true. camera-eye.js
+    // covers all three states; this just checks the two extremes still render.
+    STATUS.camLink='connected'; STATUS.render();
     await sleep(100);
     const liveHTML=$('st-video').innerHTML;
-    ok('live feed shows an open eye (green)', /circle/.test(liveHTML) && !/M3.5 20.5/.test(liveHTML) &&
+    ok('connected shows an open eye (green)', /circle/.test(liveHTML) && !/M3.5 20.5/.test(liveHTML) &&
        $('st-video').className.indexOf('ok')>=0, 'class="'+$('st-video').className+'"');
-    STATUS.video='down'; STATUS.render();
+    STATUS.camLink='gone'; STATUS.render();
     await sleep(100);
-    ok('no feed shows a struck-through eye (red)', /M3.5 20.5/.test($('st-video').innerHTML) &&
+    ok('nothing shows a struck-through eye (red)', /M3.5 20.5/.test($('st-video').innerHTML) &&
        $('st-video').className.indexOf('down')>=0, 'class="'+$('st-video').className+'"');
     ok('the BLIND NAV banner is gone', !$('blind-banner'), 'element absent');
     ok('no status banner shows at all', (()=>{
