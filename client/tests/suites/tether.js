@@ -104,6 +104,37 @@
     ok('sub still does not move on a real link', Math.abs(MAP.x-bx)<0.001,
        'MAP.x '+bx+' -> '+MAP.x+' under full throttle+steer');
     keys();
+    // ---------- THE RING IS CENTRED ON THE OPERATOR ----------
+    // The cable is in the operator's hand, so a circle drawn around the LAUNCH POINT
+    // is a drawing of somewhere the sub can no longer necessarily reach — wrong from
+    // the first step along the bank. MAP._lastRing records where it was actually
+    // drawn, so this checks the pixels rather than the intent.
+    keys();
+    const M = m => m/111320;                       // metres -> degrees of latitude
+    MAP.track.length=0; MAP.x=0; MAP.y=0; MAP.me=null; MAP.depth=0;
+    MAP.origin={lat:51.5,lon:-0.1,accuracy:8,t:Date.now()}; MAP.hasOrigin=true;
+    try{ await STORE.set('origin', MAP.origin); }catch(e){}
+    await sleep(500);
+    ok('with no fix the operator is ASSUMED at the launch point',
+       !!operatorLL() && operatorLL().assumed===true,
+       'operatorLL()=' + JSON.stringify(operatorLL()||null));
+    ok('...and reads as LAST KNOWN, not live', meSource()==='stale',
+       'meSource()='+meSource()+' — it is where they were, not where they are');
+    const r0 = MAP._lastRing ? {x:MAP._lastRing.x, y:MAP._lastRing.y, r:MAP._lastRing.r} : null;
+    ok('the ring is drawn', !!r0 && r0.r>4, r0 ? ('centre '+Math.round(r0.x)+','+Math.round(r0.y)+
+       ' radius '+Math.round(r0.r)+'px') : 'nothing drawn');
+
+    // move the operator; the circle must go with them
+    setMockMe(51.5+M(45), -0.1);
+    await sleep(700);
+    const r1 = MAP._lastRing ? {x:MAP._lastRing.x, y:MAP._lastRing.y, r:MAP._lastRing.r} : null;
+    ok('moving the operator moves the ring with them',
+       !!r1 && Math.hypot(r1.x-r0.x, r1.y-r0.y) > 4,
+       'centre moved ' + (r1 ? Math.round(Math.hypot(r1.x-r0.x, r1.y-r0.y)) : 0) + ' px');
+    ok('the radius did not change with them', !!r1 && Math.abs(r1.r-r0.r) < 2,
+       'radius ' + Math.round(r0.r) + ' -> ' + Math.round(r1.r) + ' px (the cable is the same length)');
+    clearMockMe();
+
     ok('no script errors', errs.length===0, errs.join(' | ')||'none');
     ok('core UI intact', ['in-fwd','in-rev','in-left','in-right','sonar-teth','tether-warn','nav-warning','radar','cam-capture']
          .every(id=>!!$(id)), 'all present');

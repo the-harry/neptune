@@ -99,10 +99,22 @@ checks backend availability for a dependency it doesn't have.
   | 🟡 open, **blinking** | the camera's radio is there but the Pi is getting nothing from it | wait, or power-cycle the camera |
   | 🔴 crossed | no radio and no camera | the map is the driving view now |
 
-  "The radio is there" is the Pi's own `wlan0` association or a readable signal from
-  `/proc/net/wireless` — a browser cannot scan Wi-Fi, and the Pi's link is the one that
-  matters anyway, since the Pi is what talks to the camera. Only the amber state blinks;
-  a permanent blink is just noise.
+  **Two observers, because one is not enough.** The Pi's own `wlan0` association says
+  whether *it* is connected — but if the Pi's antenna dies while the camera is happily
+  broadcasting, the Pi sees nothing and would report the camera dead. The handheld is
+  standing right there with a radio of its own, so the launcher exposes **`/__wifi`**
+  (`netsh wlan show networks`, cached ~20 s) and the page asks it whether the camera's
+  SSID is visible *from here*. AP visible + Pi silent means the fault is on the sub's
+  side and the camera is fine: **amber, not red**.
+
+  Put the camera AP's SSID (or any distinctive part of it) in
+  `launch/neptune-camera-ssid.txt`. A browser cannot scan Wi-Fi itself, which is why
+  this goes through the launcher.
+
+  Only a **positive** sighting counts. No launcher, radio off, or no SSID configured all
+  mean *cannot tell*, and cannot-tell is never evidence of absence — the eye falls back
+  to the Pi's own view and nothing is made to look worse than it is. Only the amber state
+  blinks; a permanent blink is just noise.
 
   This replaced three components saying one thing: a `CAMERA LINK DEGRADED` banner across
   the middle of the map (over the very view you fly when the camera is what you lost), a
@@ -172,7 +184,7 @@ client/
 ## Tests
 
 ```bash
-python client/tests/run.py          # 237 checks, ~100 s, exit 0 only if all pass
+python client/tests/run.py          # 245 checks, ~95 s, exit 0 only if all pass
 python client/tests/run.py tether   # one suite
 ```
 
@@ -388,6 +400,16 @@ holding the handheld, which is exactly backwards — the growing gap between the
 The **tether anchors on the operator**, not the datum, because the cable is held by
 whoever holds the handheld. Walk 20 m up the bank and the reachable circle walks with
 you and the range updates.
+
+With **no fix at all** the operator is *assumed* to be at the launch point — that is
+where they were when they set it — and the dot says so by being yellow. Without that,
+`MAP.me` stayed null and everything anchored to the operator quietly fell back to the
+launch point, which draws a circle around somewhere the sub can no longer necessarily
+reach. The ring's radius is now measured **through the same projection that placed its
+centre** (project a point one tether-length away, take the screen distance); deriving it
+from `dpr/curScale()` was wrong over imagery, where the tiles use the tile projection —
+so centre and radius came from two different mappings and the circle did not sit where
+its own arithmetic said it did.
 
 **Pinpointing the ROV.** The operator's position is known; the sub's is not — there is
 no GNSS underwater and, until the IMU is wired, nothing on board can say where it

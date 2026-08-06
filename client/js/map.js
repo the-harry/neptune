@@ -44,9 +44,11 @@ const C = { grid:'rgba(180,107,255,0.13)', origin:'#ff8c1a', sub:'#b46bff',
 /* Where the displayed operator position came from. Drives the dot colour and the
    MOCK tag on the tether readout. */
 function meSource(){
-  if(!MAP.me) return null;
-  if(MAP.me.mock) return 'mock';
-  return (Date.now()-(MAP.me.t||0)) > (CONFIG.map.meStaleMs||30000) ? 'stale' : 'live';
+  const me = operatorLL();
+  if(!me) return null;
+  if(me.mock) return 'mock';
+  if(me.assumed) return 'stale';        // assumed = where they were, not where they are
+  return (Date.now()-(me.t||0)) > (CONFIG.map.meStaleMs||30000) ? 'stale' : 'live';
 }
 function meColor(){
   const s=meSource();
@@ -625,9 +627,28 @@ function pushTrack(x,y,depth){
    position when there is one — walk 20 m up the bank and the reachable circle walks
    with you. Before any fix (and in SIM) it is the frame origin, which is the launch
    point by definition. */
+/* Where the operator is, in lat/lon — ALWAYS an answer once there is an origin.
+
+   With no fix (no GNSS on this handheld, no internet to position from) MAP.me stays
+   null, and everything anchored to the operator quietly fell back to the launch
+   point. That is a lie the moment they take one step along the bank, and it is the
+   reachable circle — the thing that says whether the sub can get home — that tells
+   it. So with no fix the operator is ASSUMED to be at the launch point, which is
+   where they were when they set it, and the dot says so by being yellow: a last
+   known position, not a live one. Moving it (a fix, or the plan button) moves the
+   circle with them, which is the whole point. */
+function operatorLL(){
+  if(MAP.me) return MAP.me;
+  if(MAP.hasOrigin && MAP.origin)
+    return { lat:MAP.origin.lat, lon:MAP.origin.lon,
+             acc:MAP.origin.accuracy, t:MAP.origin.t || 0, assumed:true };
+  return null;
+}
+
 function tetherAnchorLocal(){
-  if(MAP.me && MAP.hasOrigin && MAP.origin){
-    const r = toLocal(MAP.me.lat, MAP.me.lon, MAP.origin.lat, MAP.origin.lon);
+  const me = operatorLL();
+  if(me && MAP.hasOrigin && MAP.origin){
+    const r = toLocal(me.lat, me.lon, MAP.origin.lat, MAP.origin.lon);
     return { x:r.x, y:r.y };
   }
   return { x:0, y:0 };
@@ -999,10 +1020,20 @@ function bestScaleNow(){
   const lat = (MAP.viewLat!=null) ? MAP.viewLat : (MAP.origin ? MAP.origin.lat : 0);
   return maxZoomScale(lat);
 }
-function drawTetherRing(ctx,dpr,ox,oy,ppm){
+/* THE REACHABLE CIRCLE — centred on the OPERATOR, because the operator is holding
+   the cable. Not the launch point: the two are the same only until the first step
+   along the bank, and after that a ring around the launch point is a drawing of
+   somewhere the sub can no longer necessarily reach.
+
+   `rpx` is passed in already measured in SCREEN pixels by the caller, using the same
+   projection that placed the centre. Deriving it here from dpr/curScale() was wrong
+   in the imagery view: the tiles are drawn through the tile projection, so the ring's
+   centre and its radius came from two different mappings and the circle did not sit
+   where its own arithmetic said it did. */
+function drawTetherRing(ctx,dpr,ox,oy,rpx){
   const T=CONFIG.tether; if(!T || !T.showRing) return;
-  const rpx=tetherHorizLimitM()*ppm;
   if(!(rpx>4) || rpx>20000) return;                 // off-scale: skip rather than draw a wall
+  MAP._lastRing = {x:ox, y:oy, r:rpx};              // exposed so a test can check it
   const near=tetherRangeM()>=T.warnFromM;
   ctx.save();
   ctx.setLineDash([6*dpr,5*dpr]);
@@ -1015,11 +1046,19 @@ function drawTrackProjected(ctx,dpr,headingUp){
   ctx.setTransform(1,0,0,1,0,0);
   // origin cross
   const oS=lonLatToScreen(MAP.origin.lat,MAP.origin.lon);
-  // Ring around the cable's ANCHOR (the handheld when we have a fix), not the datum.
-  const meS = MAP.me ? lonLatToScreen(MAP.me.lat,MAP.me.lon) : null;
-  const aS = meS || oS;
-  if(aS) drawTetherRing(ctx,dpr,aS[0],aS[1],dpr/curScale());
-  if(meS) drawMeMarker(ctx,dpr,meS[0],meS[1]);
+  // The ring is centred on the OPERATOR and measured through the SAME projection that
+  // placed them, by projecting a point one tether-length away and taking the screen
+  // distance. Exact whatever the imagery is doing underneath.
+  const me = operatorLL();
+  const meS = me ? lonLatToScreen(me.lat, me.lon) : null;
+  if(meS){
+    const lim = tetherHorizLimitM();
+    const edge = toLatLon(0, lim, me.lat, me.lon);            // `lim` metres due north
+    const eS = lonLatToScreen(edge.lat, edge.lon);
+    const rpx = eS ? Math.hypot(eS[0]-meS[0], eS[1]-meS[1]) : 0;
+    drawTetherRing(ctx,dpr,meS[0],meS[1],rpx);
+    drawMeMarker(ctx,dpr,meS[0],meS[1]);
+  }
   if(oS){ ctx.strokeStyle=C.origin; ctx.lineWidth=2*dpr; ctx.beginPath();
     ctx.moveTo(oS[0]-7*dpr,oS[1]);ctx.lineTo(oS[0]+7*dpr,oS[1]);ctx.moveTo(oS[0],oS[1]-7*dpr);ctx.lineTo(oS[0],oS[1]+7*dpr);ctx.stroke();
     ctx.beginPath();ctx.arc(oS[0],oS[1],10*dpr,0,7);ctx.stroke(); }
@@ -1052,8 +1091,8 @@ function drawTrackMeterFrame(ctx,cx,cy,ppm,rot,headingUp){
   const L=(wx,wy)=>[ (wx-MAP.x)*ppm, -(wy-MAP.y)*ppm ];
   const o=L(0,0);
   const an=tetherAnchorLocal(), aP=L(an.x,an.y);
-  drawTetherRing(ctx,dpr,aP[0],aP[1],ppm);
-  if(MAP.me) drawMeMarker(ctx,dpr,aP[0],aP[1]);
+  drawTetherRing(ctx,dpr,aP[0],aP[1],tetherHorizLimitM()*ppm);
+  drawMeMarker(ctx,dpr,aP[0],aP[1]);
   ctx.strokeStyle=C.origin; ctx.lineWidth=2*dpr; ctx.beginPath();
   ctx.moveTo(o[0]-7*dpr,o[1]);ctx.lineTo(o[0]+7*dpr,o[1]);ctx.moveTo(o[0],o[1]-7*dpr);ctx.lineTo(o[0],o[1]+7*dpr);ctx.stroke();
   ctx.beginPath();ctx.arc(o[0],o[1],10*dpr,0,7);ctx.stroke();

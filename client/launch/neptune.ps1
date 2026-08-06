@@ -37,6 +37,10 @@ $ErrorActionPreference = "Stop"
 $root      = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $icon      = Join-Path $root "icon.ico"
 $hostFile  = Join-Path $PSScriptRoot "neptune-host.txt"
+# The camera AP's SSID (or any distinctive part of it). Used by /__wifi to answer
+# "can the HANDHELD see the camera", which is the only way to tell a dead Pi
+# antenna from a dead camera.
+$camSsidFile = Join-Path $PSScriptRoot "neptune-camera-ssid.txt"
 
 # Profile directories are PER BROWSER.
 #
@@ -125,7 +129,8 @@ $pool       = $null
 # Shared with the request handlers, which run on pool runspaces and can see NOTHING
 # from this scope except what is passed in. `rec` holds the live ffmpeg process so a
 # later /__record?action=stop can find the one an earlier request started.
-$shared     = [hashtable]::Synchronized(@{ quit = $false; ffmpeg = ""; rec = $null; recFile = ""; recStarted = $null })
+$shared     = [hashtable]::Synchronized(@{ quit = $false; ffmpeg = ""; rec = $null; recFile = ""; recStarted = $null;
+                                          wifiAt = $null; wifiSsids = @(); wifiErr = $null })
 
 # Everything the session produces, in one place the operator can actually find.
 #   navigation_logs/images  PIC stills
@@ -331,6 +336,62 @@ try {
       $query  = if ($target.Contains('?')) { $target.Substring($target.IndexOf('?') + 1) } else { "" }
       $path   = ($target -split '\?')[0]
       $path   = [System.Uri]::UnescapeDataString($path)
+
+      # ---- /__wifi : is the camera's access point visible FROM THE HANDHELD? ------
+      #
+      # The browser cannot scan Wi-Fi, and the Pi's own view is not enough on its own:
+      # if the Pi's antenna dies while the camera is happily broadcasting, the Pi sees
+      # nothing and would report the camera dead. A SECOND observer settles it, and the
+      # handheld is standing right there with a Wi-Fi radio of its own. This bridges
+      # `netsh wlan show networks` into something the page can fetch.
+      #
+      # Cached, because netsh takes a second or two and Windows throttles scans anyway
+      # (results can be up to ~30 s old however often you ask). The page polls slowly.
+      if ($path -eq "/__wifi") {
+        $now = [DateTime]::UtcNow
+        if (-not $shared.wifiAt -or ($now - $shared.wifiAt).TotalSeconds -gt 20) {
+          $shared.wifiAt = $now
+          $ssids = @()
+          $err = $null
+          try {
+            $raw = & netsh wlan show networks 2>&1 | Out-String
+            if ($raw -match "not running|no wireless|not have any") {
+              $err = "the handheld's Wi-Fi radio is off or has no adapter"
+            } else {
+              foreach ($line in ($raw -split "`r?`n")) {
+                if ($line -match '^\s*SSID\s+\d+\s*:\s*(.*)$') {
+                  $n = $Matches[1].Trim()
+                  if ($n) { $ssids += $n }
+                }
+              }
+            }
+          } catch { $err = "$($_.Exception.Message)" }
+          $shared.wifiSsids = $ssids
+          $shared.wifiErr   = $err
+        }
+        $want = ""
+        if (Test-Path $camSsidFile) { $want = (Get-Content $camSsidFile -Raw).Trim() }
+        $seen = $false
+        if ($want) {
+          foreach ($n in $shared.wifiSsids) {
+            if ($n -eq $want -or $n -like "*$want*") { $seen = $true; break }
+          }
+        }
+        $payload = [ordered]@{
+          ok       = ($null -eq $shared.wifiErr)
+          error    = $shared.wifiErr
+          want     = $want
+          visible  = $seen
+          ssids    = $shared.wifiSsids
+          age_s    = [int]([DateTime]::UtcNow - $shared.wifiAt).TotalSeconds
+        }
+        $json = ($payload | ConvertTo-Json -Compress -Depth 4)
+        $body = [System.Text.Encoding]::UTF8.GetBytes($json)
+        $head = "HTTP/1.1 200 OK`r`nContent-Type: application/json`r`nCache-Control: no-store`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n"
+        $hb = [System.Text.Encoding]::ASCII.GetBytes($head)
+        $stream.Write($hb, 0, $hb.Length); $stream.Write($body, 0, $body.Length); $stream.Flush()
+        return
+      }
 
       # The dashboard's EXIT button hits this so the operator can always get out.
       if ($path -eq "/__quit") {

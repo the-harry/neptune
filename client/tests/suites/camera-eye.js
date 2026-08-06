@@ -42,6 +42,26 @@
        getComputedStyle(eye()).animationName!=='none',
        'animation='+getComputedStyle(eye()).animationName);
 
+    // THE CASE THAT NEEDS A SECOND OBSERVER: the Pi's antenna is dead, so the Pi sees
+    // nothing — but the handheld standing right there can see the camera broadcasting.
+    // The camera is fine; the sub's side of the link is not. That must read amber.
+    state.camAp = { available:true, visible:true, want:'WOLFANG' };
+    const allyOnly = setCam(false, false);
+    ok('handheld sees the AP but the Pi does not -> AMBER, not red',
+       allyOnly.link==='radio' && allyOnly.cls.split(' ').includes('warn'),
+       'camLink='+allyOnly.link+' class="'+allyOnly.cls+'" — a dead Pi antenna is not a dead camera');
+    ok('and the tooltip says whose fault it is',
+       /handheld can see/.test($('st-video').getAttribute('title')||''),
+       '"'+($('st-video').getAttribute('title')||'').slice(0,70)+'..."');
+
+    // An UNAVAILABLE scan must never drag the state down: "cannot tell" is not
+    // evidence of absence, and most origins have no launcher to ask.
+    state.camAp = { available:false, visible:null };
+    const noScan = setCam(false, false);
+    ok('an unavailable scan does not make things worse', noScan.link==='gone',
+       'camLink='+noScan.link+' — falls back to the Pi’s own view');
+    state.camAp = null;
+
     const gone = setCam(false, false);
     ok('nothing at all -> RED crossed eye',
        gone.link==='gone' && /\bdown\b/.test(gone.cls) && /M3.5 20.5/.test(gone.html),

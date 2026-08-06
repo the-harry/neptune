@@ -145,6 +145,7 @@ const state = {
   camOkAt:0,                    // last successful camera control-plane response
   navOkAt:0,                    // last nav telemetry frame
   sys:null, sysAt:0,            // last /api/system snapshot (real Pi health)
+  camAp:null,                   // launcher /__wifi: can THIS handheld see the camera's AP
   source:'keyboard', /* keyboard | gamepad */
   gamepadIndex:null,
   keys:new Set(), padPrev:{},

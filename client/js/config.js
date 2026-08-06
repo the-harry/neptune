@@ -118,6 +118,9 @@ const CONFIG = {
 
   /* ---- CAMERA (WOLFANG control plane + go2rtc WebRTC video) --------------- */
   camera: {
+    // How often to ask the launcher whether the handheld can see the camera's AP.
+    // Windows throttles Wi-Fi scans anyway, so asking faster buys nothing.
+    apScanMs: 15000,
     telemetryWs:  '/ws/telemetry',        // camera status pushed here (~15s)
     webrtcWs:     '/go2rtc/api/ws',        // go2rtc WebRTC signaling (nginx-proxied)
     stream:       'sub',                   // go2rtc stream name (go2rtc.yaml)

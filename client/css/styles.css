@@ -674,8 +674,14 @@ body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
    the normal single row, but a fixed height plus nowrap tiles has only one way to
    fail - on top of itself. min-height keeps the usual look; wrap + auto height mean
    an unusually long set of readings costs a second row instead of legibility. */
-#topbar{height:auto;min-height:64px;flex-wrap:wrap;row-gap:2px;
-  justify-content:flex-start;column-gap:10px}
+/* EQUAL GAPS ACROSS THE FULL WIDTH. flex-start with a fixed gap made every gap the
+   same but left half the bar empty and the tiles crushed together, which is worse to
+   read than uneven spacing was. space-between divides ALL the leftover room equally
+   between the tiles, so the gaps stay identical and the bar is actually used.
+   nowrap on purpose: with wrapping, a last row holding two tiles gets that same
+   division and flings them to opposite ends. */
+#topbar{height:auto;min-height:64px;flex-wrap:nowrap;row-gap:2px;
+  justify-content:space-between;column-gap:10px}
 #leak-icon{display:inline-flex;width:18px;height:18px;flex:0 0 auto;align-self:center}
 #leak-icon svg{width:18px;height:18px}
 

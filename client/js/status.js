@@ -30,6 +30,7 @@ const STATUS = {
   cam: 'down',          // ok | degraded | down
   nav: 'down',          // ok | down
   camLink: 'gone',      // connected | radio | gone  (the eye)
+  camBy: 'none',        // who can see the camera's radio: ally | pi | none
   vehicle: 'idle',
   _last: '', _lastGate: ''
 };
@@ -78,12 +79,23 @@ STATUS.tick = function(){
   // differs at each step. "The radio is there" is the Pi's own wlan0 association
   // or a readable signal: a browser cannot scan Wi-Fi, and the Pi's link is the
   // one that matters anyway, since the Pi is what talks to the camera.
+  // TWO observers, because one is not enough. The Pi's own wlan0 says whether IT is
+  // associated — but if the Pi's antenna dies while the camera is happily
+  // broadcasting, the Pi sees nothing and would report the camera dead. The handheld
+  // is standing right there with a radio of its own, so the launcher scans for the
+  // camera's SSID (/__wifi) and that second opinion settles it: AP visible, Pi silent
+  // means the fault is on the Pi's side and the camera is fine. Amber, not red.
   const camNet = (state.sys && state.sys.net && state.sys.net.camera) || null;
   const camWifi = (camNet && camNet.wifi) || {};
-  const radioThere = !!(camWifi.associated || camWifi.signal_dbm != null ||
-                        (camNet && camNet.up));
+  const piSeesRadio = !!(camWifi.associated || camWifi.signal_dbm != null ||
+                         (camNet && camNet.up));
+  // Only a POSITIVE sighting counts. An unavailable scan (no launcher, radio off, no
+  // SSID configured) must never drag the state down — it means "cannot tell", and
+  // "cannot tell" is not evidence of absence.
+  const allySeesAp = !!(state.camAp && state.camAp.visible === true);
+  STATUS.camBy = allySeesAp ? 'ally' : (piSeesRadio ? 'pi' : 'none');
   if(STATUS.cam === 'ok' || STATUS.cam === 'degraded') STATUS.camLink = 'connected';
-  else if(radioThere)                                  STATUS.camLink = 'radio';
+  else if(piSeesRadio || allySeesAp)                   STATUS.camLink = 'radio';
   else                                                 STATUS.camLink = 'gone';
 
   // ---- navigation feed ---------------------------------------------------
@@ -106,7 +118,8 @@ STATUS.tick = function(){
   try{ if(typeof updateBlindNav==='function') updateBlindNav(); }
   catch(e){ LOG.warn('blind-nav update failed:', e && e.message); }
 
-  const sig = [STATUS.internet, STATUS.link, STATUS.video, STATUS.cam, STATUS.nav, STATUS.vehicle, STATUS.camLink].join('|');
+  const sig = [STATUS.internet, STATUS.link, STATUS.video, STATUS.cam, STATUS.nav,
+               STATUS.vehicle, STATUS.camLink, STATUS.camBy].join('|');
   if(sig !== STATUS._last){
     STATUS._last = sig;
     STATUS.render();
@@ -213,7 +226,10 @@ STATUS.render = function(){
                                          : 'connected to the Pi (no picture yet)';
   } else if(STATUS.camLink === 'radio'){
     camCls='warn blink'; camGlyph=EYE_LIVE_SVG;
-    camTitle = 'the camera’s Wi-Fi is there, but the Pi is getting nothing from it';
+    camTitle = (STATUS.camBy === 'ally')
+      ? 'this handheld can see the camera’s Wi-Fi, but the sub is getting nothing '
+        + 'from it — the camera is alive, the sub’s side of the link is not'
+      : 'the camera’s Wi-Fi is there, but the sub is getting nothing from it';
   } else {
     camCls='down'; camGlyph=EYE_BLIND_SVG;
     camTitle = 'no camera and no Wi-Fi — BLIND, the map is the driving view';
@@ -238,6 +254,44 @@ STATUS.render = function(){
   if(rov && rov.dataset.glyph !== rCls){ rov.dataset.glyph = rCls; rov.innerHTML = rGlyph; }
   set('st-rov', rCls, rTitle);
 };
+
+/* ---- The HANDHELD's own view of the camera's Wi-Fi (launcher /__wifi) --------
+
+   Served only by the local launcher, so it simply does not exist when the dashboard
+   is opened from the Pi, from GitHub Pages, or from disk. That is fine and expected:
+   `available:false` means "cannot tell", the eye falls back to the Pi's own view, and
+   nothing anywhere treats a missing second opinion as bad news. */
+function startCamApPoll(){
+  let backoff = 0, stop = false;
+  const tick = async ()=>{
+    if(stop) return;
+    try{
+      const r = await fetch('/__wifi', {cache:'no-store'});
+      if(r.ok){
+        const j = await r.json();
+        state.camAp = { available: !!j.ok && !!j.want, visible: (j.ok && j.want) ? !!j.visible : null,
+                        want: j.want || '', ssids: j.ssids || [], error: j.error || null,
+                        ageS: j.age_s, at: Date.now() };
+        if(j.ok && !j.want && !state._camApWarned){
+          state._camApWarned = true;
+          LOG.map('camera Wi-Fi check idle: put the camera AP’s SSID in '
+                + 'client/launch/neptune-camera-ssid.txt and the eye can tell a dead Pi '
+                + 'antenna from a dead camera');
+        }
+        if(j.error && !state._camApErr){ state._camApErr = true; LOG.warn('camera Wi-Fi scan: ' + j.error); }
+        backoff = 0;
+      } else { throw new Error('HTTP ' + r.status); }
+    }catch(e){
+      // No launcher (or it went away). Stop asking after a few tries and record that
+      // the second opinion is simply unavailable here.
+      state.camAp = { available:false, visible:null, error:'no launcher on this origin' };
+      backoff++;
+      if(backoff >= 3){ stop = true; return; }
+    }
+    setTimeout(tick, CONFIG.camera.apScanMs || 15000);
+  };
+  tick();
+}
 
 /* ---- REAL Pi health (/api/system) -----------------------------------------
    Its own poll on its own schedule, deliberately separate from the control
@@ -272,6 +326,7 @@ function startSystemPoll(){
 }
 
 function initStatus(){
+  startCamApPoll();
   setInterval(STATUS.tick, 500);
   STATUS.tick();
   startSystemPoll();
