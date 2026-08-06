@@ -96,16 +96,29 @@ function renderCam(){
   // Recording state lives in the REC button now (ON/OFF + red pulse), not the top bar.
   // REC drives two recorders now, so the button reflects EITHER being live -
   // showing OFF while the screen was still being captured would be a lie.
+  // REC carries FOUR facts in one colour, because it is the only camera indicator left
+  // (the separate camera glyph said the same thing in a second place):
+  //   red    no camera, nothing recording      — the dead-end case
+  //   blue   camera present, nothing recording — ready
+  //   amber  recording, but not everything     — screen only, or card only
+  //   green  camera present and both recording — fully covered
   const btn = $('cam-rec');
-  const anyRec = c.recording || state.screenRec.active;
+  const camOn = (typeof camUp==='function') ? camUp() : true;
+  const recs  = (c.recording?1:0) + (state.screenRec.active?1:0);
+  const anyRec = recs>0;
   if(btn){
+    const st = !anyRec ? (camOn ? 'ready' : 'nocam')
+             : (camOn && recs===2) ? 'all' : 'partial';
+    btn.dataset.rec = st;
     btn.classList.toggle('recording', anyRec);
     const t=btn.querySelector('.cam-rec-txt');
-    if(t) t.textContent = anyRec ? 'ON' : 'OFF';
+    if(t) t.textContent = anyRec ? (st==='all' ? 'ON' : 'PART') : (camOn ? 'OFF' : 'NO CAM');
     btn.title = anyRec
       ? 'Recording: ' + [c.recording ? 'camera card' : null,
                          state.screenRec.active ? 'handheld screen' : null].filter(Boolean).join(' + ')
-      : 'Record the camera card and the handheld screen';
+        + (st==='all' ? '' : ' — the other one is NOT recording')
+      : (camOn ? 'Ready — record the camera card and the handheld screen'
+               : 'No camera: only the handheld screen can be recorded');
   }
   // camera battery
   const b = $('cam-battery'); if(b) b.textContent = (c.battery!=null ? c.battery+'%' : '--');

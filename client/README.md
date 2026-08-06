@@ -361,18 +361,23 @@ beyond `originMoveM` you are somewhere else entirely, which still gets the expli
 > permission API, whether the watch is running, internet, and the last genuine fix.
 > **Tapping the map is the accurate route anyway**: ±8 m against ±50 m from Wi-Fi.
 
-### Depth reads as twenty bands, with a key
+### Depth reads as twelve even bands, with a key
 
-The old ramp swept one hue into another at matching lightness, so about four steps were
-actually separable and everything between them read as "some sort of green". Depth is now
-quantised into **20 fixed bands** that move hue, saturation *and* lightness together —
-the eye is far better at "which band is this" than at "how far along a gradient is this".
-Warm and near-white at the surface, cool and near-black at the bottom, so shallow still
-reads as shallow at a glance.
+The original ramp swept one hue into another at matching lightness, so about four steps
+were separable and the rest read as "some sort of green". Depth is quantised into
+**12 bands generated in OKLCH** — evenly spaced HSL is *not* evenly spaced to the eye
+(equal hue steps crawl through the yellows and sprint through the blues), which is what
+left a wide flat teal at the deep end when the ramp was hand-picked. Oklch lightness and
+hue are perceptually uniform, so equal numeric steps really do look equal: measured in
+Oklab the 11 steps span 0.050–0.065, a ratio of 1.30.
 
-Twenty colours mean nothing without a key, so the expanded and blind views draw a compact
-vertical **depth scale** (`drawDepthLegend`), surface at the top, `maxDepthColorM` at the
-bottom. It hides with the tracks, since it is only there to explain them.
+Twelve, not twenty — twenty was an arbitrary number and past the point where the eye holds
+the steps apart. A dozen leaves each band clearly its own colour and keeps the key short.
+
+The expanded and blind views draw a compact vertical **depth scale**
+(`drawDepthLegend`), surface at the top, `maxDepthColorM+` at the bottom — the `+` because
+the deepest band is a clamp that catches everything below it. It hides with the tracks,
+since it exists only to explain them.
 
 ### Moving the map
 
@@ -387,6 +392,19 @@ can only move by reaching across the screen is awkward on a handheld. While the 
 the stick the camera is deliberately **not** commanded — otherwise leaving the map would
 hand back a camera pointed somewhere the operator never chose. Close the map and the stick
 returns to the camera on the next frame.
+
+**Which axes are the right stick is detected, not assumed.** The left stick is axes 0/1
+everywhere, which is why driving always worked. The right stick is only axes **2/3** under
+the Gamepad API's *standard* mapping, where triggers are buttons. A pad reporting a
+non-standard mapping commonly puts the triggers in the axis list instead —
+`[LX, LY, LT, RX, RY, RT]` — and then axis 2 is a trigger and the stick is **3/4**. Reading
+2/3 on such a pad gives a dead horizontal axis and a vertical one wired to the stick's X,
+which presents exactly as *"it only pans up and down, sideways does nothing"*.
+
+`rightStickAxes()` picks 3/4 for a non-standard pad with 6+ axes and 2/3 otherwise, logs
+which it chose, and is overridden by `CONFIG.rightStickAxes = {x:3, y:4}`.
+**`NEPTUNE.axes()`** prints the live values of every axis, so finding the right pair on an
+unknown pad takes one glance.
 
 ### Zoom: maximum imagery, and the paddles
 

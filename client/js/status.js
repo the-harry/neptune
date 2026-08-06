@@ -143,17 +143,11 @@ STATUS.applyGates = function(){
     el.setAttribute('aria-disabled', blocked ? 'true' : 'false');
   });
 
-  // The SIM banner is gone. It spelled out across the screen what the vehicle icon in
-  // the status row already says — a red sub means simulated, a green one means a real
-  // vehicle — and the space matters more than the repetition. Camera loss keeps a
-  // banner because nothing else states it in words, and it is not the normal case.
+  // No banner at all any more. SIM was spelled across the screen when the vehicle icon
+  // already shows it, and CAMERA OFFLINE duplicated the eye. Both cost real estate on a
+  // 7-inch handheld to repeat something a glyph in the status row states continuously.
   const banner = $('controls-disabled');
-  if(banner){
-    const msg = down.cam ? 'CAMERA OFFLINE' : '';
-    banner.textContent = msg;
-    banner.classList.toggle('show', !!msg);
-    banner.classList.toggle('sim', simulated);
-  }
+  if(banner){ banner.textContent=''; banner.classList.remove('show'); }
 };
 
 /* The video status icon. Open eye = we can see; struck-through = we cannot. */
@@ -180,9 +174,6 @@ STATUS.render = function(){
   set('st-video', vidCls, STATUS.video === 'live'
         ? 'Video: live feed'
         : 'Video: ' + STATUS.video + ' — BLIND, driving on the map');
-
-  const camCls = STATUS.cam === 'ok' ? 'ok' : (STATUS.cam === 'degraded' ? 'warn' : 'down');
-  set('st-cam', camCls, 'Camera control: ' + STATUS.cam);
 
   // RED = simulating, no vehicle. GREEN = a real vehicle is connected.
   // Pulsing red is reserved for an actual fault, so it stays distinguishable.

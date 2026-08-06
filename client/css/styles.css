@@ -77,13 +77,14 @@ img{display:block}
 .w-32{width:8rem}.h-32{height:8rem}
 .w-48{width:12rem}.w-64{width:16rem}
 .h-3{height:.75rem}.h-1\.5{height:.375rem}
-.w-\[110px\]{width:110px}.w-\[2px\]{width:2px}
+.w-\[110px\]{width:110px}.w-\[84px\]{width:84px}.w-\[2px\]{width:2px}
 .w-1\/4{width:25%}.w-1\/3{width:33.333333%}
 
 /* ---- spacing (padding / margin) ---- */
 .px-edge-margin{padding-left:24px;padding-right:24px}
 .px-4{padding-left:1rem;padding-right:1rem}
 .px-3{padding-left:.75rem;padding-right:.75rem}
+aside.px-3{padding-left:6px;padding-right:6px}
 .px-2{padding-left:.5rem;padding-right:.5rem}
 .py-1{padding-top:.25rem;padding-bottom:.25rem}
 .py-3{padding-top:.75rem;padding-bottom:.75rem}
@@ -289,8 +290,16 @@ img{display:block}
 
 #no-feed.reconfiguring .nf-badge{color:var(--secondary);border-color:var(--secondary);box-shadow:0 0 24px rgba(255,91,208,.3)}
 
-#cam-rec.recording{background:var(--error);color:#2a0008;border-color:var(--error);
-  box-shadow:0 0 22px rgba(255,92,122,.75);animation:recpulse 1.4s ease-in-out infinite}
+/* REC states — the button is the only camera indicator now, so its colour has to
+   carry both facts: is a camera there, and is anything actually being recorded. */
+#cam-rec[data-rec="nocam"]{border-color:var(--error);color:var(--error);
+  background:color-mix(in srgb,var(--error) 12%,transparent)}
+#cam-rec[data-rec="ready"]{border-color:var(--photo);color:var(--photo);
+  background:color-mix(in srgb,var(--photo) 12%,transparent)}
+#cam-rec[data-rec="partial"]{background:var(--hazard);color:#2b1400;border-color:var(--hazard);
+  box-shadow:0 0 20px rgba(255,140,26,.7);animation:recpulse 1.4s ease-in-out infinite}
+#cam-rec[data-rec="all"]{background:var(--tertiary);color:#00311a;border-color:var(--tertiary);
+  box-shadow:0 0 20px rgba(77,255,166,.7);animation:recpulse 1.4s ease-in-out infinite}
 @keyframes recpulse{50%{box-shadow:0 0 6px rgba(255,92,122,.35)}}
 /* PIC: a shutter needs to be FELT. One bright flash of the button on capture. */
 #cam-capture.shot{animation:picflash .45s ease-out}
@@ -370,7 +379,7 @@ body.map-expanded #radar-dial,
 body.map-expanded #radar-empty,
 body.map-expanded .radar-scale,
 body.map-expanded #radar-wrap .sonar-readout{display:none}
-body.map-expanded #video-layer{position:fixed;inset:auto;top:72px;right:120px;width:280px;height:158px;
+body.map-expanded #video-layer{position:fixed;inset:auto;top:72px;right:94px;width:280px;height:158px;
   border:1px solid rgba(180,107,255,.4);border-radius:.5rem;overflow:hidden;z-index:41;cursor:pointer}
 body.map-expanded #video-layer #no-feed .nf-badge{font-size:13px;letter-spacing:.2em;padding:5px 12px}
 
@@ -422,7 +431,7 @@ body.map-blind:not(.map-expanded) #map-close{display:none}
 body.map-blind #radar-empty{display:none}
 /* Video shrinks to a corner tile. It stays on screen ON PURPOSE: it is how the
    operator notices the feed coming back, and tapping it returns to camera view. */
-body.map-blind #video-layer{position:fixed;inset:auto;top:72px;right:120px;width:240px;height:135px;
+body.map-blind #video-layer{position:fixed;inset:auto;top:72px;right:94px;width:240px;height:135px;
   border:1px solid var(--hazard);border-radius:.5rem;overflow:hidden;z-index:41;cursor:pointer;
   filter:grayscale(.6) brightness(.7)}
 body.map-blind #video-layer #no-feed .nf-badge{font-size:12px;letter-spacing:.18em;padding:4px 10px}
@@ -437,7 +446,7 @@ body.map-expanded .map-empty.on{display:flex}
 .map-empty-btn{font-family:var(--font-sans);font-size:12px;font-weight:700;letter-spacing:.06em;padding:8px 16px;
   border-radius:.3rem;border:1px solid var(--secondary);color:var(--secondary);background:transparent;cursor:pointer}
 .map-empty-btn:hover{background:color-mix(in srgb,var(--secondary) 15%,transparent)}
-.map-ctl{position:absolute;right:120px;bottom:20px;z-index:7;display:none;flex-direction:column;gap:6px}
+.map-ctl{position:absolute;right:94px;bottom:20px;z-index:7;display:none;flex-direction:column;gap:6px}
 body.map-expanded #map-ctl{display:flex}
 .map-btn{width:34px;height:34px;border-radius:.4rem;border:1px solid rgba(180,107,255,.35);
   background:rgba(18,4,38,.7);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);

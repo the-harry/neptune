@@ -767,12 +767,36 @@ function resizeMap(){
    Ordered warm-bright → cool-dark, so shallow still reads as shallow at a glance, and
    the ends are unmistakable: near-white at the surface, near-black at the bottom.
    Read the exact value off the legend the map draws (drawDepthLegend). */
-const DEPTH_RAMP = [
-  '#fdfff0','#f8f79b','#f3e250','#f6c531','#f7a520',   //  0–20%  surface → shallow
-  '#f5831c','#ef641f','#e34327','#d92544','#c81766',   // 20–40%
-  '#ad1287','#8b17a3','#6a20b4','#4c2cbd','#3341c4',   // 40–60%  →  60–80%
-  '#2159c2','#1470ad','#0d7f8e','#0a6a6e','#073f4a'    // 80–100% deepest
-];
+/* Generated, not hand-picked. Hand-picking is what produced the last version's
+   problem: four teal-ish entries bunched at the deep end that read as one wide band
+   while the middle stepped quickly. Walking hue and lightness at a CONSTANT rate makes
+   every band the same visual size — which is what "neat" means here.
+
+   12 bands, not 20. Twenty was an arbitrary number and it is past the point where the
+   eye can hold the steps apart anyway; a dozen leaves each one clearly its own colour
+   and keeps the key short enough to read at a glance. */
+const DEPTH_STEPS = 12;
+const DEPTH_RAMP = (function(){
+  const out=[];
+  // OKLCH, because evenly spaced HSL is not evenly spaced to the EYE: equal hue steps
+  // crawl through the yellows and sprint through the blues, which is what left a wide
+  // flat teal at the deep end. Oklch's lightness and hue are perceptually uniform, so
+  // equal numeric steps really do look like equal steps.
+  const oklch = (typeof CSS!=='undefined' && CSS.supports && CSS.supports('color','oklch(0.5 0.1 100)'));
+  for(let i=0;i<DEPTH_STEPS;i++){
+    const f=i/(DEPTH_STEPS-1);
+    if(oklch){
+      const L = 0.94 - 0.52*f;            // near-white at the surface → dark at the bottom
+      const C = 0.13 + 0.03*Math.sin(Math.PI*f);   // keep the mid-bands from going muddy
+      const H = 95 + (265-95)*f;          // yellow → blue
+      out.push('oklch('+L.toFixed(3)+' '+C.toFixed(3)+' '+H.toFixed(1)+')');
+    } else {
+      // Fallback for anything without oklch: still generated, still monotonic.
+      out.push('hsl('+(52+(255-52)*f).toFixed(0)+','+(92-22*f).toFixed(0)+'%,'+(76-46*f).toFixed(0)+'%)');
+    }
+  }
+  return out;
+})();
 function _depthColor(d){
   const max=CONFIG.map.maxDepthColorM||6;
   const f=Math.max(0,Math.min(1, (d||0)/max));
@@ -797,7 +821,8 @@ function drawDepthLegend(ctx,w,h,dpr){
   ctx.textBaseline='middle';
   ctx.fillText('DEPTH', x-2*dpr, y0-8*dpr);
   ctx.fillText('0 m', x+bw+5*dpr, y0+bh/2);
-  ctx.fillText((CONFIG.map.maxDepthColorM||6)+' m', x+bw+5*dpr, y0+n*bh-bh/2);
+  // "+" because the deepest band is a CLAMP: everything past maxDepthColorM lands in it.
+  ctx.fillText((CONFIG.map.maxDepthColorM||6)+'+ m', x+bw+5*dpr, y0+n*bh-bh/2);
   ctx.restore();
 }
 

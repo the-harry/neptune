@@ -89,6 +89,43 @@ function bindingsText(action){
   return list.length ? list.map(bindingLabel).join('   +   ') : '— unbound —';
 }
 
+/* WHICH AXES ARE THE RIGHT STICK?
+
+   The left stick is axes 0/1 on every layout, which is why driving has always worked.
+   The right stick is not so lucky. Under the Gamepad API's "standard" mapping it is
+   axes 2/3 with the triggers as BUTTONS — but a pad reporting a non-standard mapping
+   commonly puts the triggers in the axis list instead: [LX, LY, LT, RX, RY, RT]. On
+   that layout axis 2 is a trigger and the right stick is 3/4, so reading 2/3 gives a
+   dead horizontal axis and a vertical one wired to the stick's X — which presents as
+   "it only pans up and down, sideways does nothing".
+
+   Detected, not assumed, and overridable: set CONFIG.rightStickAxes = {x:3,y:4} to
+   force it. NEPTUNE.axes() prints the live values so the right pair is one glance away. */
+function rightStickAxes(gp){
+  const cfg=CONFIG.rightStickAxes;
+  if(cfg && cfg.x!=null && cfg.y!=null) return cfg;
+  const nonStandard = gp && gp.mapping !== 'standard';
+  const guess = (nonStandard && gp.axes && gp.axes.length>=6) ? {x:3,y:4} : {x:2,y:3};
+  if(state._rsLogged!==guess.x+','+guess.y){
+    state._rsLogged=guess.x+','+guess.y;
+    LOG.input('right stick = axes '+guess.x+'/'+guess.y+
+              ' (mapping="'+((gp&&gp.mapping)||'?')+'", '+((gp&&gp.axes&&gp.axes.length)||0)+' axes)'+
+              ' — override with CONFIG.rightStickAxes if the map pans the wrong way');
+  }
+  return guess;
+}
+
+/* Live axis values — the fastest way to find which pair a pad actually uses. */
+function padAxes(){
+  const gp=currentPad();
+  if(!gp) return {connected:false};
+  const out={ id:gp.id, mapping:gp.mapping, count:gp.axes.length,
+              axes:Array.from(gp.axes).map(v=>+v.toFixed(3)),
+              rightStick:rightStickAxes(gp) };
+  LOG.input('pad axes', out);
+  return out;
+}
+
 /* ---- input evaluation ---- */
 function currentPad(){
   const pads=navigator.getGamepads?navigator.getGamepads():[];
@@ -136,7 +173,8 @@ function computeInput(dt){
   let stickLive=false;
   if(gp && gp.axes && gp.axes.length>=4){
     const ax=i=>{ const v=gp.axes[i]||0; return Math.abs(v)<dz?0:v; };
-    throttle=-ax(1); steer=ax(0); pan=ax(2); tilt=-ax(3);
+    const R=rightStickAxes(gp);
+    throttle=-ax(1); steer=ax(0); pan=ax(R.x); tilt=-ax(R.y);
     stickLive=(Math.abs(throttle)+Math.abs(steer)+Math.abs(pan)+Math.abs(tilt))>0;
   }
   if(!stickLive){ // keyboard movement (fallback, or alongside an idle pad)

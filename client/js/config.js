@@ -179,6 +179,11 @@ const CONFIG = {
 
   /* ---- INPUT ------------------------------------------------------------- */
   deadzone:       0.08,        // analog stick deadzone (0..1)
+  // Which axes are the RIGHT stick. null = detect (standard mapping -> 2/3; a pad that
+  // reports non-standard with 6+ axes usually puts triggers in the list, so 3/4).
+  // Set explicitly, e.g. {x:3,y:4}, if the map pans the wrong way. NEPTUNE.axes() shows
+  // the live values so the correct pair takes one glance to find.
+  rightStickAxes: null,
 
   /* ---- ON-SCREEN CONTROLS (LEDs + ballast sliders, SURFACE button) ------- */
   ledStep:          0.10,      // brightness change per arrow TAP (0..1)
