@@ -103,6 +103,57 @@ function setInputNum(id, v){
   if(_numPrev[id]!==n){ _numPrev[id]=n; el.textContent=n; el.classList.toggle('live', n>0); }
 }
 
+/* ---- THE COLOUR LINK -------------------------------------------------------
+   The map draws the dive track in twelve depth bands. The ballast fill and the
+   Depth / Pressure / Ballast numbers now wear the same bands, so a glance at the
+   rail and a glance at the track say the same thing in the same colour.
+
+   WHAT MAY BE COLOURED IS NOT THE SAME IN BOTH MODES, and that is the point:
+
+     SIM   one made-up number drives everything, so everything wears one colour,
+           taken straight from the ballast input. Drag the slider and the whole
+           console moves together - which is exactly what a simulation is.
+
+     REAL  ballast is a commanded quantity and colours itself. Depth and pressure
+           are MEASURED, and are coloured by their own sensor or not at all. They
+           are never tinted from ballast: a sub descending on a full tank with a
+           dead depth sensor would then show a deepening colour it did not earn,
+           and the one symptom that gives the failure away would be the symptom we
+           had painted over. Cyan-and-unchanging while the ballast fill turns
+           purple IS the alarm.
+
+   A reading older than staleTimeoutMs is dropped rather than believed, for the
+   same reason the camera drops a stale AP sighting. */
+function metricTints(v){
+  // The ramp lives in map.js. If that file ever fails to load, the HUD keeps its
+  // default colours instead of throwing sixty times a second and taking piloting
+  // down with the map - subsystems fail alone (§3).
+  if(v.stale || typeof rampColor!=='function') return {ballast:null, depth:null, pressure:null};
+  // Ballast is coloured by the depth that much water BUYS, not by the fraction itself.
+  // Straight 0..1 would look right and be wrong: the tank reaches 9 m while the ramp
+  // saturates at 6, so a half-full tank would show band 6 while the track it is about
+  // to draw shows band 9. Converting first is what makes them the same colour.
+  const bal = _depthColor((v.ballastLevel||0) * ((CONFIG.sim&&CONFIG.sim.maxDepthM)||9));
+  if(v.sim || state.mode==='sim') return {ballast:bal, depth:bal, pressure:bal};
+  const fresh = (at)=> !!at && (Date.now()-at) < (CONFIG.staleTimeoutMs||1000);
+  return {
+    ballast:  bal,
+    depth:    fresh(state.depthAt)    ? _depthColor(v.depth)       : null,
+    pressure: fresh(state.pressureAt) ? pressureColor(v.pressure)  : null
+  };
+}
+/* null puts the number back to its default look rather than picking a "neutral"
+   colour, so an untinted readout is visibly the ABSENCE of a reading, not a
+   twelfth-band value that happens to be grey. */
+const _tint={};
+function paintMetric(id, color, why){
+  const el=$(id); if(!el || _tint[id]===color) return;
+  _tint[id]=color;
+  el.style.color = color || '';
+  el.style.textShadow = color ? ('0 0 8px '+color) : '';
+  if(why!==undefined) liveTitle(el, color ? '' : why);
+}
+
 let _prev={};
 function renderUI(v){
   const stale=!!v.stale;
@@ -116,8 +167,24 @@ function renderUI(v){
   setText($('heading-val'), Math.round(v.heading||0)+'°', stale);   // compass bearing (degrees)
   // Gauges / bars keep last position; only dim on stale.
   const dim = stale ? '0.45' : '1';
-  $('ballast-fill').style.height = Math.round((v.ballastLevel||0)*100)+'%';
-  $('ballast-fill').style.opacity = dim;
+  const fill=$('ballast-fill');
+  fill.style.height = Math.round((v.ballastLevel||0)*100)+'%';
+  fill.style.opacity = dim;
+  // The liquid is the plunger, and it is the colour of the depth that much water buys.
+  const tint = metricTints(v);
+  if(_tint.fill !== tint.ballast){
+    _tint.fill = tint.ballast;
+    fill.style.background  = tint.ballast || 'var(--water)';
+    fill.style.borderColor = tint.ballast || 'var(--water-edge)';
+    // Tight, not a halo: an 8px bloom spilled a whole band of colour down the empty
+    // barrel and the water level stopped having an edge.
+    fill.style.boxShadow   = '0 1px 4px ' + (tint.ballast || 'var(--water)');
+  }
+  paintMetric('ballast-pct',  tint.ballast);
+  paintMetric('depth-val',    tint.depth,
+    'no depth reading is arriving, so this number is NOT tracking a sensor');
+  paintMetric('pressure-val', tint.pressure,
+    'no pressure reading is arriving, so this number is NOT tracking a sensor');
   // Target marker = where the operator SET it (the goal). The fill (actual level)
   // chases it smoothly via the slewed command. Inverted fill grows from the top.
   const tgt=clamp(state.ballastTargetRaw,0,1);

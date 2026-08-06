@@ -378,7 +378,7 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 
 ## Since the last spec pass — what now exists
 
-- **Tests are real** (`client/tests/`): 10 suites, 225 browser checks against the shipping
+- **Tests are real** (`client/tests/`): 12 suites, 280 browser checks against the shipping
   dashboard, plus a screenshot + drift layer with a measured 0.1% tolerance. Exit 0 only
   if everything passes. Previously there were none at all.
 - **Dive logs can be calibrated** (`api/nav/calibrate.py`): the sample carries the control

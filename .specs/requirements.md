@@ -115,6 +115,13 @@ working with whatever still functions.
 **Acceptance criteria**
 1. THE system SHALL track internet, ROV link, video, camera control, navigation and vehicle
    state separately.
+1a. THE indicator for each SHALL report only what it can prove. A connection attempt that
+   has not yet failed SHALL NOT be shown as progress, and an observation older than its
+   freshness window SHALL be dropped rather than believed.
+1b. WHERE a state cannot be determined from the browser alone — which network adapters
+   exist, whether a network reaches the internet, which access points are in range — THE
+   system SHALL obtain it from the topside launcher, and WHERE no launcher is present it
+   SHALL fall back to what it can prove and say so.
 2. WHEN a subsystem is down, THEN only the controls belonging to that subsystem SHALL be
    affected.
 3. WHEN the ROV link drops, THEN the camera buttons, map, radar, saved areas, dive logs and
@@ -122,6 +129,9 @@ working with whatever still functions.
 4. WHEN the camera is unreachable, THEN piloting, video and the map SHALL be unaffected.
 5. Each subsystem's state SHALL be visible at a glance, and the indicator SHALL distinguish
    "no vehicle" from "vehicle present" unmistakably.
+5a. State SHALL be carried by SHAPE as well as colour, and WHERE two states share a colour
+   they SHALL differ by motion (blinking) — so nothing depends on colour discrimination in
+   sunlight.
 6. Reconnection SHALL be automatic and silent; there SHALL be no retry buttons.
 
 ### R3.2 — Stale is not the same as gone

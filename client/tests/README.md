@@ -41,9 +41,10 @@ and service-worker state never leak between them.
 | `operator-marker` | Green / yellow / red dot by source, and `diveUnderway()` |
 | `track-history` | Track breaks (no teleport lines), the eye toggle, out-of-reach ROV refusal |
 | `hud-layout` | Depth ramp, exit button, icon sizes, the eye, REC/PIC feedback, map panning |
-| `status-and-rail` | Ramp evenness in Oklab, rail width, REC's four states, ROV icon shapes, stick-axis detection |
+| `status-and-rail` | Ramp evenness in Oklab, rail width, REC's four states, tether icon shapes (including that `connecting` alone earns nothing), stick-axis detection |
 | `view-follow` | Driving takes the view back from a pan |
-| `camera-eye` | The camera's three states in one glyph, the second observer (`/__wifi`), nothing saying it twice, top-bar spacing |
+| `camera-eye` | The camera's three states in one glyph, the second observer (`/__net`), the four Wi-Fi states and the tether's cable-first states, nothing saying it twice, top-bar spacing |
+| `ballast-syringe` | The syringe shape (one clip-path for wall and liquid), and the depth-colour link — including that a real dive refuses to tint depth/pressure from ballast |
 | `demo-mode` | `?sim=1` flies immediately, and every glyph/number/control explains itself |
 
 ## Writing a suite

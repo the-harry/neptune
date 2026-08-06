@@ -703,6 +703,35 @@ aside > button .material-symbols-outlined{font-size:17px}
 .rail-slider{position:relative;width:28px;margin:0 auto;background:var(--surface-variant);
   border:1px solid rgba(255,255,255,.12);border-radius:14px;overflow:hidden;cursor:ns-resize;min-height:44px}
 
+/* BALLAST is a SYRINGE, because that is what the tank is: a barrel of water with a
+   plunger. The liquid IS the plunger - it rises and falls inside the barrel and runs
+   down into the V rather than stopping in a flat line the shape does not have. Flat
+   flange across the top, square corners, and no needle: a needle would say the water
+   leaves the sub, and it does not.
+
+   One shape, declared once, used by the wall, the inside and therefore the liquid -
+   so the fill can never overflow the barrel or square off the taper. */
+.rail-slider.syringe{
+  --syr-tip:15px;                                     /* how far the V reaches down */
+  --syr-flange:7px;                                   /* the flat bar across the top */
+  --syr-shape:polygon(17% 0, 83% 0,
+                      83% calc(100% - var(--syr-tip)), 50% 100%,
+                      17% calc(100% - var(--syr-tip)));
+  background:none;border:0;border-radius:0;overflow:visible}
+.syringe .syr-glass{position:absolute;inset:0;clip-path:var(--syr-shape);
+  background:rgba(255,255,255,.30)}                   /* the barrel wall: 1px of it */
+.syringe .syr-well{position:absolute;top:var(--syr-flange);left:1px;right:1px;bottom:1px;
+  clip-path:var(--syr-shape);background:var(--surface-variant);overflow:hidden}
+  /* Starts BELOW the flange, so 0-100% of the liquid is 0-100% of what you can see.
+     controls.js maps the drag to the same band (insetTop). */
+.syringe .syr-flange{position:absolute;left:0;right:0;top:0;height:var(--syr-flange);
+  border-radius:0;                                    /* square on purpose */
+  /* OPAQUE. Translucent, the liquid showed through it and the bar read as a window
+     cut in the syringe rather than the solid top of one. */
+  background:linear-gradient(180deg,rgba(236,227,255,.34),rgba(236,227,255,.14)),
+             var(--surface-variant);
+  border:1px solid rgba(255,255,255,.34);box-shadow:0 1px 0 rgba(0,0,0,.35)}
+
 /* ---- LOGS overlay -------------------------------------------------------
    Centred and deliberately NOT full screen: the operator reads the log while a
    dive is live, so the vehicle behind it has to stay visible. Backdrop is dimmed

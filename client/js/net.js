@@ -66,8 +66,10 @@ function onTelemetry(t){
   // Sync sim mirror so a dropout continues smoothly from real values.
   if(typeof t.ballast_level==='number') state.ballastLevel=t.ballast_level;
   if(typeof t.ballast_target==='number') state.ballastTarget=t.ballast_target;
-  if(typeof t.depth==='number') state.depth=t.depth;
-  if(typeof t.pressure==='number') state.pressure=t.pressure;
+  // Stamped, not just stored: a frame that omits the field means the sensor did not
+  // report, and the readout must not go on wearing a colour it has not earned.
+  if(typeof t.depth==='number'){ state.depth=t.depth; state.depthAt=Date.now(); }
+  if(typeof t.pressure==='number'){ state.pressure=t.pressure; state.pressureAt=Date.now(); }
   // Heading is whatever the SUB reports, always. If its compass is not fitted the
   // bearing does not move — and that is the truth, not something to paper over.
   if(typeof t.heading==='number') state.heading=t.heading;

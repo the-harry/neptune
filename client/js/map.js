@@ -837,10 +837,25 @@ const DEPTH_RAMP = (function(){
   }
   return out;
 })();
+/* 0..1 -> one of the twelve bands. Exposed on its own because the ramp is no longer
+   only the map's: the ballast fill and the top-bar numbers wear the same colours, so
+   that "how deep" is one visual language across the whole console rather than a
+   convention you have to learn twice. */
+function rampColor(f){
+  const n=DEPTH_RAMP.length;
+  const i=Math.round(Math.max(0,Math.min(1,f||0))*(n-1));
+  return DEPTH_RAMP[Math.min(n-1,Math.max(0,i))];
+}
 function _depthColor(d){
-  const max=CONFIG.map.maxDepthColorM||6;
-  const f=Math.max(0,Math.min(1, (d||0)/max));
-  return DEPTH_RAMP[Math.min(DEPTH_RAMP.length-1, Math.round(f*(DEPTH_RAMP.length-1)))];
+  return rampColor((d||0)/(CONFIG.map.maxDepthColorM||6));
+}
+/* PSI -> the depth it implies -> the same ramp. Pressure and depth therefore agree in
+   colour whenever both sensors agree in fact, and DISAGREE the moment one of them
+   starts lying - which is the whole reason to colour them separately. */
+function pressureColor(psi){
+  const sim=CONFIG.sim||{};
+  const base=sim.basePressurePsi||14.7, per=sim.psiPerMeter||1.42;
+  return _depthColor(((psi==null?base:psi)-base)/per);
 }
 
 /* Twenty colours mean nothing without a key. A compact vertical scale, drawn only in

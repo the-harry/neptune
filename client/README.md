@@ -68,27 +68,62 @@ checks backend availability for a dependency it doesn't have.
   because they genuinely fail one at a time — **NET** (internet), **PI** (ROV control
   link), **VIDEO** (go2rtc feed), **CAM** (WOLFANG control plane), **VEH** (vehicle).
 
-  Three glyphs carry them in the top-left status row:
+  Three glyphs carry them in the top-left status row: **Wi-Fi**, **the tether**, and
+  **the camera**. Each has a fixed vocabulary, and none of them reports a state on
+  anything weaker than direct evidence.
 
-  | | Glyph | Subsystem |
+  **Wi-Fi** has four states, because "no card", "not joined", "joined but going nowhere"
+  and "working" call for four different reactions:
+
+  | Glyph | Colour | State |
   |---|---|---|
-  | 1 | signal arcs | **Internet** — green online, amber offline |
-  | 2 | **ROV** — see below | link *and* vehicle, in one |
-  | 3 | eye | **The camera** — three states, see below |
+  | 📶 arcs | green | joined to a network *and* that network reaches the internet |
+  | 📶 arcs | amber, steady | a wireless adapter is present, joined to nothing |
+  | 📶 arcs | amber, **blinking** | joined, but the network has no internet |
+  | 📶 arcs, slashed | red | no wireless adapter on this handheld at all |
 
-  **The ROV icon changes SHAPE, not just colour**, because "is the link up" and "is there
-  a vehicle" were never two questions to the operator — they are one question about one
-  cable, and two icons for it was two things to learn:
+  The two ambers are separated by the **blink**, never by colour alone. Wi-Fi is for map
+  imagery and address search; it is never in the path of driving the sub.
+
+  **The tether icon changes SHAPE, not just colour**, because "is the link up" and "is
+  there a vehicle" were never two questions to the operator — they are one question about
+  one cable, and two icons for it was two things to learn. Its red state is about the
+  *cable*: with no wired adapter there is nothing for a sub to be on the end of.
 
   | Shape | Colour | State |
   |---|---|---|
-  | 🤖 robot | red | nothing on the end of the tether — the simulator is flying this |
-  | 🔌 plug | amber (pulsing) | connecting; the cable is there, the handshake is not done |
-  | 🛥 sub | green | a real vehicle is answering |
+  | 🛥 sub | green | adapter, API and control link all up — a real vehicle is answering |
   | 🛥 sub | red, pulsing | a **leak** — the sub shape is kept on purpose, so a fault can never be mistaken for a dropout |
+  | 🔌 plug | amber, blinking | the sub answers, but the control link is not up yet |
+  | 🔌 plug | amber, steady | a wired adapter is there with nothing answering on it |
+  | ⚡ cut cable | red | no wired adapter — the simulator is flying this |
+  | 🤖 robot | red | no launcher, so the adapters cannot be checked; it says so rather than guessing |
 
-  Shape survives being read at a glance, in sunlight, by someone who is also driving —
-  colour alone does not.
+  **A socket in `connecting` is not evidence** and no longer reaches amber. It reports
+  that state for as long as the handshake has not failed, which against an address that
+  will never answer is indefinitely — so the tether light sat amber through an entire
+  session spent in the simulator with nothing plugged in. Amber needs a real adapter or a
+  real HTTP answer.
+
+  None of this is visible to a browser: it cannot enumerate adapters, and
+  `navigator.onLine` cannot tell a network from the internet. It comes from the launcher's
+  `/__net`. Shape survives being read at a glance, in sunlight, by someone who is also
+  driving — colour alone does not.
+
+  **BALLAST is a syringe**, because that is what the tank is: a barrel of water with a
+  plunger. Flat solid flange across a square top, a barrel, and a V tapering to a centred
+  point — no needle, because the water does not leave the sub. The liquid *is* the
+  plunger. Wall and liquid are cut from one `clip-path`, so the fill can never square off
+  the taper or spill past the barrel, and the drag maps to the visible barrel rather than
+  the element box so the first few percent do not land behind the flange.
+
+  **One colour means one thing.** The map draws the dive track in twelve depth bands; the
+  ballast fill and the Depth / Pressure / Ballast readouts wear the same bands. In SIM
+  everything is driven by the ballast input, so it all moves together. On a **real dive**
+  depth and pressure are coloured by their own sensor **or not at all** — never from
+  ballast, because a sub descending with a dead depth sensor would then show a deepening
+  colour it never earned. An unchanging cyan number beside a purple tank is the alarm, and
+  painting over it would remove the only symptom.
 
   **The eye is the ONLY camera indicator**, and it has three states because there are
   three genuinely different situations and the next action differs in each:
@@ -105,9 +140,9 @@ checks backend availability for a dependency it doesn't have.
   that as a sighting pinned the eye to amber permanently, camera powered off in another
   building included — but if the Pi's antenna dies while the camera is happily
   broadcasting, the Pi sees nothing and would report the camera dead. The handheld is
-  standing right there with a radio of its own, so the launcher exposes **`/__wifi`**
-  (`netsh wlan show networks`, cached ~20 s) and the page asks it whether the camera's
-  SSID is visible *from here*. AP visible + Pi silent means the fault is on the sub's
+  standing right there with a radio of its own, so the launcher's **`/__net`**
+  (`netsh wlan show networks`, cached 6 s) tells the page whether the camera's SSID is
+  visible *from here* — the same call that carries the Wi-Fi and cable state above. AP visible + Pi silent means the fault is on the sub's
   side and the camera is fine: **amber, not red**.
 
   Put the camera AP's SSID (or any distinctive part of it) in
@@ -116,10 +151,11 @@ checks backend availability for a dependency it doesn't have.
   with the client stripped out; change them together. A browser cannot scan Wi-Fi
   itself, which is why this goes through the launcher at all.
 
-  **The scan only runs while the camera is NOT connected**, every `apScanMs` (5 s).
-  Green means the answer cannot change anything, and a scan costs a radio sweep on a
-  handheld that is flying a submarine — so it idles at a cheap re-check and starts again
-  by itself the moment the eye goes red.
+  **The RATE backs off once the camera is up**, but the call never stops: it also carries
+  the adapter state, which changes on its own and is never "settled". A radio sweep costs
+  something on a handheld that is flying a submarine, so it runs every `apScanMs` (5 s)
+  while the eye is red and `apScanIdleMs` (15 s) once it is green, speeding up again by
+  itself the moment the camera drops.
 
   A sighting older than `apScanMaxAgeMs` (20 s) is **dropped rather than believed**, so
   carrying the camera out of range turns the eye red instead of leaving it amber on the

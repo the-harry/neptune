@@ -693,7 +693,7 @@ shipping client byte for byte plus that tag, so the suites drive the same `MAP`,
 `STATUS`, `CONFIG` and `state` the operator drives. Standard library and an installed
 Chrome — no framework, no dependencies, matching the client's own rule.
 
-Ten suites, 225 checks, ~95 s, exit 0 only if every one passes.
+Twelve suites, 280 checks, ~110 s, exit 0 only if every one passes.
 
 ### The visual layer, and why its tolerance is measured
 
@@ -761,6 +761,61 @@ must be carried by *shape* as well as colour.
 The explanation lives in the HTML and is captured into `data-help` at boot, because the
 renderers also want the title for live state and whoever wrote last used to win — which
 quietly erased the explanations a few seconds after launch.
+
+---
+
+## 19. The ballast syringe, and one colour for depth
+
+The tank is a syringe, so the control is one: a flat solid flange across a square top, a
+barrel, and a V that tapers to a centred point. **No needle** — a needle would say the
+water leaves the sub, and it does not. The liquid *is* the plunger; it rises and falls in
+the barrel and runs down into the taper.
+
+The wall, the inside and therefore the liquid are all cut from **one declared shape**
+(`--syr-shape`, a `clip-path` polygon on `.rail-slider.syringe`). Drawing the outline and
+the fill separately is what lets a fill square off a taper it is supposed to follow, or
+spill past a barrel it is supposed to sit in; there is only one shape here, so it cannot.
+
+The barrel starts *below* the flange, and `bindVerticalControl` takes an `insetTop` so the
+drag maps to the visible barrel rather than the element box. Without it the first few
+percent of water land behind a solid bar: you drag, the number moves, and nothing appears.
+
+### One colour for depth
+
+The map draws the dive track in twelve depth bands (§13). The ballast fill and the
+**Depth / Pressure / Ballast** readouts now wear the same bands, so the rail and the track
+say the same thing in the same colour and "how deep" is one visual language instead of a
+convention learned twice.
+
+Ballast is coloured by the depth that much water *buys* — `ballastLevel × sim.maxDepthM`
+— not by the fraction itself. Straight 0–1 would look right and be wrong: the tank
+reaches 9 m while the ramp saturates at 6, so a half-full tank would show band 6 while the
+track it is about to draw shows band 9.
+
+**What may be coloured is not the same in both modes, and that is the point.**
+
+| | Ballast | Depth | Pressure |
+|---|---|---|---|
+| **SIM** | ballast input | ballast input | ballast input |
+| **REAL** | ballast level | the depth sensor, or nothing | the pressure sensor, or nothing |
+
+In SIM one made-up number drives everything, so everything wears one colour and dragging
+the slider moves the whole console together. On a **real dive** depth and pressure are
+*measured*, and are coloured by their own sensor or not at all. They are never tinted from
+ballast: a sub descending on a full tank with a dead depth sensor would then show a
+deepening colour it never earned, and the one symptom that gives the failure away would be
+the symptom we had painted over. **An unchanging cyan number beside a purple tank is the
+alarm.**
+
+Absence is shown as absence — the readout returns to its default look rather than taking
+a "neutral" band, and its tooltip says the number is not tracking a sensor. A reading
+older than `staleTimeoutMs` is dropped rather than believed, for the same reason the
+camera drops a stale AP sighting (§18).
+
+This needs telemetry to say **which** fields actually arrived: a frame with no `depth`
+leaves `state.depth` holding its last value, which on a sensorless sub is a number from
+the simulator. `net.js` stamps `state.depthAt` / `state.pressureAt` only when the field is
+present, and those stamps are what the colours are gated on.
 
 ---
 

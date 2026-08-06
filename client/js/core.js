@@ -148,6 +148,11 @@ const state = {
   camAp:null,                   // launcher /__wifi: can THIS handheld see the camera's AP
   piProbe:null,                 // /api/healthz: does the sub ANSWER, control link aside
   net:null,                     // launcher /__net: this handheld's own radios and cables
+  // WHEN each measured quantity last actually arrived. Not when telemetry arrived -
+  // a frame with no `depth` field leaves state.depth holding its last value, which on
+  // a sub with no depth sensor is a number from the simulator. These stamps are what
+  // let the readouts colour themselves from a sensor or not at all.
+  depthAt:0, pressureAt:0,
   source:'keyboard', /* keyboard | gamepad */
   gamepadIndex:null,
   keys:new Set(), padPrev:{},

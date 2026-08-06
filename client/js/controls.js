@@ -19,10 +19,16 @@ function bindVerticalControl(opts){
     const apply=(e)=>{ const r=track.getBoundingClientRect();
       const t=e.touches&&e.touches[0];
       const x=t?t.clientX:e.clientX, y=t?t.clientY:e.clientY;
+      // The TRAVEL is not always the whole element. The ballast syringe has a solid
+      // flange across its top, and mapping to the box would put the first few percent
+      // of water behind it — you would drag, the number would move, and nothing would
+      // appear. Map to the visible barrel instead, so the liquid lands under the finger.
+      const inset = opts.insetTop ? (opts.insetTop(track)||0) : 0;
+      const top = r.top + inset, height = Math.max(1, r.height - inset);
       let v;
       if(opts.axis==='x')          v=(x-r.left)/r.width;          // left=0, right=1
-      else if(opts.axis==='y-inv') v=(y-r.top)/r.height;          // top=0, bottom=1 (water: down = more)
-      else                         v=1-((y-r.top)/r.height);      // bottom=0, top=1 (default)
+      else if(opts.axis==='y-inv') v=(y-top)/height;              // top=0, bottom=1 (water: down = more)
+      else                         v=1-((y-top)/height);          // bottom=0, top=1 (default)
       set(v); };
     const down=(e)=>{ dragging=true; apply(e); vibrate(6); e.preventDefault(); };
     const move=(e)=>{ if(dragging){ apply(e); e.preventDefault(); } };
@@ -85,6 +91,8 @@ function bindOnScreen(){
   // Ballast: INVERTED (water syringe) — top=surface(0), drag DOWN = more water. The
   // "dive" arrow (btn-ballast-fill) increases; "surface" (btn-ballast-empty) decreases.
   bindVerticalControl({ track:$('ballast-track'), axis:'y-inv', upBtn:$('btn-ballast-fill'), downBtn:$('btn-ballast-empty'),
+    // the syringe's flange is solid; the water starts under it
+    insetTop:(el)=>parseFloat(getComputedStyle(el).getPropertyValue('--syr-flange'))||0,
     get:()=>state.ballastTargetRaw, set:v=>{ state.ballastTargetRaw=clamp(v,0,1); }, step:CONFIG.ballastStep, rampPerS:CONFIG.ballastRampPerS });
   bindSurfaceHold();       // top-bar SURFACE emergency (hold to fire)
   $('btn-config').addEventListener('click', openMapper);   // CONFIG (rail) opens the config / input-map menu
