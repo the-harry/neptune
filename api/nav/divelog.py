@@ -79,12 +79,32 @@ class DiveLog:
                 pass
             self._fh = None
 
-    def add(self, ns: NavState) -> None:
+    def add(self, ns: NavState, raw=None) -> None:
+        """Record one sample. `raw` is the SensorSample behind it, when there is one.
+
+        The nav STATE alone (where we think we are) cannot calibrate the model that
+        produced it — that is circular. The raw control channels are what make a dive
+        log analysable afterwards: throttle next to distance gives speed per unit
+        throttle, steer next to heading gives turn rate, ballast next to depth gives
+        the depth model. See nav/calibrate.py, which reads exactly these fields.
+        """
         smp = {
             "t": ns.t, "x": ns.x_m, "y": ns.y_m, "depth_m": ns.depth_m,
             "heading_deg": ns.heading_deg, "snapped": ns.snapped,
             "confidence": ns.confidence,
         }
+        if raw is not None:
+            smp.update({
+                "throttle": getattr(raw, "throttle", 0.0),
+                "steer": getattr(raw, "steer", 0.0),
+                "left": getattr(raw, "left", 0.0),
+                "right": getattr(raw, "right", 0.0),
+                "ballast": getattr(raw, "ballast_level", 0.0),
+                "ballast_tgt": getattr(raw, "ballast_target", 0.0),
+                "psi": getattr(raw, "pressure_psi", 0.0),
+                "armed": bool(getattr(raw, "armed", False)),
+                "mag_cal": getattr(raw, "mag_cal", 3),
+            })
         self._samples.append(smp)
         self._write({"type": "s", **smp})
 

@@ -100,6 +100,38 @@ while the product was right. They are the reason this file exists.
 - **`MAP.hdg` is driven every tick** in SIM, so assigning it and expecting it to stick
   does not work; drive it through heading instead.
 
+## The visual layer
+
+Every suite is photographed at the moment it finishes, over CDP (`cdp.py` — a ~130-line
+WebSocket client, because Chrome's `--screenshot` flag fires on load and then *exits*,
+so it can never capture a state a suite drove the page into). Two shots per suite:
+
+| File | Purpose |
+|---|---|
+| `screenshots/<suite>.png` | the real thing, kept to be **looked at** |
+| `screenshots/<suite>.layout.png` | the same page with the live map and video hidden — the only version stable enough to **compare** |
+
+`baseline/*.layout.png` is committed; `screenshots/` is gitignored. `--bless` accepts the
+current shots as the new baseline, `--shot-noise` prints the drift percentage even when
+it passes.
+
+**The tolerance is measured, not guessed.** With the live surfaces hidden the residue is
+0.000–0.016% (a few digits of telemetry and antialiasing), so the threshold is **0.1%**,
+about six times the floor. This matters more than it sounds: at the 2% I first reached
+for, the exit button growing from 28 px to 44 px went completely unnoticed — it is only
+0.13% of the screen. At 0.1% the same change reports **0.91% drift** while all 24 numeric
+checks still pass, which is precisely the gap a picture is here to cover.
+
+**`map-zoom-and-rov` is recorded but never compared.** Its picture is *about* the map:
+satellite tiles arrive from the network and the vehicle moves underneath them, so two
+identical runs differed by 36% and 66%. A check that cannot be stable should not pretend
+to be — so one suite owns the map and tolerates it, and every other suite is photographed
+without it.
+
+Drift **reports** by default and only fails the run with `--strict-visual`. The numeric
+checks are the gate; the picture is the thing you look at when they all pass and something
+still feels wrong.
+
 ## Requirements
 
 Chrome or Edge. `run.py` looks in the usual install locations, then `NEPTUNE_CHROME`,

@@ -16,6 +16,18 @@ class SensorSample(BaseModel):
     mag_cal: int = 3                  # IMU mag calibration status 0..3 (§5.6); <2 = suspect
     pitch_deg: float = 0.0
     roll_deg: float = 0.0
+    # ---- what was COMMANDED, alongside what happened ------------------------
+    # Without these a dive log cannot calibrate anything. Position over time tells
+    # you the sub moved; only throttle-next-to-distance tells you how fast it moves
+    # PER UNIT of throttle, which is the number the whole dead-reckoning rests on.
+    # Logged from day one so the first dive with real sensors is already usable.
+    steer: float = 0.0                # -1..1 commanded (turn rate calibration)
+    left: float = 0.0                 # actual thruster output -1..1
+    right: float = 0.0
+    ballast_level: float = 0.0        # 0..1 actual
+    ballast_target: float = 0.0       # 0..1 commanded
+    pressure_psi: float = 0.0         # raw, before the depth conversion
+    armed: bool = False               # a disarmed sample proves nothing about speed
 
 
 class Origin(BaseModel):

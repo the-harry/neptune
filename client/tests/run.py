@@ -38,6 +38,24 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CLIENT = HERE.parent
 SUITES = HERE / "suites"
+SHOTS = HERE / "screenshots"      # what this run saw (gitignored)
+BASELINE = HERE / "baseline"      # what it is supposed to look like (committed)
+
+# Fraction of pixels that may differ before a layout is called a regression.
+#
+# MEASURED, not guessed. With the live surfaces hidden the layout portrait is almost
+# deterministic; the residue is a few digits of live telemetry (heading, tether) and
+# antialiasing. Measure the floor with --shot-noise and set this just above it. Set it
+# "safely high" instead and the check stops working: at 2% a 28 px button growing to
+# 44 px went completely unnoticed, because it is only 0.13% of the screen.
+SHOT_TOLERANCE = 0.001   # measured floor is 0.000-0.016%; this is ~6x it
+VERBOSE_SHOTS = False
+
+# The one suite whose picture is ABOUT the map. Satellite tiles arrive from the network
+# and the vehicle is moving underneath them, so its portrait is RECORDED and never
+# compared - a check that cannot be stable should not pretend to be. Every other suite
+# is photographed with the map hidden, which is what makes them comparable at all.
+NO_COMPARE = {"map-zoom-and-rov"}
 
 # Chrome is the only browser the ROG Ally actually runs this on, so it is the one
 # the tests use. Edge works too — same engine.
@@ -154,8 +172,10 @@ def make_handler(suite_path: Path, result_box: dict, done: threading.Event):
     return H
 
 
-def run_suite(suite: Path, chrome: str, timeout: float, headed: bool, keep: bool):
+def run_suite(suite: Path, chrome: str, timeout: float, headed: bool, keep: bool,
+              shots: bool = True):
     port = free_port()
+    cdp_port = free_port()
     result_box: dict = {}
     done = threading.Event()
     srv = Server(("127.0.0.1", port), make_handler(suite, result_box, done))
@@ -164,13 +184,32 @@ def run_suite(suite: Path, chrome: str, timeout: float, headed: bool, keep: bool
     profile = tempfile.mkdtemp(prefix="neptune-test-")
     args = [chrome, f"--user-data-dir={profile}", "--no-first-run",
             "--no-default-browser-check", "--disable-background-networking",
+            f"--remote-debugging-port={cdp_port}",
             "--window-size=1280,800", f"http://127.0.0.1:{port}/index.html"]
     if not headed:
         args[1:1] = ["--headless=new", "--disable-gpu"]
     proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    shot_err = None
     try:
         finished = done.wait(timeout=timeout)
+        # Photograph the page in the state the suite left it — before anything is torn
+        # down. A numeric check says a rule held; the picture is the only thing that
+        # catches "technically correct and visibly wrong".
+        if shots:
+            try:
+                from cdp import capture_png
+                SHOTS.mkdir(parents=True, exist_ok=True)
+                # TWO shots, on purpose:
+                #   <suite>.png         the real thing, kept to be LOOKED at
+                #   <suite>.layout.png  the same page with the live map and video
+                #                       hidden — the only version stable enough to
+                #                       compare, and where layout regressions show
+                (SHOTS / f"{suite.stem}.png").write_bytes(capture_png(cdp_port))
+                (SHOTS / f"{suite.stem}.layout.png").write_bytes(
+                    capture_png(cdp_port, hide_live=True))
+            except Exception as exc:   # noqa: BLE001 — never fail a suite over its portrait
+                shot_err = str(exc)
     finally:
         proc.terminate()
         try:
@@ -182,13 +221,45 @@ def run_suite(suite: Path, chrome: str, timeout: float, headed: bool, keep: bool
             shutil.rmtree(profile, ignore_errors=True)
 
     if not finished:
-        return None, f"timed out after {timeout:.0f}s - the suite never reported back"
+        return None, f"timed out after {timeout:.0f}s - the suite never reported back", shot_err
     raw = result_box.get("raw", "")
     try:
-        return json.loads(raw), None
+        return json.loads(raw), None, shot_err
     except json.JSONDecodeError:
         # A suite that throws posts its stack instead of JSON. That IS the result.
-        return None, raw.strip()[:800]
+        return None, raw.strip()[:800], shot_err
+
+
+def check_shot(name: str, bless: bool):
+    """Compare this run's screenshot with the committed baseline.
+
+    Returns (note or None, drifted). A missing baseline is NOT a failure — the
+    first run of a new suite has nothing to compare against, and inventing a
+    verdict there would just teach everyone to ignore the output.
+    """
+    cur = SHOTS / f"{name}.layout.png"
+    base = BASELINE / f"{name}.layout.png"
+    if not cur.exists():
+        return None, False
+    if name in NO_COMPARE and not bless:
+        return "map suite - portrait recorded, not compared (imagery moves)", False
+    if bless:
+        BASELINE.mkdir(parents=True, exist_ok=True)
+        base.write_bytes(cur.read_bytes())
+        return f"baseline updated ({cur.stat().st_size // 1024} KB)", False
+    if not base.exists():
+        return f"no baseline yet - run with --bless to accept {cur.name}", False
+    try:
+        from png import diff
+        frac, note = diff(base.read_bytes(), cur.read_bytes())
+    except Exception as exc:   # noqa: BLE001
+        return f"screenshot compare failed: {exc}", False
+    if frac is None:
+        return f"VISUAL: cannot compare - {note}", True
+    if frac > SHOT_TOLERANCE:
+        return (f"VISUAL DRIFT {frac*100:.2f}% of pixels ({note}, tolerance "
+                f"{SHOT_TOLERANCE*100:.2f}%) - see {cur}, --bless if intended"), True
+    return (f"visual ok ({frac*100:.3f}% differ)" if VERBOSE_SHOTS else None), False
 
 
 def main():
@@ -200,6 +271,13 @@ def main():
     ap.add_argument("--keep", action="store_true", help="keep the throwaway Chrome profiles")
     ap.add_argument("--list", action="store_true", help="list the suites and exit")
     ap.add_argument("-v", "--verbose", action="store_true", help="print every check, not just failures")
+    ap.add_argument("--no-shots", action="store_true", help="skip the screenshots")
+    ap.add_argument("--bless", action="store_true",
+                    help="accept the current screenshots as the new baseline")
+    ap.add_argument("--shot-noise", action="store_true",
+                    help="print the drift percentage even when it passes (to set the tolerance)")
+    ap.add_argument("--strict-visual", action="store_true",
+                    help="let visual drift fail the run (off by default: see check_shot)")
     args = ap.parse_args()
 
     all_suites = sorted(SUITES.glob("*.js"))
@@ -216,6 +294,9 @@ def main():
     if not wanted:
         sys.exit(f"no suites found in {SUITES}")
 
+    global VERBOSE_SHOTS
+    VERBOSE_SHOTS = args.shot_noise
+
     chrome = find_chrome(args.chrome)
     print(f"chrome : {chrome}")
     print(f"client : {CLIENT}")
@@ -225,8 +306,10 @@ def main():
     broken: list[str] = []
     t0 = time.time()
 
+    shot_notes: list[str] = []
     for suite in wanted:
-        checks, err = run_suite(suite, chrome, args.timeout, args.headed, args.keep)
+        checks, err, shot_err = run_suite(suite, chrome, args.timeout, args.headed,
+                                          args.keep, shots=not args.no_shots)
         if checks is None:
             print(f"  {suite.stem:<24} ERROR")
             for line in (err or "unknown").splitlines()[:6]:
@@ -245,12 +328,33 @@ def main():
         for c in bad:
             print(f"      FAIL  {c['name']}")
             print(f"            {c.get('detail','')}")
+        if not args.no_shots:
+            note, drifted = check_shot(suite.stem, args.bless)
+            if note:
+                print(f"      {note}")
+                shot_notes.append(f"{suite.stem}: {note}")
+            # Drift REPORTS by default and only fails with --strict-visual. The
+            # dashboard is a live instrument photographed mid-flight: the heading, the
+            # tether reading and the satellite imagery (which needs internet) all move
+            # between runs. A gate that cries wolf on those gets muted inside a week,
+            # and then it is protecting nothing at all. The picture is here to be
+            # LOOKED at; the numeric checks are the gate.
+            if drifted and args.strict_visual:
+                failed += 1
+        if shot_err:
+            print(f"      (no screenshot: {shot_err})")
 
     dt = time.time() - t0
     print(f"\n{total - (failed if not broken else failed - len(broken))}/{total} checks passed "
           f"in {dt:.0f}s across {len(wanted)} suites")
     if broken:
         print(f"suites that did not report: {', '.join(broken)}")
+    if shot_notes:
+        print("\nvisual:")
+        for n in shot_notes:
+            print(f"  {n}")
+    if not args.no_shots:
+        print(f"screenshots: {SHOTS}")
     return 1 if failed else 0
 
 

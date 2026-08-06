@@ -2,6 +2,8 @@
 
   python -m nav.cli sim                       # run the simulator through DR, print+log a track
   python -m nav.cli speed-cal --distance 20 --pairs 0.25:36,0.5:19,0.75:13,1.0:10 --id hullA
+  python -m nav.cli calibrate data/dives/dive-*.jsonl [--ground-truth 20]
+  python -m nav.cli calibrate --selftest
   python -m nav.cli mag-cal   [--base http://127.0.0.1:8000]   # guide IMU calibration
   python -m nav.cli state     [--base ...]
   python -m nav.cli readiness [--base ...]
@@ -96,6 +98,10 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="nav.cli")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("sim")
+    cal = sub.add_parser("calibrate", help="derive model constants from a real dive log")
+    cal.add_argument("dive", nargs="?")
+    cal.add_argument("--ground-truth", type=float)
+    cal.add_argument("--selftest", action="store_true")
     sc = sub.add_parser("speed-cal")
     sc.add_argument("--distance", type=float, required=True, help="measured run length in metres")
     sc.add_argument("--pairs", required=True, help="throttle:seconds,throttle:seconds,…")
@@ -106,6 +112,14 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
 
     if args.cmd == "sim":        return _sim()
+    if args.cmd == "calibrate":
+        from .calibrate import main as _cal
+        argv2 = []
+        if args.selftest: argv2.append("--selftest")
+        else:
+            argv2.append(args.dive or "")
+            if args.ground_truth is not None: argv2 += ["--ground-truth", str(args.ground_truth)]
+        return _cal(argv2)
     if args.cmd == "speed-cal":  return _speed_cal(args)
     if args.cmd == "mag-cal":    return _mag_cal(args)
     if args.cmd == "state":      return _get(args, "/api/nav/state")

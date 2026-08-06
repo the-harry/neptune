@@ -116,9 +116,18 @@ class VehicleSensorSource(SensorSource):
         # integrating commanded speed over time is a safe over-estimate: it can only
         # loosen the clamp, never fake precision the vehicle does not have.
         self._payout += abs(throttle) * dt * 1.2
-        return SensorSample(t=round(self._t, 3), heading_deg=round(heading, 2),
-                            depth_m=round(depth, 3), throttle=round(throttle, 3),
-                            encoder_m=round(self._payout, 3), mag_cal=3)
+        return SensorSample(
+            t=round(self._t, 3), heading_deg=round(heading, 2),
+            depth_m=round(depth, 3), throttle=round(throttle, 3),
+            encoder_m=round(self._payout, 3), mag_cal=3,
+            # The control channels ride along so the dive log can be calibrated
+            # against later (see nav.calibrate). They cost nothing to carry.
+            steer=round(float(getattr(rov, "steer", 0.0)), 3),
+            left=round(left, 3), right=round(right, 3),
+            ballast_level=round(float(hw.get_ballast_level()), 3),
+            ballast_target=round(float(getattr(rov, "ballast_target", 0.0)), 3),
+            pressure_psi=round(pressure, 2),
+            armed=bool(getattr(rov, "armed", False)))
 
     def reset(self) -> None:
         self._t = 0.0

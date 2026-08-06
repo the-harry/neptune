@@ -28,3 +28,7 @@ client/launch/bin/
 # OS noise
 Thumbs.db
 .DS_Store
+
+# Test screenshots: captured every run, and a live instrument never photographs
+# identically twice. The BASELINE is committed; what a run saw is not.
+client/tests/screenshots/

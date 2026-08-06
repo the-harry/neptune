@@ -109,7 +109,7 @@ class NavService:
                 ns = self.dr.update(s)
                 self.last_state = ns
                 if self.dive is not None:
-                    self.dive.add(ns)
+                    self.dive.add(ns, s)   # `s` = the raw sample: calibration needs it
                 if i % bcast_every == 0 and self._subs:               # decouple redraw from DR rate (§7.5)
                     await self._broadcast(json.dumps({"type": "nav", **ns.model_dump()}))
             i += 1
