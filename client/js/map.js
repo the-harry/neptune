@@ -786,13 +786,17 @@ const DEPTH_RAMP = (function(){
   for(let i=0;i<DEPTH_STEPS;i++){
     const f=i/(DEPTH_STEPS-1);
     if(oklch){
-      const L = 0.94 - 0.52*f;            // near-white at the surface → dark at the bottom
-      const C = 0.13 + 0.03*Math.sin(Math.PI*f);   // keep the mid-bands from going muddy
-      const H = 95 + (265-95)*f;          // yellow → blue
+      // ORANGE at the surface → PURPLE at the bottom. A 260° sweep instead of 170°:
+      // the extra hue travel is what buys separable neighbours, and both ends are now
+      // named colours nobody has to squint at. Lightness still falls the whole way, so
+      // the ramp reads as depth and not merely as a rainbow.
+      const L = 0.84 - 0.44*f;            // light orange → dark purple
+      const C = 0.15 - 0.02*f;            // ease off slightly so the deep end is not garish
+      const H = 60 + (320-60)*f;          // orange → yellow → green → cyan → blue → purple
       out.push('oklch('+L.toFixed(3)+' '+C.toFixed(3)+' '+H.toFixed(1)+')');
     } else {
-      // Fallback for anything without oklch: still generated, still monotonic.
-      out.push('hsl('+(52+(255-52)*f).toFixed(0)+','+(92-22*f).toFixed(0)+'%,'+(76-46*f).toFixed(0)+'%)');
+      // Fallback for anything without oklch: same journey in HSL, still generated.
+      out.push('hsl('+(30+(290-30)*f).toFixed(0)+','+(90-15*f).toFixed(0)+'%,'+(68-40*f).toFixed(0)+'%)');
     }
   }
   return out;

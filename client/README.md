@@ -41,6 +41,19 @@ checks backend availability for a dependency it doesn't have.
   because they genuinely fail one at a time — **NET** (internet), **PI** (ROV control
   link), **VIDEO** (go2rtc feed), **CAM** (WOLFANG control plane), **VEH** (vehicle).
 
+  Four of them have a glyph in the top-left status row, in this order:
+
+  | | Glyph | Subsystem | Green / amber / red |
+  |---|---|---|---|
+  | 1 | signal arcs | **Internet** | online / — / offline |
+  | 2 | chain link | **ROV link** — the tether to the Pi | online / connecting / offline |
+  | 3 | eye | **Video** | live feed / connecting / blind |
+  | 4 | submarine | **Vehicle** | connected / — / simulated (pulsing on a leak) |
+
+  The link glyph was a server-rack drawing that nobody could read on a 18 px icon; a chain
+  link is the same idea in a shape that survives the size. `CAM` no longer has its own
+  glyph — the REC button's colour carries whether a camera is present.
+
   Each control declares what it needs in markup (`data-needs="link"`, `"cam"`, …) and
   **only** the controls owned by a down subsystem are greyed. Losing the ROV link no
   longer disables the camera buttons, and nothing disables the map, radar, search,
@@ -365,11 +378,14 @@ beyond `originMoveM` you are somewhere else entirely, which still gets the expli
 
 The original ramp swept one hue into another at matching lightness, so about four steps
 were separable and the rest read as "some sort of green". Depth is quantised into
-**12 bands generated in OKLCH** — evenly spaced HSL is *not* evenly spaced to the eye
-(equal hue steps crawl through the yellows and sprint through the blues), which is what
-left a wide flat teal at the deep end when the ramp was hand-picked. Oklch lightness and
-hue are perceptually uniform, so equal numeric steps really do look equal: measured in
-Oklab the 11 steps span 0.050–0.065, a ratio of 1.30.
+**12 bands generated in OKLCH**, running **orange at the surface → purple at the bottom**.
+Evenly spaced HSL is *not* evenly spaced to the eye (equal hue steps crawl through the
+yellows and sprint through the blues), which is what left a wide flat teal at the deep end
+when the ramp was hand-picked. Oklch lightness and hue are perceptually uniform, so equal
+numeric steps really do look equal: measured in Oklab the 11 steps span 0.048–0.072, a
+ratio of 1.49 across a **258° hue sweep** — the extra travel is what buys separable
+neighbours, and both ends are now colours with names rather than shades of the same thing.
+Lightness still falls the whole way, so it reads as depth and not merely as a rainbow.
 
 Twelve, not twenty — twenty was an arbitrary number and past the point where the eye holds
 the steps apart. A dozen leaves each band clearly its own colour and keeps the key short.
