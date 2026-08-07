@@ -102,6 +102,11 @@ Dead reckoning, snapping, dive logs, offline areas, the satellite tile downloade
 - API (mounted in the main app) · CLI
 - Tested (no water needed) · Pi notes
 
+### 📐 [`docs/maths.md`](docs/maths.md) — every piece of maths in the nav stack, explained twice
+A plain‑language story first (no symbols, skippable equations), the exact implemented
+formulas after — geometry, dead reckoning, the tether bound, snapping, the speed table,
+the simulator's deliberate lies, calibration, the filters, snag, confidence, depth.
+
 ### 🎥 [`api/camera/README.md`](api/camera/README.md) — WOLFANG camera integration
 The reverse‑engineered CGI control plane and the go2rtc video bridge.
 - How it's wired

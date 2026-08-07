@@ -4,6 +4,10 @@ Position from **heading + a speed model, integrated once** (never double-integra
 accel — spec §2.2). **Depth is measured, never estimated** (§2.4). Error is *linear*
 in distance travelled (~5–15%). Mounts into the same `:8000` FastAPI app.
 
+📐 **Every number below is explained twice in [`docs/maths.md`](../../docs/maths.md)** — a
+plain‑language story first, then the exact equations as implemented, each with a pointer
+back to the function here.
+
 ```
 nav/
 ├── config.py         # tunables (rates, thresholds, dirs, pmtiles), env-overridable
