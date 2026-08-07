@@ -34,10 +34,53 @@ function frame(ts){
     state.mode='stale';
     view=viewFromState(false); view.stale=true;
   } else {
+    // THE HANDOVER HAS TO BE VISIBLE, AND IN THIS ONE BRANCH IT WAS NOT.
+    //
+    // Every other route into the simulator announces itself through the status row: no
+    // host configured, socket closed, socket connecting — the ROV glyph goes to a red
+    // robot or an amber plug and the operator can see that nothing is on the end of the
+    // cable. This route does not. The socket is OPEN, so STATUS.link stays 'online' and
+    // the row keeps showing the green submarine and the words "connected to the sub"
+    // while every gauge underneath has quietly been handed to the local model.
+    //
+    // That is the worst version of the failure precisely because it is the most
+    // convincing one: the numbers do not freeze and they do not dash out, they keep
+    // moving plausibly on the operator's own throttle. Depth follows the ballast, the
+    // heading follows the stick, the pack sags — a complete, responsive, entirely
+    // invented dive, over a hull that stopped answering seconds ago and may be flooding.
+    //
+    // So the view carries the fact and the renderers show it (a chip on the alert rail
+    // and a badge across the top, render.js). Deliberately NOT conditioned on
+    // state.realTel: a Pi whose socket comes up and never sends a frame tells the same
+    // lie from boot, having never been a real vehicle on this console at all.
+    // ...but NOT during the ordinary gap between a socket opening and its first frame.
+    // A healthy vehicle spends a moment there on EVERY connect, and firing a red
+    // "SIMULATED" badge each time would teach the operator that the badge means
+    // "connecting", which is exactly the reflex that makes it useless when it means
+    // what it says. A socket that has been open longer than that grace and still has
+    // nothing to show IS lying, whether it ever spoke or not.
+    const openedFor = state.wsOpenAt ? (now - state.wsOpenAt) : 0;
+    const simOnOpenLink = linkAlive && openedFor > (CONFIG.simTakeoverGraceMs || 4000);
     if(state.mode!=='sim' && state.realTel) LOG.state('link gone — handing back to the simulator');
+    // Said once, on the edge. `age` is only a duration if a frame has ever arrived —
+    // with realTelAt still 0 it is milliseconds since the epoch, which would put "no
+    // telemetry for 1785412345.6 s" in the log of a socket that has simply never spoken.
+    if(simOnOpenLink && !state._simTakeover)
+      LOG.warn('SIMULATOR HAS THE GAUGES while the control socket is still OPEN - '
+             + (state.realTelAt ? ('no telemetry for ' + (age/1000).toFixed(1) + ' s')
+                                : 'this socket has never sent a telemetry frame')
+             + '. Every reading on screen is modelled from here until one arrives.');
+    state._simTakeover = simOnOpenLink;
     state.mode='sim';
     simulate(dt);
     view=viewFromState(true);
+    view.simTakeover = simOnOpenLink;
+  }
+  // Cleared on every path that is NOT that branch, so the chip cannot outlive the
+  // condition it describes — including the one where telemetry comes back.
+  if(state.mode!=='sim' || !view.simTakeover){
+    if(state._simTakeover) LOG.state('telemetry is back — the simulator no longer has the gauges');
+    state._simTakeover = false;
   }
   // In SIM the badge shows; in REAL-but-mock also show it.
   if(view.sim && state.mode!=='stale') state.mode='sim';

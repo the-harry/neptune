@@ -136,9 +136,20 @@ class WS:
 # Surfaces that are alive by nature and will never photograph the same way twice:
 # satellite tiles arrive from the network asynchronously, and the vehicle is moving.
 # Hidden ONLY for the layout portrait, never for the record shot.
+#
+# The second rule freezes every animation and transition. The console pulses things on
+# purpose — a FLOOD hull, a crit alert chip, a blinking amber glyph — and a pulse is a
+# different colour in every frame, so a portrait containing one is not reproducible.
+# Measured: ballast-syringe drifted 0.006%-0.24% between identical runs with no code
+# change at all, against a 0.10% tolerance. That is a gate that fails at random, and a
+# gate that fails at random is one people learn to re-run until it passes. Freezing is
+# the honest fix; raising the tolerance past the noise would have blinded the check to
+# the very layout changes it exists to catch.
 _HIDE_LIVE = ("var s=document.createElement('style');"
               "s.id='__test_layout';"
-              "s.textContent='#map-canvas,#maplibre-map,#video-layer{visibility:hidden!important}';"
+              "s.textContent='#map-canvas,#maplibre-map,#video-layer{visibility:hidden!important}"
+              "*,*::before,*::after{animation:none!important;transition:none!important;"
+              "animation-play-state:paused!important}';"
               "document.head.appendChild(s); true")
 
 

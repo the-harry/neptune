@@ -109,7 +109,19 @@ function originSearch(q){
    Mirroring to the Pi is best-effort and secondary (the Pi needs it for dead
    reckoning) — its absence never blocks setting or using the origin. */
 async function setOrigin(o){
-  o.heading_deg = Math.round((typeof MAP!=='undefined'?MAP.hdg:state.heading)||0);   // heading0 from the sub's IMU (§2)
+  // heading0 from the sub's IMU (§2) — or NOTHING, if nothing measured one.
+  //
+  // This used to read `Math.round((MAP.hdg || state.heading) || 0)`, which manufactured
+  // a bearing twice over. `|| 0` turned a dead compass into due north; and once map.js
+  // learned to HOLD the last angle rather than let `-null` become 0, MAP.hdg went from
+  // null to a stale-but-plausible number, so the same line began posting a bearing the
+  // sub had stopped measuring minutes earlier — as if it were current. The Pi wrote it
+  // verbatim into the dive journal header, permanently, for a dive where nothing
+  // pointed anywhere. Only a LIVE reading counts, and there being none is recordable.
+  const live = (typeof MAP !== 'undefined' && MAP.hdgLive && typeof MAP.hdg === 'number')
+             ? MAP.hdg
+             : (typeof state.heading === 'number' ? state.heading : null);
+  o.heading_deg = (live === null) ? null : Math.round(live);
   o.t = o.t || Date.now();
   const msg=(t)=>{ const el=$('o-msg'); if(el) el.textContent=t; };
   // 1) client accuracy gate (no backend involved)

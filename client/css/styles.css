@@ -639,6 +639,21 @@ body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
 #stale-badge.show{display:block}
 #stale-badge #stale-age{opacity:.8;font-weight:600}
 
+/* SIMULATED ON AN OPEN LINK. Same family as STALE DATA on purpose — both answer "where
+   did these numbers come from" — but RED, not amber, and it pulses: the stale badge is
+   about data that is a little old, this is about data that is not the vehicle's at all
+   while the status row is still showing a green submarine. Sits just under the stale
+   badge's slot so the two never overlap if they ever coincide. */
+#sim-badge{top:76px;left:calc(50% - 55px);transform:translateX(-50%);display:none;
+  font-family:var(--font-sans);font-size:12px;font-weight:800;letter-spacing:.12em;padding:6px 14px;border-radius:.4rem;
+  color:var(--error);border:1.5px solid var(--error);background:color-mix(in srgb,var(--error) 16%,rgba(12,1,24,.92));
+  pointer-events:none;animation:simtakeover 1.1s ease-in-out infinite}
+#sim-badge.show{display:block}
+body.sim-takeover #stale-badge{top:116px}
+@keyframes simtakeover{
+  0%,100%{box-shadow:0 0 6px rgba(255,92,122,.25)}
+  50%    {box-shadow:0 0 22px rgba(255,92,122,.6)}}
+
 /* ---- file:// blocking guard (§1) ---- */
 #file-guard{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;
   background:var(--surface-dim);padding:24px;text-align:center}

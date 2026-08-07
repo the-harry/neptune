@@ -19,13 +19,28 @@
    ============================================================================ */
 const MAP = {
   panel:null, canvas:null, ctx:null, radar:null, dpr:1, ml:null,
-  track:[], x:0, y:0, hdg:0, depth:0, scale:0.6, headingUp:true,
+  // `hdg` IS ALWAYS A NUMBER, and `hdgLive` is what says whether anything is still
+  // measuring it. Those are two facts and they used to be crammed into one field: a
+  // null bearing landed straight in `hdg`, and `-null` is 0, so the heading-up dial
+  // wrote rotate(0.0) — which on this map is the picture for "the sub is pointing due
+  // north". Observed going from rotate(-284.0) to rotate(0.0) the instant the compass
+  // died: the whole world swinging round to a bearing nobody measured, which is the
+  // same visual lie the server spent this round removing.
+  //
+  // So the angle is HELD at the last one a compass actually reported and this flag goes
+  // false, which is exactly what HEADING_FLAGS.dead's tooltip has always promised
+  // ("the radar is still drawn on the LAST angle it reported") and what the broken
+  // amber ring in styles.css (body.heading-dead) is drawn to say. See setMapHeading.
+  track:[], x:0, y:0, hdg:0, hdgLive:true, depth:0, scale:0.6, headingUp:true,
   expanded:false, hasArea:false, hasOrigin:false, origin:null, activeArea:null,
   navWs:null, lastNavAt:0, lastTick:0, _navBits:-1,   // _navBits: last NO-NAV label state
   // What the estimator says about its own output (§5), straight off the nav frame.
   // Held here as well as in `state` so the map can qualify what it draws without
   // asking the control link, which is a different socket that fails separately.
-  confidence:1, snagged:false, gyroOnly:false, magCal:null, rangeM:0, payoutM:0, _hdgFlag:'?',
+  // null, not false: these start at CANNOT-TELL because no nav frame has arrived yet,
+  // and false is navigation's reassuring answer, not its silence.
+  confidence:1, snagged:null, gyroOnly:null, magCal:null, rangeM:0, payoutM:0, _hdgFlag:'?',
+  navReadsVehicle:null, navSimulated:null,   // what the nav frame says it is ABOUT (see connectNavWs)
   me:null,                                   // {lat,lon,acc,t} — the handheld, live (§2)
   viewLat:null, viewLon:null, follow:true,   // geographic view centre (§3); follow = track the sub
   centreline:null,                           // [[lon,lat],…] waterway overlay (§3.5)
@@ -60,6 +75,28 @@ function meColor(){
 }
 
 function navFetch(path, opts){ return fetch((state.httpBase||'') + path, opts); }
+
+/* THE ONLY WAY A BEARING GETS ONTO THIS MAP.
+
+   Every rotation in this file is `-MAP.hdg` or `MAP.hdg*PI/180`, and JavaScript turns
+   both of those into 0 for a null — silently, with no NaN to notice. A single guarded
+   setter is the fix rather than seven guarded readers: a rotation added tomorrow cannot
+   forget, because there is no longer a null in the field to forget about.
+
+   A non-number HOLDS the last angle instead of clearing it. Freezing and blanking were
+   both on the table; holding is what the console already tells the operator it does, in
+   three separate places (core.js HEADING_FLAGS.dead, the #hdg-warning tooltip, and
+   render.js's note beside the heading readout), and a dial that behaves differently from
+   its own explanation is worse than either choice on its own. The picture is then marked
+   rather than trusted — amber broken rings, NO BEARING over the dial, '?' for the
+   number — so a held angle can never be read as a measured one. */
+function setMapHeading(h){
+  if(typeof h === 'number' && isFinite(h)){ MAP.hdg = h; MAP.hdgLive = true; return; }
+  // Deliberately does NOT touch MAP.hdg. Before any compass has ever answered it is
+  // still 0, which is the orientation the map has never been turned from - not a
+  // reading, and flagged as not a reading by everything above.
+  MAP.hdgLive = false;
+}
 
 /* Metres per pixel for whichever view is on screen. The radar never follows the big
    map's zoom - that is the whole point of it being a glance instrument. */
@@ -514,11 +551,37 @@ function updateEmptyState(){
    and "compass?" in the other would read as two different faults. The badge sits
    ABOVE the NO NAV one so the two never collide when both are up, and the North
    indicator — the map's own drawing of the heading — is marked with it. */
+/* THE MAP'S OWN VERSION OF "NO BEARING", for the case the HUD's vocabulary cannot cover.
+
+   The dial does not turn on the number in the top bar: that bearing comes off
+   /ws/control and this rotation comes off /ws/nav, and the estimator can stop carrying
+   a heading (NavState.heading_deg is Optional) while the compass behind the HUD is
+   answering perfectly. setMapHeading then holds the last angle — correctly — and
+   headingFlag() has nothing to say about it, because nothing is wrong with the bearing
+   it describes. Without this the ring would go amber and broken with no words anywhere
+   on screen, and a mark nobody can read is the thing this console keeps promising not
+   to ship. NO BEARING would be the wrong words: there IS one, it is just not this
+   picture's. */
+const MAP_HELD_BEARING = { label:'HELD BEARING', cls:'suspect',
+  title:'HELD BEARING - the navigation feed has stopped carrying a heading, so this map '
+      + 'is no longer being rotated by anything: it is frozen at the last angle it was '
+      + 'given, and it will sit there looking exactly like a sub holding course. The '
+      + 'bearing in the top bar is coming from the compass on the other socket and may '
+      + 'well be fine - it is the PICTURE that has stopped following it. Read direction '
+      + 'off the number, not off this dial, until the badge clears.' };
 function updateHeadingFlag(){
   const f = (typeof headingFlag==='function') ? headingFlag() : '';
-  if(f === MAP._hdgFlag) return;                 // 10 Hz tick: only touch the DOM on a change
-  MAP._hdgFlag = f;
-  const d = (typeof HEADING_FLAGS!=='undefined') ? HEADING_FLAGS[f] : null;
+  // Keyed on the map's own liveness too, or a heading that stops arriving on /ws/nav
+  // while the flag stays '' would never repaint anything.
+  const held = MAP.hdgLive === false;
+  const key = f + (held ? '|held' : '');
+  if(key === MAP._hdgFlag) return;               // 10 Hz tick: only touch the DOM on a change
+  MAP._hdgFlag = key;
+  // The shared table first: when the compass itself is gone both the HUD and the map say
+  // NO BEARING, which is the whole reason that vocabulary is shared. The map-only word
+  // is a fallback for when the HUD has nothing to complain about.
+  const d = ((typeof HEADING_FLAGS!=='undefined') ? HEADING_FLAGS[f] : null)
+         || (held ? MAP_HELD_BEARING : null);
   const el = $('hdg-warning');
   if(el){
     el.textContent = d ? d.label : '';
@@ -573,7 +636,7 @@ function connectNavWs(){
   MAP.navWs=ws;
   ws.onopen=()=>{ _navBackoff=0; };
   ws.onmessage=(ev)=>{ let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
-    if(m.type==='nav'){ MAP.x=m.x_m; MAP.y=m.y_m; MAP.hdg=m.heading_deg; MAP.depth=m.depth_m;
+    if(m.type==='nav'){ MAP.x=m.x_m; MAP.y=m.y_m; setMapHeading(m.heading_deg); MAP.depth=m.depth_m;
       // THE ESTIMATOR'S ACCOUNT OF ITSELF TRAVELS WITH THE POSITION.
       //
       // This frame used to carry four numbers, which meant the map could draw a
@@ -583,14 +646,56 @@ function connectNavWs(){
       // integrating is actually moving the hull. Those belong on screen beside the
       // line they produced, not in a log nobody reads mid-dive.
       //
-      // They land in the SAME state slots telemetry writes, because they are the
-      // same facts about the same vehicle: whichever stream is more recent wins,
-      // and the readouts gate on a live hull either way (viewFromState).
-      if(typeof m.speed_ms==='number') state.speedMs=m.speed_ms;
-      if(typeof m.speed_src==='string') state.speedSrc=m.speed_src;
-      if(typeof m.snagged==='boolean'){ state.snagged=m.snagged; MAP.snagged=m.snagged; }
-      if(typeof m.gyro_only==='boolean'){ state.gyroOnly=m.gyro_only; MAP.gyroOnly=m.gyro_only; }
-      if(typeof m.mag_cal==='number'){ state.magCal=m.mag_cal; MAP.magCal=m.mag_cal; }
+      // THEY LAND IN MAP.* ALWAYS AND IN `state` ALMOST NEVER, and that split is a
+      // correction. They used to be stamped straight into the same `state` slots the
+      // HUD reads, on the theory that "whichever stream is more recent wins" — and the
+      // two streams do not carry the same information, so the more recent one is
+      // systematically the more reassuring one:
+      //
+      //   /ws/control  snagged / gyro_only are TRI-STATE. api/main.py fill_nav_fields
+      //                nulls them the moment navigation cannot speak for this hull, and
+      //                that null is the whole of last round's work.
+      //   /ws/nav      the same fields are plain bools off NavState (api/nav/models.py)
+      //                with `False` defaults, and speed_ms is a float defaulting to 0.0.
+      //                They have no way to say "cannot tell" at all.
+      //
+      // So a nav frame writing into `state` could only ever overwrite a cannot-tell with
+      // "nav looked, and everything is fine" — the exact hole fill_nav_fields exists to
+      // close, reopened on the client at 10 Hz. Robust to BOTH shapes on purpose: if the
+      // server later nulls these on /ws/nav too, the non-number/non-boolean lands as
+      // null below rather than being dropped, because dropping a null leaves the last
+      // reassuring answer standing, which is the same bug wearing a different hat.
+      //
+      // Two gates, and both have to pass before anything reaches `state`:
+      //
+      //   reads_vehicle / simulated — IS THIS FRAME ABOUT THIS HULL? With NAV_SENSORS=sim
+      //     the estimator is fed a scripted path and never looks at the sub; api/main.py
+      //     deliberately keeps those answers OUT of telemetry for that reason, and this
+      //     handler was putting them back on the HUD under mock=false.
+      //   vehicleRecent() — IS ANYTHING BETTER ALREADY SPEAKING? While the console still
+      //     believes a hull's telemetry, the control link is the authority on these and
+      //     the nav socket does not get a vote. Once it does not, viewFromState's own
+      //     `live` gate neutralises them anyway, so this can never resurrect one
+      //     session's estimate into the next.
+      const aboutThisHull = (m.reads_vehicle !== false) && (m.simulated !== true);
+      const telAuthoritative = (typeof vehicleRecent==='function') && vehicleRecent();
+      const toState = aboutThisHull && !telAuthoritative;
+      if(m.reads_vehicle!==undefined) MAP.navReadsVehicle = (m.reads_vehicle===true);
+      if(m.simulated!==undefined)     MAP.navSimulated    = (m.simulated===true);
+      if(m.snagged!==undefined){
+        MAP.snagged = (typeof m.snagged==='boolean') ? m.snagged : null;
+        if(toState) state.snagged = MAP.snagged;
+      }
+      if(m.gyro_only!==undefined){
+        MAP.gyroOnly = (typeof m.gyro_only==='boolean') ? m.gyro_only : null;
+        if(toState) state.gyroOnly = MAP.gyroOnly;
+      }
+      if(m.mag_cal!==undefined){
+        MAP.magCal = (typeof m.mag_cal==='number') ? m.mag_cal : null;
+        if(toState) state.magCal = MAP.magCal;
+      }
+      if(toState && m.speed_ms!==undefined)  state.speedMs  = (typeof m.speed_ms==='number') ? m.speed_ms : null;
+      if(toState && m.speed_src!==undefined) state.speedSrc = (typeof m.speed_src==='string') ? m.speed_src : null;
       if(typeof m.confidence==='number') MAP.confidence=m.confidence;
       if(typeof m.range_m==='number') MAP.rangeM=m.range_m;
       if(typeof m.payout_m==='number') MAP.payoutM=m.payout_m;   // §5.5 an UPPER bound on range, never a position
@@ -763,7 +868,12 @@ function mapTick(){
   // moves on the sub's own navigation output or it stays put — a stationary sub is
   // information, and NO NAV says why (see updateEmptyState).
   if(!MAP.replay && !vehicleLinked()){
-    MAP.hdg=state.heading; const spd=(state.input.throttle||0)*CONFIG.map.subMaxSpeedMs; const h=MAP.hdg*Math.PI/180;
+    // Through the setter, not straight in: state.heading is null on a hull whose compass
+    // died, and the console spends up to simFallbackMs here before it hands back to the
+    // simulator. `MAP.hdg=null` then made `h` 0 and every rotation in this file 0 with
+    // it — the sub swinging to due north as the compass stopped.
+    setMapHeading(state.heading);
+    const spd=(state.input.throttle||0)*CONFIG.map.subMaxSpeedMs; const h=MAP.hdg*Math.PI/180;
     MAP.x+=spd*Math.sin(h)*dt; MAP.y+=spd*Math.cos(h)*dt; MAP.depth=state.depth;
     // The cable is a hard limit and SIM must obey it — a mission the tether cannot
     // reach has to be un-reachable on the bench too, or planning against it is

@@ -24,6 +24,7 @@ function connect(){
   catch(e){ LOG.warn('WebSocket ctor threw', e && e.message); setWsStatus('offline'); scheduleReconnect(); return; }
   state.ws=ws;
   ws.onopen = ()=>{
+    state.wsOpenAt = Date.now();
     LOG.net('OPEN', url);
     setWsStatus('online');
     state.reconnectDelay=CONFIG.reconnect.baseMs;

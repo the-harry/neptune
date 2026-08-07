@@ -63,8 +63,76 @@ def read_dive(path: Path):
     return header, samples
 
 
+def _null_free(run, key):
+    """True when every sample in `run` actually carries a reading for `key`.
+
+    WHY A WHOLE SEGMENT GOES, AND NOT JUST THE NULL SAMPLES IN IT. The journal now
+    writes a measured channel as JSON null the moment its chip stops answering — the
+    MS5837 that drops off the bus at 4.23 m, the BNO085 that browns out under the
+    thrusters — so a run can have a hole punched through the middle of it. Dropping
+    only the null samples and closing the gap would leave a segment that LOOKS
+    contiguous and is not, and both measurements below are computed across a segment's
+    span rather than sample by sample:
+
+      * turn rate is (last heading - first heading) / (last t - first t), and those
+        headings are only comparable because _unwrap walked every step between them.
+        A hole can hide a full rotation, so the rate is not "a bit less certain" across
+        one — it can be wrong by 360/dt deg/s, in either direction.
+      * the depth model asserts the sub SETTLED at a ballast setting. That is a claim
+        about the whole hold, and a hold the sensor was absent for is not one anybody
+        watched settle.
+
+    So the segment is dropped and counted, and report() prints the count. A calibration
+    fitted to the stretches where the instrument happened to be alive, with no mention
+    that the others existed, is the same lie as a substituted zero wearing a better suit.
+    """
+    return all(s.get(key) is not None for s in run)
+
+
+def _column_state(samples, key) -> str:
+    """'absent' | 'silent' | 'partial' | 'complete' for one measured column."""
+    present = [s for s in samples if key in s]
+    if not present:
+        return "absent"                                   # no such column in this log
+    if all(s[key] is None for s in present):
+        return "silent"                                   # there, and never once answered
+    if any(s[key] is None for s in present):
+        return "partial"                                  # answered, then stopped
+    return "complete"
+
+
+def _why_null(samples, key, part, dropped, segment, quantity) -> str:
+    """The refusal sentence for a channel that took every usable segment with it.
+
+    THREE DIFFERENT FAILURES ARRIVE HERE AS THE SAME None AND THEY ARE NOT THE SAME
+    FINDING. A column that was never logged means fly it again on a newer build. A
+    column that is present and null throughout means go and fit the part, or find the
+    connector that was never on. A column that answered and then stopped means the part
+    is fitted, it worked, and something killed it mid-dive — the only one of the three
+    that is an incident. Collapsing them into one sentence sends an operator to do the
+    wrong job, which is the same class of harm as collapsing them into one number.
+    """
+    state = _column_state(samples, key)
+    if state == "absent":
+        return (f"this log has no {key} column at all — it predates that channel, so "
+                f"{quantity} is not derivable from it (the {part} may well have been "
+                f"fitted and fine; nothing here recorded it)")
+    if state == "silent":
+        return (f"the {key} column is present and null on every sample — the {part} never "
+                f"answered once in this dive, so {quantity} is not measurable from it")
+    return (f"the {part} was null inside every {segment} ({dropped} of them) — it answered "
+            f"for part of this dive and then stopped, so {quantity} is not measurable from "
+            f"what is left")
+
+
 def _runs(samples, key, tol=CTRL_TOLERANCE):
-    """Split into segments where `key` is held roughly constant and the sub is armed."""
+    """Split into segments where `key` is held roughly constant and the sub is armed.
+
+    `v is None` already ends a run, and that now covers more than a missing column: the
+    ballast level is null from power-on until the stepper is homed (there is no
+    position sensor, so an unhomed syringe has no position to report), and a run that
+    straddled the homing would otherwise be measured against a level nobody knew.
+    """
     out, cur = [], []
     for s in samples:
         v = s.get(key)
@@ -73,7 +141,12 @@ def _runs(samples, key, tol=CTRL_TOLERANCE):
                 out.append(cur)
             cur = []
             continue
-        if cur and abs(v - cur[0].get(key, 0.0)) > tol:
+        # cur[0][key], not .get(key, 0.0): a sample only enters `cur` after the check
+        # above found its value non-None, so the default could never fire — and a 0.0
+        # standing in for a control input is exactly the kind of silent, plausible
+        # substitution this round is removing everywhere else. Indexing says the
+        # invariant out loud and fails loudly if someone ever breaks it.
+        if cur and abs(v - cur[0][key]) > tol:
             if len(cur) >= MIN_SAMPLES:
                 out.append(cur)
             cur = []
@@ -84,7 +157,15 @@ def _runs(samples, key, tol=CTRL_TOLERANCE):
 
 
 def _unwrap(deg_series):
-    """Heading crossing 360 must not read as a 359 deg/s turn."""
+    """Heading crossing 360 must not read as a 359 deg/s turn.
+
+    EVERY ELEMENT MUST BE A REAL BEARING — callers filter with _null_free() first. A
+    None reaching the subtraction below is what crashed `nav.cli calibrate` on any dive
+    whose compass stopped, and the fix is upstream of here on purpose: this function
+    cannot do anything useful with a gap (it is a running accumulator, so a hole can
+    conceal a wrap), and the only thing it could do locally is substitute a bearing
+    nobody measured.
+    """
     out, prev, acc = [], None, 0.0
     for d in deg_series:
         if prev is not None:
@@ -99,19 +180,36 @@ def _unwrap(deg_series):
 
 
 def turn_rate(samples):
-    """deg/s per unit steer, from MEASURED heading. Independent of the speed model."""
-    pts = []
+    """deg/s per unit steer, from MEASURED heading. Independent of the speed model.
+
+    Segments the compass went silent inside are skipped, not zero-filled: `.get(key,
+    0.0)` defends against a MISSING key and this log carries the key PRESENT AND NULL,
+    so the default never fired and a None reached the subtraction in _unwrap. Filling
+    it would have been worse than the crash — 0.0 is due north, so a dead compass would
+    read as the sub snapping to north and back, i.e. as an enormous measured turn rate,
+    and this tool's whole output is a turn rate.
+    """
+    pts, dropped = [], 0
     for run in _runs(samples, "steer"):
         steer = run[0]["steer"]
         if abs(steer) < 0.1:
             continue
-        hd = _unwrap([s.get("heading_deg", 0.0) for s in run])
+        if not _null_free(run, "heading_deg"):
+            dropped += 1
+            continue
+        hd = _unwrap([s["heading_deg"] for s in run])
         dt = run[-1]["t"] - run[0]["t"]
         if dt <= 0:
             continue
         rate = (hd[-1] - hd[0]) / dt
         pts.append((abs(steer), abs(rate), len(run), dt))
     if not pts:
+        if dropped:
+            # Naming the count matters: "no steady steer segments" would send someone
+            # to fly the dive again, when the dive was flown correctly and the compass
+            # died in the middle of it. Those are different jobs.
+            return None, _why_null(samples, "heading_deg", "compass", dropped,
+                                   "steady steer segment", "turn rate")
         return None, "no steady steer segments with a moving heading"
     # Rate should be proportional to steer, so per-unit is the quantity to average.
     per_unit = [r / s for s, r, _n, _d in pts]
@@ -122,22 +220,69 @@ def turn_rate(samples):
     spread = max(per_unit) - min(per_unit)
     return {"deg_per_s_per_unit_steer": round(mean, 1),
             "segments": len(pts), "spread": round(spread, 1),
+            "dropped_null": dropped,
             "detail": [(round(s, 2), round(r, 1)) for s, r, _n, _d in pts]}, None
 
 
 def depth_model(samples):
-    """Ballast -> depth, from the MEASURED pressure. Also independent of the model."""
-    pts = []
+    """Ballast -> depth, from the MEASURED pressure. Also independent of the model.
+
+    Holds the depth sensor went silent inside are skipped, not zero-filled, for the
+    same reason as turn_rate: the key is present and null, so `.get(key, 0.0)` never
+    fired and the None went straight into max()/min(). And 0.0 m is "at the surface" —
+    the single depth a sub holding ballast at 9 m is not at — so a filled null would
+    have fitted the ballast->depth curve against a descent that never happened.
+    """
+    pts, dropped = [], 0
     for run in _runs(samples, "ballast", tol=0.03):
+        if not _null_free(run, "depth_m"):
+            dropped += 1
+            continue
         # Settled = depth no longer moving; anything else is the transient, not the target.
-        d = [s.get("depth_m", 0.0) for s in run]
+        d = [s["depth_m"] for s in run]
         tail = d[max(0, len(d) - 5):]
         if len(tail) < 3 or (max(tail) - min(tail)) > 0.05:
             continue
         pts.append((run[0]["ballast"], sum(tail) / len(tail), len(run)))
     if not pts:
+        if dropped:
+            return None, _why_null(samples, "depth_m", "pressure sensor", dropped,
+                                   "settled ballast segment", "the depth model")
         return None, "no settled ballast segments (needs the depth to stop changing)"
+    if len(pts) < 2:
+        # ONE POINT IS NOT A CURVE — AND IT IS NOT EVIDENCE OF A DEAD SENSOR EITHER.
+        # This used to fall through to the sentence below, so a dive that settled at
+        # exactly one ballast setting (the ordinary shape of a descend-and-work dive:
+        # home, fill, stay down) was told "no pressure sensor fitted" while the MS5837
+        # sat there reading 9.00 m on every one of 381 samples. The refusal is right;
+        # blaming it on absent hardware was a diagnosis the data never supported, and
+        # it sends someone to fit a part that is already fitted and working.
+        b, d, _n = pts[0]
+        if dropped:
+            # The nulls are the reason there is only one, so they lead. "The dive did
+            # not hold enough settings" would be false here — it held them, and the
+            # sensor was not there for them.
+            return None, (f"only one settled ballast setting SURVIVES (ballast {b:.2f} at "
+                          f"{d:.2f} m) — the other {dropped} were skipped because the depth "
+                          f"was null inside them. The sensor answered for part of this dive "
+                          f"and then stopped, and a ballast->depth curve needs at least two.")
+        return None, (f"only one settled ballast setting in this log (ballast {b:.2f} at "
+                      f"{d:.2f} m) — a ballast->depth curve needs at least two. The sensor "
+                      f"answered; the dive did not hold enough settings to fit against.")
     if max(p[1] for p in pts) - min(p[1] for p in pts) < 0.05:
+        # "NO PRESSURE SENSOR FITTED" IS A DIAGNOSIS, AND IT MUST NOT BE HANDED TO A
+        # DIVE WHOSE SENSOR WAS FITTED AND DIED. Once the null segments are skipped, a
+        # dive that descended can be left holding only its surface segments — every
+        # remaining point at the same depth, which is the exact shape of a hull with no
+        # depth sensor at all. The two readings of that shape send an operator to do
+        # completely different things (go and fit the part, versus go and find out why
+        # the part stopped), so the count decides which sentence is printed.
+        if dropped:
+            return None, (f"the settled ballast segments that survived are all at the same "
+                          f"depth — the {dropped} that would have shown the sub descending "
+                          f"were skipped because the pressure sensor was null inside them. "
+                          f"It answered for part of this dive and then stopped; the depth "
+                          f"model is not measurable from what is left.")
         return None, ("depth never changed with ballast — no pressure sensor fitted. "
                       "The depth model is not measurable from this log.")
     # depth = k * ballast, through the origin: k is maxDepthM at full ballast.
@@ -145,6 +290,7 @@ def depth_model(samples):
     den = sum(b * b for b, _dd, _ in pts)
     k = (num / den) if den > 0 else 0.0
     return {"max_depth_m_at_full_ballast": round(k, 2), "points": len(pts),
+            "dropped_null": dropped,
             "detail": [(round(b, 2), round(dd, 2)) for b, dd, _ in pts]}, None
 
 
@@ -193,6 +339,45 @@ def encoder_speed(samples):
     return {"lut_points": lut, "segments": len(pts)}, None
 
 
+# The MEASURED columns this tool fits against, the name an operator calls the part,
+# and what stops being derivable when it goes quiet. The COMMANDED channels (throttle,
+# steer, ballast_tgt) are deliberately not here: they are what the operator asked for
+# rather than what an instrument answered, they cannot go null, and listing them as
+# gaps would put a log's control record on the same footing as its sensors.
+MEASURED_COLUMNS = (
+    ("heading_deg", "heading", "turn rate"),
+    ("depth_m", "depth", "the ballast->depth model"),
+    ("ballast", "ballast level", "the segments the depth model is measured over"),
+    ("encoder_m", "tether payout", "speed from the encoder"),
+)
+
+
+def _gaps(samples) -> list[str]:
+    """Which measured columns this log could not supply, and from when.
+
+    WHEN a channel stopped is the thing a calibration run most needs and the thing a
+    substituted default most thoroughly erases. It also separates the two questions an
+    operator is actually asking — "is this sensor fitted" (the column is absent) from
+    "did it survive the dive" (the column is there and goes null partway) — which look
+    identical once every gap has been filled with a plausible number.
+    """
+    out: list[str] = []
+    for key, label, cost in MEASURED_COLUMNS:
+        present = [s for s in samples if key in s]
+        if not present:
+            out.append(f"{label}: no {key} column in this log at all — {cost} is not "
+                       f"derivable from it")
+            continue
+        nulls = [s["t"] for s in present if s[key] is None]
+        if not nulls:
+            continue
+        where = ("never answered once" if len(nulls) == len(present)
+                 else f"first at t={nulls[0]:.1f}s")
+        out.append(f"{label}: null in {len(nulls)} of {len(present)} samples "
+                   f"({100.0 * len(nulls) / len(present):.0f}%), {where}")
+    return out
+
+
 def report(path: Path, ground_truth: float | None = None) -> int:
     header, samples = read_dive(path)
     print(f"dive     : {path.name}")
@@ -212,6 +397,19 @@ def report(path: Path, ground_truth: float | None = None) -> int:
         print("\nThe sub was never armed in this log. Thrusters were never driven, so")
         print("speed and turn rate cannot be measured from it.")
 
+    # WHAT THE LOG COULD NOT SUPPLY, before any constant is derived from it. Above the
+    # numbers on purpose: everything below is fitted to whatever stretch the
+    # instruments were alive for, and a constant fitted to a third of a dive is a
+    # different quantity from one fitted to all of it.
+    gaps = _gaps(samples)
+    if gaps:
+        print("\n--- SENSOR GAPS (channels that stopped answering) ---")
+        for g in gaps:
+            print(f"  {g}")
+        print("  Segments containing a null are SKIPPED below, never zero-filled: 0.0 heading")
+        print("  is due north and 0.0 depth is the surface, so a filled null would not merely")
+        print("  weaken a fit, it would move it — and quietly.")
+
     print("\n--- TURN RATE (from measured heading) ---")
     tr, why = turn_rate(samples)
     if tr:
@@ -220,6 +418,10 @@ def report(path: Path, ground_truth: float | None = None) -> int:
         print(f"  -> client CONFIG.sim.headingRatePerS = {tr['deg_per_s_per_unit_steer']}")
         if tr["spread"] > tr["deg_per_s_per_unit_steer"] * 0.5:
             print("  NOTE: the spread is wide — treat this as a first estimate, not a constant.")
+        if tr.get("dropped_null"):
+            print(f"  NOTE: {tr['dropped_null']} further steer segment(s) SKIPPED — the compass")
+            print("        was null inside them. This constant is fitted to the stretch where")
+            print("        the IMU was answering, not to the whole dive.")
     else:
         print(f"  not measurable: {why}")
 
@@ -228,6 +430,9 @@ def report(path: Path, ground_truth: float | None = None) -> int:
     if dm:
         print(f"  {dm['max_depth_m_at_full_ballast']} m at full ballast ({dm['points']} settled points)")
         print(f"  -> client CONFIG.sim.maxDepthM = {dm['max_depth_m_at_full_ballast']}")
+        if dm.get("dropped_null"):
+            print(f"  NOTE: {dm['dropped_null']} further ballast segment(s) SKIPPED — the depth")
+            print("        was null inside them, so nobody watched the sub settle there.")
     else:
         print(f"  not measurable: {why}")
 
@@ -315,6 +520,59 @@ def selftest() -> int:
     good = tr2 is None and dm2 is None
     ok &= good
     print(f"  {'pass' if good else 'FAIL'}  a sensorless log yields nothing rather than a guess")
+
+    # ---- THE CHIP THAT STOPPED MID-DIVE -----------------------------------
+    # The case above is a sensor that was never there. This one is the failure the
+    # liveness work is actually about and the one that crashed this file: the columns
+    # are PRESENT and their values are null from halfway on, because divelog.py writes
+    # a dead chip as JSON null rather than dropping the key. `.get(key, 0.0)` only
+    # fires on a missing key, so it never fired, and the None went into _unwrap's
+    # subtraction and into depth_model's max()/min().
+    #
+    # Two things are asserted and the second matters more than the first. It must not
+    # raise — but a version that caught the exception and carried on with 0.0 would
+    # also not raise, and it would be worse than the crash: 0.0 heading is due north,
+    # so a dead compass would read as the sub snapping north and back, i.e. as an
+    # enormous MEASURED turn rate, in a tool whose only output is a turn rate. So the
+    # numbers are checked too: whatever survives must still be the truth the log was
+    # built from, and it must have said how much it threw away.
+    half = _synthetic(**truth)
+    cut = len(half) // 2
+    dead = [dict(s) for s in half[:cut]] + [
+        dict(s, heading_deg=None, depth_m=None, psi=None, mag_cal=None) for s in half[cut:]]
+    try:
+        tr3, why4 = turn_rate(dead)
+        dm3, why5 = depth_model(dead)
+        crashed = None
+    except Exception as exc:  # noqa: BLE001 — the regression this case exists to catch
+        tr3 = dm3 = why4 = why5 = None
+        crashed = f"{type(exc).__name__}: {exc}"
+    good = crashed is None
+    ok &= good
+    print(f"  {'pass' if good else 'FAIL'}  a log whose chips died mid-dive is read at all "
+          f"({crashed or 'no exception'})")
+
+    # The synthetic dive turns in its first half and ballasts in its second, so killing
+    # the sensors at the midpoint leaves turn rate measurable and takes the depth model
+    # away entirely. That asymmetry is the point: one section must still answer, with
+    # the truth it was built from, and the other must refuse.
+    good = tr3 is not None and abs(tr3["deg_per_s_per_unit_steer"] - truth["turn"]) <= 1.0
+    ok &= good
+    print(f"  {'pass' if good else 'FAIL'}  ...and the half that was measured still reads "
+          f"{tr3 and tr3['deg_per_s_per_unit_steer']}, not a heading of 0.0 dragged in "
+          f"({why4 or ''})")
+
+    good = dm3 is None and "null" in (why5 or "")
+    ok &= good
+    print(f"  {'pass' if good else 'FAIL'}  ...and the half that was not is refused, naming "
+          f"the null rather than fitting 0.0 m as 'the surface' ({why5 or ''})")
+
+    # A skip that is not reported is a quiet lie about what the number covers.
+    reported = [g for g in _gaps(dead) if g.startswith(("heading:", "depth:"))]
+    good = len(reported) == 2 and all("null in" in g for g in reported)
+    ok &= good
+    print(f"  {'pass' if good else 'FAIL'}  ...and the gap is REPORTED, not silently "
+          f"stepped over ({len(reported)} of 2 channels named)")
 
     print("\nselftest " + ("passed" if ok else "FAILED"))
     return 0 if ok else 1

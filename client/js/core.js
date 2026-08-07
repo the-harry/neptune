@@ -148,6 +148,8 @@ const state = {
   camAp:null,                   // launcher /__wifi: can THIS handheld see the camera's AP
   piProbe:null,                 // /api/healthz: does the sub ANSWER, control link aside
   net:null,                     // launcher /__net: this handheld's own radios and cables
+  wsOpenAt:0,                   // when the control socket opened - a socket open and silent
+                                // for too long is a different claim from one still connecting
   // WHEN a NUMBER for each measured quantity last actually arrived. Not when telemetry
   // arrived - a frame with no `depth` field leaves state.depth holding its last value,
   // which on a sub with no depth sensor is a number from the simulator. These stamps
@@ -319,8 +321,26 @@ function vehicleRecent(){
    (api/rov.py leak_alarm_edges -> `leak_warn` / `leak_flood`) and they ask for
    opposite reactions. Only the legacy bare `leak` name carries no stage, and THAT one
    is still read as FLOOD: over-warning costs a cancelled dive, under-warning costs the
-   sub. */
-const LEAK_RANK = {NORMAL:0, WARN:1, FLOOD:2};
+   sub.
+
+   AND THERE IS A FOURTH STAGE, WHICH IS NOT ON THE LADDER AT ALL. "UNKNOWN" is the
+   vehicle saying NOBODY IS SAMPLING THE PROBES (api/hardware.py LEAK_UNKNOWN: the leak
+   GPIO or the sensor thread has stopped, so neither probe was read this tick). It used
+   to be folded into NORMAL here, and folding it into NORMAL is the single worst thing
+   this console can do with it: NORMAL is not the absence of a leak, it is a POSITIVE
+   CLAIM about hull integrity — both probes were read, and both were dry — and it is the
+   one reading on this vehicle that must never be a fallback. The whole server was
+   rebuilt this round to stop making that claim on evidence nobody was collecting; the
+   last layer went on making it anyway, painting the green struck-through drop over a
+   hull nothing was watching.
+
+   So UNKNOWN outranks NORMAL and is outranked by both wet stages, which is exactly
+   api/hardware.py's own ordering (leak_state_from: wet outranks cannot-tell, because
+   water that has already reached a probe is an established fact and the sampler dying
+   afterwards does not un-establish it; only the REASSURANCE needs liveness). A latched
+   WARN or FLOOD therefore still stands over it, and it can never talk the console down
+   off a flood. */
+const LEAK_RANK = {NORMAL:0, UNKNOWN:1, WARN:2, FLOOD:3};
 /* Wire name -> the stage it latches. `leak` is a pre-two-stage Pi (older vehicle, same
    console): stageless, so it takes the worse reading. */
 const LEAK_ALARM_STAGE = {leak_flood:'FLOOD', leak_warn:'WARN', leak:'FLOOD'};
@@ -335,10 +355,19 @@ function leakStage(){
   const s = vehicleRecent()
           ? state.leakState
           : (state.simLeakStage || (state.simLeak ? 'FLOOD' : 'NORMAL'));
-  const live = (s==='FLOOD' || s==='WARN') ? s : 'NORMAL';
+  // NORMAL HAS TO BE SAID, not arrived at by elimination. Only the three stages this
+  // console can positively account for pass as themselves; everything else — "UNKNOWN"
+  // from a hull that has stopped sampling, a stage added to the vehicle after this
+  // handheld was flashed, a frame with no stage at all — lands on UNKNOWN. That is the
+  // same construction api/rov.py uses for the bool (`leaking = leak_state != "NORMAL"`,
+  // with its "do not tidy this into `in (WARN, FLOOD)`" note): every stage nobody here
+  // has heard of falls on the not-certified-dry side, which is the only direction it is
+  // safe to be wrong about water.
+  const live = (s==='FLOOD' || s==='WARN' || s==='NORMAL') ? s : 'UNKNOWN';
   // The WORSE of the two, never one instead of the other: a latched WARN has to
   // survive the link dropping, and it must never be able to sit on top of a FLOOD the
-  // vehicle is reporting right now.
+  // vehicle is reporting right now. UNKNOWN sits between NORMAL and WARN in that
+  // ordering, so it outranks a clean hull nobody is checking and a latch outranks it.
   return (LEAK_RANK[live] >= LEAK_RANK[latched]) ? live : latched;
 }
 
@@ -395,7 +424,19 @@ const SENSOR_CHIPS = {
   // rendering of a name that is not even a part.
   'ballast-limits': { short:'BALLAST SWITCHES',
                       long:'the syringe’s two limit switches, which are both reading '
-                         + 'triggered at once - wiring, not water' }
+                         + 'triggered at once - wiring, not water' },
+  // THE TWO NAMES BEHIND THE HULL-INTEGRITY GLYPH (api/hardware.py SUBSYSTEMS). Neither
+  // is a chip either, and both were falling through to chipMeans()'s "newer than this
+  // handheld" sentence — which is wrong twice over: this console knows exactly what they
+  // are, and that sentence ends by saying nothing on screen was drawn from them, while
+  // the leak drop is drawn from them.
+  'leak-probes':  { short:'LEAK PROBES',
+                    long:'the two leak probes in the bottom of the hull, which are not '
+                       + 'being sampled at all - so nothing is reading whether the hull '
+                       + 'is dry' },
+  'sensor-thread':{ short:'SENSOR LOOP',
+                    long:'the vehicle’s sensor loop itself, so nothing it reads is being '
+                       + 'refreshed - the leak probes included' }
 };
 /* WHAT A NAME THIS CONSOLE HAS NEVER HEARD OF STILL MEANS.
 
@@ -424,8 +465,16 @@ function chipMeans(c){
    sat in sensor_faults with nowhere on screen to be read. A cannot-tell default that
    is itself a measurement is not a cannot-tell, and 0.0 V is a measurement - an
    impossible one, from a vehicle that is plainly powered enough to be transmitting. */
+/* AND THE HULL IS ON THIS LIST NOW, for the same reason the pack was added to it last
+   round: it was a reading with a cannot-tell state and no way to say WHICH part had
+   stopped. The leak probes are GPIO, not I2C — a dead bus does not touch them — so the
+   two names behind them are the leak sampler itself and the sensor loop that runs it
+   (api/hardware.py: `sampling = not self._stalled & {"leak-probes", "sensor-thread"}`).
+   `leak` is not a `sensed()` kind: the stage is a string ladder, not a number, so this
+   entry is only ever read to NAME the cause beside the cannot-tell drop. */
 const SENSOR_BEHIND = { depth:['ms5837','i2c'], pressure:['ms5837','i2c'], heading:['bno085','i2c'],
-                        battery:['ina219','i2c'], current:['ina219','i2c'] };
+                        battery:['ina219','i2c'], current:['ina219','i2c'],
+                        leak:['leak-probes','sensor-thread'] };
 function normalizeFaults(v){
   // Tolerant on the wire, strict in here: a list is the shape, but a single string
   // ("ms5837") or a joined one must not be silently read as no faults at all.

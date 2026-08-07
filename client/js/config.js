@@ -36,6 +36,11 @@ const CONFIG = {
   // console looks broken. The sim resumes from the last real values, so the handover
   // is seamless.
   simFallbackMs:  3000,
+  // How long a control socket may be OPEN with nothing on it before the console says
+  // out loud that the simulator has the gauges. A healthy vehicle spends a moment here
+  // on every connect; a red badge that fires each time would be read as "connecting"
+  // and then ignored when it means what it says.
+  simTakeoverGraceMs: 4000,
   // Is the Pi THERE, asked over plain HTTP and independently of the control socket.
   // A socket stuck in `connecting` proves nothing; amber has to mean it answered.
   piProbeMs:       4000,     // while the control link is down

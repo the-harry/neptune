@@ -289,6 +289,17 @@ def fill_nav_fields(app: FastAPI, tel: Telemetry) -> dict | None:
     # every boot. Read here so the control loop can log a quiet start as a quiet
     # start instead of as a fault.
     nav["has_origin"] = getattr(svc, "origin", None) is not None
+    # NAVIGATION THAT HAS NOT STARTED YET IS NOT NAVIGATION THAT DIED, and nothing
+    # else in this frame can tell the two apart — loop_state() says "never-started"
+    # for both. The control-loop task is created BEFORE the subsystems are started
+    # (deliberately: a slow camera must not delay the watchdog), so the first
+    # telemetry ticks of EVERY boot see a nav service that exists and has no loop
+    # yet. `subsystems_up` is set by the lifespan once the gather has returned, so
+    # from that moment on "never-started" means navigation FAILED to start, which is
+    # a fault and is warned about. Read with a default because tests/test_liveness.py
+    # compiles this function out of the source and runs it against a bare app stub.
+    nav["starting"] = (nav["loop"] == "never-started"
+                       and not getattr(app.state, "subsystems_up", False))
     # Asked ONCE and acted on once. A second fresh_state() call could age out
     # between the two and leave the log claiming nav answered a frame it did not —
     # a small lie, but of precisely the kind being hunted here.
@@ -297,6 +308,25 @@ def fill_nav_fields(app: FastAPI, tel: Telemetry) -> dict | None:
     if ns is None:
         tel.snagged = None
         tel.gyro_only = None
+        # WHY THERE IS NO SPEED, NOT MERELY THAT THERE IS NONE. Before an origin is
+        # set — the whole pre-dive phase of every single boot — a completely healthy
+        # hull sends speed_ms=null speed_src=null, and the console explains that null
+        # with "nothing is reporting a speed at all - no paddlewheel pulses and no
+        # estimate" (client/js/render.js). That accuses a sensor which is working
+        # perfectly. Nothing is wrong with the paddlewheel: navigation has no datum
+        # to estimate from yet, and it cannot have one until someone sets an origin.
+        #
+        # speed_src is the field that says where a speed came from, so it is the
+        # field that gets to say why there is none. speed_ms stays null — there
+        # genuinely is no speed — so the readout is still "--" / NO SPEED and this
+        # only changes the reason attached to it. Narrow on purpose: a stalled loop,
+        # a dead sensor bus or a finished dive are NOT this state, they are faults or
+        # ends, and each already travels under its own null. It also lands in the
+        # blackbox (TelemetryJournal keys on speed_src), so a replay can see the
+        # exact tick where the vehicle went from "no datum" to estimating.
+        if (nav["loop"] == "running" and not nav["has_origin"]
+                and nav["last_fault"] is None and not nav["starting"]):
+            tel.speed_src = "no-origin"
         return nav
     # Nothing from the estimator is coerced on the way in. round(None) is a
     # TypeError, and the tempting `ns.speed_ms or 0.0` would put a confident
@@ -383,6 +413,18 @@ def log_nav_change(nav: dict, ever_answered: bool) -> None:
     subsystem that answered and stopped is broken, whatever its loop says about
     itself, and without that memory a dead sensor bus with no origin set would
     read as a quiet start forever.
+
+    AND `nav["starting"]` IS WHAT SEPARATES THEM AT BOOT — because the warning this
+    function was written to stop firing on every healthy start was re-introduced by
+    the fix for it. The control loop is created before the subsystems are started, so
+    its first ticks see loop="never-started", which fell straight into `stopped`
+    below: every clean boot of a completely healthy vehicle opened its log with
+    "navigation has STOPPED answering for this hull ... loop=never-started faults=0
+    last_fault=None end_reason=None", measured on a live server. A warning that fires
+    on every healthy start is a warning nobody reads, and the day it means something
+    it will look exactly like the day it did not. Once the lifespan has finished
+    starting the subsystems, `starting` is False forever and a still-never-started
+    loop is warned about properly — it is a nav service that failed to come up.
     """
     if nav["used"]:
         if ever_answered:
@@ -399,7 +441,9 @@ def log_nav_change(nav: dict, ever_answered: bool) -> None:
                     "compass. Set NAV_SENSORS=vehicle to bind it to the sub.",
                     nav["source"], nav["simulated"])
         return
-    stopped = (nav["loop"] != "running" or nav["last_fault"] is not None or ever_answered)
+    starting = bool(nav.get("starting"))
+    stopped = not starting and (nav["loop"] != "running" or nav["last_fault"] is not None
+                                or ever_answered)
     if stopped:
         log.warning("navigation has STOPPED answering for this hull — speed, snag and "
                     "heading-trust go to cannot-tell (loop=%s answering=%s reads_vehicle=%s "
@@ -407,10 +451,17 @@ def log_nav_change(nav: dict, ever_answered: bool) -> None:
                     nav["loop"], nav["answering"], nav["reads_vehicle"], nav["source"],
                     nav["tick_faults"], nav["last_fault"], nav["loop_end_reason"])
     else:
-        log.info("navigation has nothing to say yet — the loop is running and healthy, "
-                 "there is just nothing to estimate from (origin=%s, source=%s). Speed, "
-                 "snag and heading-trust read cannot-tell until a fix is set.",
-                 "set" if nav.get("has_origin") else "not set", nav["source"])
+        # The REASON is what makes this line worth printing, so it is named rather
+        # than left to be inferred from loop= and origin=. The three quiet states are
+        # not interchangeable: one resolves itself in milliseconds, one waits on the
+        # operator setting a datum, and one is nav turning with nothing yet to say.
+        log.info("navigation has nothing to say yet — %s (loop=%s source=%s). Speed, "
+                 "snag and heading-trust read cannot-tell until it does.",
+                 "the service has not finished starting" if starting
+                 else "the loop is running and healthy, there is simply no origin to "
+                      "estimate from — set a fix" if not nav.get("has_origin")
+                 else "the loop is running and healthy and has not produced a state yet",
+                 nav["loop"], nav["source"])
 
 
 async def _control_loop(app: FastAPI) -> None:
@@ -491,8 +542,16 @@ async def _control_loop(app: FastAPI) -> None:
         # telemetry_hz, but the first fault arriving is a genuine edge — it is what
         # turns "nothing to say yet" into "stopped answering" on a loop that still
         # reports itself as running.
+        #
+        # `starting` is in the key too, and it has to be: it is the only thing that
+        # changes when a navigation service FAILS to start. Without it the boot's
+        # "not finished starting yet" INFO would be the first and last word on a nav
+        # loop that never appeared — the key would never move again, so the warning
+        # that ought to follow would never fire. It cannot double-log a healthy boot
+        # either, because it is only ever true while loop is "never-started" (see
+        # fill_nav_fields), so it goes false in the same transition that loop does.
         nav_key = None if nav is None else (nav["loop"], nav["used"], nav["reads_vehicle"],
-                                            nav["last_fault"] is not None)
+                                            nav["last_fault"] is not None, nav["starting"])
         if nav_key != last_nav_key:
             if nav is not None:
                 log_nav_change(nav, nav_ever_answered)
@@ -541,6 +600,11 @@ async def _control_loop(app: FastAPI) -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Set BEFORE the control loop task exists, because that loop reads it on its very
+    # first tick. False means "the subsystems below have not been started yet", which
+    # is why a nav service with no loop is not yet a nav service that died — see
+    # fill_nav_fields and log_nav_change.
+    app.state.subsystems_up = False
     app.state.hw = get_hardware()
     app.state.rov = RovState(app.state.hw)
     app.state.manager = ConnectionManager()
@@ -562,6 +626,11 @@ async def lifespan(app: FastAPI):
         _start("camera control plane", app.state.camera_svc.start()),
         _start("navigation", app.state.nav_svc.start()),
     )
+    # From here on a subsystem that is not up is a subsystem that FAILED to come up,
+    # and the control loop is entitled to say so. _start() swallows the exception on
+    # purpose (one failing start must not abort the others), so this flag is the only
+    # thing downstream that knows the attempt has been made at all.
+    app.state.subsystems_up = True
     log.info("NEPTUNE API up — vehicle-hw=%s camera=%s",
              "mock" if app.state.hw.is_mock else "real", app.state.camera.kind)
     try:
@@ -702,6 +771,44 @@ async def ws_control(ws: WebSocket) -> None:
         log.warning("ws error: %s", exc)
     finally:
         mgr.disconnect(ws)
+
+
+# A WEBSOCKET UPGRADE TO A PATH NOBODY ROUTES MUST BE REFUSED, NOT CRASHED ON.
+# Registered after every real socket (/ws/control above, /ws/nav and /ws/telemetry
+# from the routers included further up) and before the static mount below, because
+# routes are matched in order and this one matches everything.
+#
+# Without it the upgrade fell through to StaticFiles, whose first line is
+# `assert scope["type"] == "http"` (starlette/staticfiles.py) — so any typo'd or
+# stale client URL raised an unhandled AssertionError inside the ASGI app and the
+# handshake was answered with HTTP 500 and a traceback in the log. Measured: a
+# connect to /ws/does-not-exist gave "server rejected WebSocket connection: HTTP 500"
+# and an AssertionError from staticfiles.py:91. That matters beyond tidiness — a 500
+# is what a BROKEN VEHICLE looks like, and the tether client retries on a schedule,
+# so one wrong path spends the dive filling the Pi's log with fake internal errors
+# and hiding the real ones. Closing before accept() rejects the handshake cleanly.
+# RATE-LIMITED PER PATH, for the same reason log_nav_change above exists at all: a
+# client that has the wrong URL RETRIES on a schedule, so a line per attempt is a
+# thousand identical warnings across a dive and the real ones drown in them. The
+# first attempt on a path is the finding; the next four hundred are noise. The map
+# is cleared once it grows past a handful of paths so a probe sweep cannot grow it
+# without bound — forgetting a path only costs one more line if it comes back.
+_unrouted_ws_seen: dict[str, float] = {}
+_UNROUTED_WS_LOG_GAP_S = 60.0
+
+
+@app.websocket("/{_unrouted:path}")
+async def ws_unrouted(ws: WebSocket, _unrouted: str) -> None:
+    now = time.monotonic()
+    last = _unrouted_ws_seen.get(_unrouted)
+    if last is None or (now - last) >= _UNROUTED_WS_LOG_GAP_S:
+        if len(_unrouted_ws_seen) > 32:
+            _unrouted_ws_seen.clear()
+        _unrouted_ws_seen[_unrouted] = now
+        log.warning("websocket upgrade to an unrouted path /%s — refused. The sockets "
+                    "this vehicle serves are /ws/control, /ws/nav and /ws/telemetry.",
+                    _unrouted)
+    await ws.close(code=1008)     # policy violation: there is nothing to talk to here
 
 
 # Static client LAST so the API routes above win. html=True serves index.html at /.

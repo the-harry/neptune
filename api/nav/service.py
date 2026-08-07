@@ -320,10 +320,34 @@ class NavService:
         guess about — and a scripted path drawn over a real dive is the one lie
         this project refuses to allow. `reads_vehicle` is the sharper of the two:
         it is false exactly when the track belongs to no hull at all.
+
+        ONE VEHICLE MUST NOT DESCRIBE ITSELF TWO DIFFERENT WAYS ON TWO SOCKETS. The
+        map and the HUD write the same state slots (client/js/map.js says so in as
+        many words), so whichever frame lands last wins — and with the BNO085 killed
+        mid-dive the two disagreed. Measured on a live server, same instant:
+
+            /ws/control  heading=None mag_cal=None gyro_only=None snagged=False
+            /ws/nav      heading_deg=None mag_cal=None gyro_only=False snagged=False
+
+        api/main.py nulls gyro_only the moment no bearing survives, for the reason
+        stated there: the flag qualifies a heading, a coast is an integration, and
+        both the fused yaw and the yaw rate come off the one chip — so there is
+        neither a bearing to qualify nor a gyro to coast on. This frame carried the
+        estimator's raw False instead, which the console reads as "the filter looked
+        and it is using the compass". A reassuring answer put into the mouth of a
+        subsystem that is saying nothing.
+
+        snagged is deliberately NOT nulled here: it agrees on both sockets (False
+        above) because the snag detector reads thrust against the paddlewheel and
+        never touches the compass. Nulling it would invent the very contradiction
+        this is fixing, in the other direction.
         """
-        return {"type": "nav", **ns.model_dump(),
-                "simulated": bool(self.sensors.is_sim),
-                "reads_vehicle": self.reads_vehicle}
+        f = {"type": "nav", **ns.model_dump(),
+             "simulated": bool(self.sensors.is_sim),
+             "reads_vehicle": self.reads_vehicle}
+        if ns.heading_deg is None:
+            f["gyro_only"] = None
+        return f
 
     def fresh_state(self) -> NavState | None:
         """last_state, but ONLY if the loop that produced it is still running.
@@ -446,8 +470,23 @@ class NavService:
             f"accuracy={self.origin.accuracy}m ≤ {settings.max_origin_accuracy_m}m" if self.origin else "no origin")
         # 4 heading0 + IMU cal
         mag_cal = self.last_sample.mag_cal if self.last_sample else None
-        add("heading0 captured + IMU cal good", bool(self.origin) and (mag_cal or 0) >= 2,
-            f"mag_cal={mag_cal}")
+        # The detail has to name the half that FAILED. Reporting "mag_cal=3" against a
+        # red check because no origin was set sent the operator to re-calibrate a
+        # compass that was already good — a check whose explanation points at the wrong
+        # subsystem costs more than no explanation at all. mag_cal None is its own
+        # answer: no IMU is reporting, which is not the same as one reporting badly.
+        has_origin = bool(self.origin)
+        cal_ok = mag_cal is not None and mag_cal >= 2
+        if not has_origin and not cal_ok:
+            why = f"no origin set, and mag_cal={'no IMU reporting' if mag_cal is None else mag_cal}"
+        elif not has_origin:
+            why = f"no origin set (the compass is fine, mag_cal={mag_cal})"
+        elif not cal_ok:
+            why = ("no IMU is reporting a calibration" if mag_cal is None
+                   else f"mag_cal={mag_cal}, needs 2 or better")
+        else:
+            why = f"origin set, mag_cal={mag_cal}"
+        add("heading0 captured + IMU cal good", has_origin and cal_ok, why)
         # 5 clock sane (RTC or bootstrap-set)
         add("system clock sane", time.time() > 1_700_000_000, time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime()))
         # 6 speed LUT
@@ -580,11 +619,38 @@ def build_router(svc: NavService) -> APIRouter:
         if o.accuracy > settings.max_origin_accuracy_m and not override:
             raise HTTPException(422, f"origin accuracy {o.accuracy}m exceeds {settings.max_origin_accuracy_m}m "
                                      f"— re-fix or pass ?override=true")
-        # heading0 is the sub's IMU yaw at this instant (§4.4) — authoritative over any posted value
-        if svc.last_sample is not None:
-            o.heading_deg = round(svc.last_sample.heading_deg, 1)
+        # heading0 is the sub's IMU yaw at this instant (§4.4) — authoritative over any
+        # posted value, BUT ONLY WHEN A COMPASS ACTUALLY ANSWERED. SensorSample.
+        # heading_deg went Optional this round and this was a bare round() on it:
+        # with the BNO085 killed mid-run, POST /api/origin answered HTTP 500
+        # "TypeError: type NoneType doesn't define __round__ method", so a hull whose
+        # compass has stopped could not set a datum AT ALL — no origin, hence no
+        # auto-logged dive and no navigation for the rest of the session. Topside it
+        # was worse than an outright failure: client/js/navui.js mirrors the origin
+        # with .catch(()=>{}) and writes "origin set" either way, so the console drew
+        # a client-side track for a dive the Pi had never begun.
+        #
+        # LAUNCHING WITH NO COMPASS IS A STATE TO RECORD, NOT AN ERROR. heading0 is
+        # dive-log metadata here and not an input to the estimate: DeadReckoner seeds
+        # self.heading from it and then overwrites it from the first sample, and it
+        # already holds the track on a null bearing. Nothing about a silent compass
+        # justifies refusing the datum.
+        measured = svc.last_sample.heading_deg if svc.last_sample is not None else None
+        if measured is not None:
+            o.heading_deg = round(measured, 1)
+        else:
+            # NOTHING MEASURED A BEARING, so the origin records that rather than a
+            # number. 0.0 is due north, and heading0 is what every track from this
+            # origin is expressed against, so a fabricated one tilts the whole dive
+            # permanently in a file that outlives it. Origin.heading_deg is Optional
+            # for exactly this, so the null survives the journal header and comes
+            # back through DiveLog.load() instead of raising on the way in.
+            o.heading_deg = None
         svc.set_origin(o)
-        return {"ok": True, "origin": o.model_dump()}
+        # heading0_measured travels WITH the origin, because the number cannot say
+        # whether anything took it: 0.0 is due north and 284.0 is a bearing, and both
+        # are perfectly plausible readings for a compass that was never asked.
+        return {"ok": True, "origin": o.model_dump(), "heading0_measured": measured is not None}
 
     @r.get("/api/origin")
     async def get_origin():

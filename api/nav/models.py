@@ -99,7 +99,13 @@ class Origin(BaseModel):
     lat: float
     lon: float
     accuracy: float = Field(ge=0)     # metres — floor on the whole track's accuracy (§4.2)
-    heading_deg: float = 0.0          # heading0, from the IMU on the surface (§4.4)
+    # heading0, from the IMU on the surface (§4.4). None = nothing measured a bearing
+    # when the datum was captured, and that is a state worth recording rather than
+    # papering over: heading0 is what EVERY track logged from this origin is expressed
+    # against, so a fabricated 0.0 (due north) tilts the whole dive permanently, in a
+    # file that outlives the dive by years. A dive with no heading0 can still be read;
+    # a dive silently rotated to north cannot be un-rotated.
+    heading_deg: Optional[float] = None
     source: Literal["phone", "map_tap", "device", "manual"] = "phone"
     t: Optional[float] = None          # capture timestamp (epoch ms), from the client (§2)
 

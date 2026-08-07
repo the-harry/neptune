@@ -21,6 +21,7 @@ import argparse
 import importlib.util
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -186,7 +187,13 @@ def topside(args) -> int:
         rc = call([sys.executable, str(ROOT / "client" / "tests" / "run.py")])
         missing += (1 if rc else 0)
     else:
-        # MEASURED on the ROG Ally, re-run 2026-08-07: "295/295 checks passed in 114s
+        # THE SUITE COUNT IS COUNTED, NOT REMEMBERED - one file per suite, so the one
+        # number that can drift silently is derived from the tree instead. The CHECK
+        # total cannot be: a browser check is an `ok(...)` call inside an async flow,
+        # several of them inside loops, so nothing short of running Chrome knows how
+        # many there are. So it stays a MEASURED figure with the measurement attached.
+        #
+        # MEASURED on the ROG Ally, re-run 2026-08-07: "295/295 checks passed in 109s
         # across 12 suites", exit 0. FOUR different totals for this one suite were in
         # circulation simultaneously - 214 on this very line, 249 in
         # client/tests/README.md, 286 in client/README.md and .specs/design.md, and 295
@@ -196,7 +203,14 @@ def topside(args) -> int:
         # running something other than what it is, and then has no reason to believe
         # anything else this file prints. Re-measure by RUNNING it whenever a suite is
         # added, never by adjusting it until it feels right.
-        say(WARN, "tests", "python client/tests/run.py   (12 suites, 295 checks, ~114 s)")
+        # SUITE COUNT ONLY. The check TOTAL has now gone stale three times, twice in
+        # the very commit that "fixed" it, because it is a measurement that ages the
+        # moment anyone adds an assertion - and a bootstrap that prints a number the
+        # suite then contradicts is the one thing this file must never do. The suite
+        # count comes off the tree, so it cannot drift; the check total is left to the
+        # runner, which is the only thing entitled to state it.
+        n = len(list((ROOT / "client" / "tests" / "suites").glob("*.js")))
+        say(WARN, "tests", f"python client/tests/run.py   ({n} suites, ~2 min)")
     return missing
 
 
@@ -344,8 +358,12 @@ def core_deps() -> int:
         return len(absent)
     print("\n  Without these you can still fly the simulator and run the client suite -")
     print("  neither uses python at all. What you cannot do is start the api or run")
-    print("  its full test suite: api/tests/run.py will report replay and telemetry")
-    print("  as never loaded, which is not a failure of the code.")
+    print("  its full test suite: some suites will report as never loaded, which is")
+    # Which ones is NOT written here. This sentence used to name "replay and telemetry",
+    # and a third suite (liveness) was added without it - the same drift as the counts
+    # below, in prose instead of digits. The API TESTS section names them from the
+    # runner itself, so it says which, and this says why.
+    print("  not a failure of the code. The API TESTS line below names them.")
     print("\n  One command fixes it, and nothing else has to be remembered:")
     print("      python bootstrap.py --dev")
     # Said here, next to the evidence, because the summary at the bottom of this run
@@ -356,6 +374,53 @@ def core_deps() -> int:
     return 0
 
 
+def api_suite_totals(py: Path | None):
+    """(suites, checks, names that cannot load here) — ASKED, never typed.
+
+    THIS NUMBER HAS NOW DRIFTED THREE TIMES, and the third time it was already stale in
+    the commit that introduced it: this line advertised "4 suites, 147 checks" against a
+    tree that runs 5 suites and 229 checks, and the no-deps figure beside it claimed
+    "100/103 across 2 of 4" where the bench actually reports "100/104 across 2 of 5". A
+    hand-copied count cannot survive a suite being added, because nothing fails when it
+    goes wrong - it just quietly starts describing a different repo, which is precisely
+    what this file exists not to do.
+
+    So it is derived from the thing that produces it. `api/tests/run.py --list` names
+    every suite it discovered and how many checks are in it, in the same run-order the
+    real suite uses, and it costs well under a second because it discovers without
+    running. --no-venv because the interpreter has already been chosen HERE, by
+    venv_python(), and a second hop would report a machine this run did not certify.
+
+    A suite that cannot load reports itself as such rather than as zero checks: the
+    difference between "this code was exercised and is fine" and "nothing about this
+    code was exercised at all" is the whole reason that runner distinguishes them, and
+    folding it away here would put the lie back one layer up.
+    """
+    suite = ROOT / "api" / "tests" / "run.py"
+    if not suite.exists():
+        return None
+    try:
+        out = subprocess.run([str(py or sys.executable), str(suite), "--list", "--no-venv"],
+                             capture_output=True, text=True, timeout=120,
+                             cwd=str(ROOT / "api"))
+    except Exception:  # noqa: BLE001 - an interpreter that will not start is "cannot say"
+        return None
+    if out.returncode != 0:
+        return None
+    suites, checks, blocked = 0, 0, []
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        suites += 1
+        m = re.search(r"\b(\d+) checks$", line)
+        if m:
+            checks += int(m.group(1))
+        else:                       # "<name>   cannot load here - needs <package>"
+            blocked.append(line.split()[0])
+    return (suites, checks, blocked) if suites else None
+
+
 def api_tests(args) -> int:
     print("\n--- API TESTS ---")
     suite = ROOT / "api" / "tests" / "run.py"
@@ -363,17 +428,25 @@ def api_tests(args) -> int:
         say(WARN, "api tests", "no api/tests/run.py in this checkout - nothing to run")
         return 0
     if not args.test:
-        # BOTH numbers, and the condition on the second is the load-bearing part.
-        # MEASURED 2026-08-07 with the core deps present: "147/147 checks passed in 1s
-        # across 4 suites", exit 0. MEASURED the same day in a venv with none of them:
-        # "100/103 checks passed in 0s across 2 of 4 suites", verdict INCOMPLETE, exit
-        # 2 - replay and telemetry never load at all and three checks inside filters
-        # skip. So the total is printed WITH the condition attached rather than bare:
-        # a count that silently omitted the suites which never loaded would be the
-        # very lie that runner was rewritten to stop telling, and a bare suite count
-        # with no checks at all told the reader less than this bench actually knows.
-        say(WARN, "api tests", "python api/tests/run.py   "
-                               "(4 suites, 147 checks with the core deps; or pass --test)")
+        # BOTH numbers, and the condition on the second is the load-bearing part: a
+        # count that silently omitted the suites which never loaded would be the very
+        # lie that runner was rewritten to stop telling. Both now come out of the
+        # runner itself - see api_suite_totals for why none of this is typed by hand
+        # any more. "could not ask" is reported as could-not-ask and never as a
+        # remembered number, for the same reason.
+        totals = api_suite_totals(venv_python())
+        if totals is None:
+            say(WARN, "api tests", "python api/tests/run.py   "
+                                   "(could not ask it how many checks it has; "
+                                   "run it and read the total off the run)")
+        elif totals[2]:
+            say(WARN, "api tests", f"python api/tests/run.py   ({totals[0]} suites, "
+                                   f"{totals[1]} checks loadable in this python; "
+                                   f"{len(totals[2])} suite(s) cannot load here "
+                                   f"({', '.join(totals[2])}) - see API CORE LIBRARIES above)")
+        else:
+            say(WARN, "api tests", f"python api/tests/run.py   ({totals[0]} suites, "
+                                   f"{totals[1]} checks; or pass --test)")
         return 0
     # The venv interpreter whenever there is one (see venv_python): fastapi, pydantic and
     # httpx were installed INTO it, and the suite imports the API's own modules. Running

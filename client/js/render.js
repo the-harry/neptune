@@ -105,7 +105,13 @@ function viewFromState(sim){
     green:s.lights.green.on, white:s.lights.white.on,
     greenLevel:s.lights.green.level, whiteLevel:s.lights.white.level,
     leakStage:stage,
-    leak: stage!=='NORMAL',                 // kept: the one-bit question, for callers that only ask it
+    // THE ONE-BIT QUESTION, AND IT IS "NOT CERTIFIED DRY" — NOT "WARN OR FLOOD". Written
+    // against NORMAL deliberately, the same way api/rov.py writes it
+    // (`leaking = leak_state != "NORMAL"`, with its own do-not-tidy-this note): UNKNOWN
+    // means the probes are not being sampled, and false here would hand a caller that
+    // only asks the bit the one claim the whole stage exists to withhold. Every stage
+    // this line has never heard of lands on the alarming side by construction.
+    leak: stage!=='NORMAL',
     leakProbeFault: live ? s.leakProbeFault : null,
     speedMs:s.speedMs, speedSrc:s.speedSrc,
     // THE SNAG, IN THE THREE STATES NAVIGATION ACTUALLY HAS. `!!s.snagged` collapsed
@@ -170,7 +176,7 @@ function renderLightButton(which, on, level){
 function renderArmed(armed){ /* no armed indicator by request */ }
 function renderMagnet(on){ /* no magnet indicator by request */ }
 
-/* LEAK: icon-only, and THREE SHAPES for three states — the drop changes what it IS,
+/* LEAK: icon-only, and FOUR SHAPES for four states — the drop changes what it IS,
    not just what colour it is, because a colour-blind operator in sunlight reads the
    outline first and everything else second.
 
@@ -180,28 +186,59 @@ function renderMagnet(on){ /* no magnet indicator by request */ }
              from both neighbours: half a drop is the shape of "some water".
      FLOOD   red SOLID drop, glowing, plus the full-screen edge pulse — the upper
              probe (2 cm higher) is wet too.
+     UNKNOWN amber DASHED-outline drop with a question mark in it — nobody is
+             sampling the probes, so the hull's state is not known in either
+             direction (api/hardware.py LEAK_UNKNOWN).
+
+   THE FOURTH SHAPE IS THE POINT OF THIS ROUND. UNKNOWN used to be folded into NORMAL,
+   so a hull whose probes had stopped being read painted the green struck-through drop
+   captioned "both probes dry" — a positive claim about hull integrity, made off
+   evidence nobody was collecting. It is deliberately NOT the green drop and
+   deliberately not the WARN drop either: it is neither a clean hull nor a wet one, and
+   the dashed outline plus the question mark is this console's existing word for
+   genuinely-not-known (the unhomed syringe and every dead sensor say '?' too).
 
    Only FLOOD pulses the screen and only FLOOD turns the tether icon into the red
    pulsing sub (status.js), which is what keeps a flood impossible to confuse with a
-   link dropout — and equally keeps a WARN from being mistaken for one. */
+   link dropout — and equally keeps a WARN, or a cannot-tell, from being mistaken for
+   one. */
 const DROP_OK   = '<svg viewBox="0 0 24 24"><path fill="var(--tertiary)" d="M12 3s6 6.5 6 10a6 6 0 0 1-12 0c0-3.5 6-10 6-10z"/><path stroke="var(--tertiary)" stroke-width="2.4" stroke-linecap="round" d="M4 4l16 16"/><path stroke="#0c0118" stroke-width="1.1" stroke-linecap="round" d="M4 4l16 16"/></svg>';
 const DROP_WARN = '<svg viewBox="0 0 24 24">'
   + '<path fill="none" stroke="var(--hazard)" stroke-width="2" d="M12 3.2s5.6 6.4 5.6 9.8a5.6 5.6 0 0 1-11.2 0c0-3.4 5.6-9.8 5.6-9.8z"/>'
   + '<path fill="var(--hazard)" d="M6.7 14.2a5.6 5.6 0 0 0 10.6 0z"/>'
   + '<path stroke="var(--hazard)" stroke-width="1.6" stroke-linecap="round" d="M6.6 14.2h10.8"/></svg>';
 const DROP_FLOOD= '<svg viewBox="0 0 24 24"><path fill="var(--error)" d="M12 3s6 6.5 6 10a6 6 0 0 1-12 0c0-3.5 6-10 6-10z"/></svg>';
+/* The cannot-tell drop: broken outline (nothing is closing the loop on this hull) with
+   the question mark the rest of the console already uses for "genuinely not known".
+   No strike-through — the strike is the NORMAL drop's way of saying "no water", and
+   that is the exact claim this shape exists to withhold. */
+const DROP_NOSAMPLE = '<svg viewBox="0 0 24 24">'
+  + '<path fill="none" stroke="var(--hazard)" stroke-width="2" stroke-linecap="round" '
+  + 'stroke-dasharray="3.2 2.8" d="M12 3.2s5.6 6.4 5.6 9.8a5.6 5.6 0 0 1-11.2 0c0-3.4 5.6-9.8 5.6-9.8z"/>'
+  + '<path fill="none" stroke="var(--hazard)" stroke-width="1.9" stroke-linecap="round" '
+  + 'd="M10.2 11.1a1.85 1.85 0 1 1 1.85 1.85v1.35"/>'
+  + '<circle cx="12.05" cy="17.1" r="1.05" fill="var(--hazard)"/></svg>';
 function renderLeak(stage){
   // Tolerates the old boolean call (main.js boot passes `false`): true was always
   // "water in the hull", which is the flood end of the ladder.
   const st = (stage===true) ? 'FLOOD' : (stage===false || !stage) ? 'NORMAL' : stage;
   const icon=$('leak-icon'), pulse=$('leak-pulse');
   if(icon){
-    icon.innerHTML = st==='FLOOD' ? DROP_FLOOD : st==='WARN' ? DROP_WARN : DROP_OK;
+    icon.innerHTML = st==='FLOOD' ? DROP_FLOOD : st==='WARN' ? DROP_WARN
+                   : st==='UNKNOWN' ? DROP_NOSAMPLE : DROP_OK;
     icon.style.filter = st==='FLOOD' ? 'drop-shadow(0 0 6px var(--error))'
-                      : st==='WARN'  ? 'drop-shadow(0 0 5px var(--hazard))' : '';
+                      : st==='WARN'  ? 'drop-shadow(0 0 5px var(--hazard))'
+                      : st==='UNKNOWN' ? 'drop-shadow(0 0 4px var(--hazard))' : '';
     icon.className = 'leak-'+st.toLowerCase();      // hook for the suites and for CSS
     liveTitle(icon, st==='FLOOD' ? 'FLOODING - water above the upper probe. SURFACE NOW.'
                   : st==='WARN'  ? 'water is collecting on the hull floor - finish up and come home'
+                  // Says what IS the case and never spells the reassuring sentence, not
+                  // even to deny it: a phrase read at a glance is read without its NOT,
+                  // and this is the one phrase on the console that must not be misread.
+                  : st==='UNKNOWN' ? 'NOBODY IS SAMPLING THE LEAK PROBES - the vehicle has stopped '
+                                   + 'reading them, so nothing on this sub is checking whether '
+                                   + 'water is getting in. The green drop would mean both probes '
+                                   + 'were read and neither was wet; neither was read'
                   : 'both probes dry');
   }
   // The edge pulse is the FLOOD siren and nothing else. Firing it on a WARN would
@@ -378,11 +415,17 @@ function renderSpeed(v){
   if(!el) return;
   const measured = speedIsMeasured(v.speedSrc);
   const none = (v.speedMs==null || v.speedSrc==null);
-  const kind = v.stale ? 'stale' : none ? 'none' : measured ? 'measured' : 'est';
+  // 'no-origin' is nav saying it has no DATUM yet, not the wheel saying it has no
+  // pulses. They read identically on a blank readout and blaming the paddlewheel for
+  // the whole pre-dive phase of every boot taught the operator to distrust a sensor
+  // that was working perfectly.
+  const kind = v.stale ? 'stale'
+             : (v.speedSrc==='no-origin') ? 'no-origin'
+             : none ? 'none' : measured ? 'measured' : 'est';
   // The NUMBER changes shape too, not only its tag: a measured reading is given to
   // the centimetre because the wheel resolves that; an estimate gets a tilde and one
   // decimal, because pretending to a second one would be dressing up a guess.
-  el.textContent = (kind==='stale'||kind==='none') ? '--'
+  el.textContent = (kind==='stale'||kind==='none'||kind==='no-origin') ? '--'
                  : (measured ? '' : '~') + v.speedMs.toFixed(measured ? 2 : 1) + ' m/s';
   const sig = kind + (v.snagged?'!':'');
   if(_speedSig===sig) return;
@@ -390,11 +433,15 @@ function renderSpeed(v){
   el.className = 'm-val ' + (kind==='stale' ? 'is-stale' : kind==='none' ? '' : kind)
                + (v.snagged ? ' snag' : '');
   if(tag){
-    tag.textContent = kind==='none' ? 'NO SPEED' : kind==='est' ? 'EST' : '';
-    tag.className = 'est-tag' + (kind==='est' ? ' on' : kind==='none' ? ' none' : '');
+    tag.textContent = kind==='no-origin' ? 'NO DATUM'
+                    : kind==='none' ? 'NO SPEED' : kind==='est' ? 'EST' : '';
+    tag.className = 'est-tag' + (kind==='est' ? ' on'
+                  : (kind==='none' || kind==='no-origin') ? ' none' : '');
   }
   liveTitle(el,
     kind==='stale'    ? 'the link has gone quiet, so this is not a current reading'
+  : kind==='no-origin'? 'no launch point is set yet, so navigation has nothing to measure speed '
+                      + 'AGAINST. Nothing is wrong with the paddlewheel - set the origin and this fills in'
   : kind==='none'     ? 'nothing is reporting a speed at all - no paddlewheel pulses and no estimate'
   : kind==='measured' ? 'MEASURED - the paddlewheel counted this much water going past the hull'
   : 'ESTIMATED from the throttle curve, because the paddlewheel is not turning. '
@@ -455,15 +502,69 @@ const ALERT_ICONS = {
   // things to go and do, so they must not arrive as the same drawing.
   sensor: '<svg viewBox="0 0 24 24"><rect x="7.5" y="7.5" width="9" height="9" rx="1.4" fill="none" stroke="currentColor" stroke-width="2"/>'
         + '<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M10 7.5V4.5M14 7.5V4.5M10 16.5v3M14 16.5v3M7.5 10h-3M7.5 14h-3M16.5 10h3M16.5 14h3"/>'
-        + '<path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4.5 19.5 19.5 4.5"/></svg>'
+        + '<path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4.5 19.5 19.5 4.5"/></svg>',
+  // THE HULL NOBODY IS WATCHING. The same drawing as the leak glyph's fourth shape —
+  // broken drop, question mark — so the chip and the icon it explains are visibly one
+  // fact. Not the `sensor` chip-with-legs: the leak probes are not a chip on the bus,
+  // and "a sensor died" and "the hull's state is unknown" are different sentences.
+  leakunknown: '<svg viewBox="0 0 24 24">'
+    + '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+    + 'stroke-dasharray="3.2 2.8" d="M12 3.2s5.6 6.4 5.6 9.8a5.6 5.6 0 0 1-11.2 0c0-3.4 5.6-9.8 5.6-9.8z"/>'
+    + '<path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" '
+    + 'd="M10.2 11.1a1.85 1.85 0 1 1 1.85 1.85v1.35"/>'
+    + '<circle cx="12.05" cy="17.1" r="1.05" fill="currentColor"/></svg>',
+  // EVERY NUMBER ON SCREEN IS INVENTED. A screen with a model behind it, drawn as a
+  // screen with a wave in it - not a warning triangle, because this is not a fault on
+  // the vehicle, it is the console having quietly changed what it is showing.
+  sim: '<svg viewBox="0 0 24 24"><rect x="2.5" y="4.5" width="19" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>'
+     + '<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M5.5 12.5c1.6-2.2 3.2-2.2 4.8 0s3.2 2.2 4.8 0 3.2-2.2 3.4-1.1"/>'
+     + '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M9 20.5h6"/></svg>'
 };
 function alertList(v){
   const out=[];
   const push=(id,kind,glyph,text,title)=>out.push({id,kind,glyph,text,title});
+  // THE SIMULATOR HAS TAKEN THE GAUGES AND THE LINK IS STILL UP.
+  //
+  // First, because it qualifies every other chip under it: once this is showing, the
+  // flood, the snag and the pack below are all statements about a model. It cannot
+  // collide with a real alarm — a hull that is still talking never reaches this branch
+  // — so being at the top costs nothing and being anywhere else risks it scrolling off
+  // the bottom of a stack it is the precondition for.
+  if(v.simTakeover)
+    push('simtakeover','crit',ALERT_ICONS.sim,'SIMULATED · NO DATA ON AN OPEN LINK',
+         'THE NUMBERS ON THIS SCREEN ARE NO LONGER COMING FROM THE SUB - the control '
+       + 'socket is still open and the status row still shows it as connected, but no '
+       + 'telemetry has arrived for seconds, so the console has handed every gauge to '
+       + 'the local simulator. Depth, heading, ballast and the pack are all being '
+       + 'modelled and will keep moving plausibly. Nothing you see here is a '
+       + 'measurement until this chip clears.');
   if(v.leakStage==='FLOOD')
     push('flood','crit',ALERT_ICONS.flood,'FLOOD · SURFACE NOW',
          'FLOODING - water has reached the upper probe, about 2 cm above the hull floor. '
        + 'Hold SURFACE to blow the ballast and bring the sub up now.');
+  // THE HULL, WITH NOBODY READING THE PROBES.
+  //
+  // Kept OUTSIDE the `!v.stale` guard the dead-sensor chips sit behind, and the
+  // difference is real: those are inferred from a reading having gone absent, which a
+  // one-second link gap can fake. This is the vehicle SAYING SO in a field of its own,
+  // and a late frame does not make what it said less true.
+  //
+  // Critical, not a warning. Every other cannot-tell on this console costs the operator
+  // a number; this one costs them the answer to "is the hull still sound", and it can
+  // never compete with a flood because a standing FLOOD outranks UNKNOWN in leakStage()
+  // and this chip is then not built at all.
+  const leakChips = (v.leakStage==='UNKNOWN') ? faultChips('leak', v.sensorFaults) : [];
+  if(v.leakStage==='UNKNOWN')
+    push('leakunknown','crit',ALERT_ICONS.leakunknown,
+         'HULL STATE UNKNOWN · ' + (leakChips.length ? chipMeans(leakChips[0]).short + ' STOPPED'
+                                                     : 'PROBES NOT READ'),
+         'NOTHING IS READING THE LEAK PROBES, so the hull is neither dry nor wet as far '
+       + 'as this console knows'
+       + (leakChips.length ? (' - the vehicle names ' + leakChips.map(c=>chipMeans(c).long).join(' and ')) : '')
+       + '. The drop is deliberately not the green one: green is a positive claim that '
+       + 'both probes were read and neither was wet, and neither was read. Water could '
+       + 'be coming in right now and nothing on this vehicle would notice. Treat the '
+       + 'dive as unmonitored and come home.');
   // ONLY A MEASURED VOLTAGE MAY RAISE THE SURFACE PROMPT. batteryBand(null) already
   // answers 'none' rather than a band, but the `!=null` is written out here anyway
   // because this is the chip the whole finding is about: the console used to print
@@ -539,8 +640,11 @@ function alertList(v){
     if(v.batteryV==null) gone.push(['PACK VOLTAGE','battery']);
     // WHICH NAMES THE SCREEN HAS NOW ACCOUNTED FOR. Collected as we go so the sweep
     // below can tell a fault that explains a blank from one that explains nothing on
-    // screen at all.
-    const explained=[];
+    // screen at all. Seeded with the leak sampler's names when the hull-unknown chip is
+    // up: it accounts for them exactly as a blanked gauge accounts for its chip, and
+    // reporting "leak-probes" twice — once as the reason the hull is unknown and once
+    // as a fault nothing is drawn from — would contradict itself on one screen.
+    const explained=leakChips.slice();
     gone.forEach(g=>{
       const chips = faultChips(g[1], v.sensorFaults);
       chips.forEach(c=>{ if(explained.indexOf(c)<0) explained.push(c); });
@@ -568,16 +672,26 @@ function alertList(v){
     // nowhere, and any name added to the hull after this handheld was flashed does the
     // same. A fault the vehicle went to the trouble of reporting, dropped silently by
     // the console, is the round-three mistake in miniature — the hull knew and the
-    // screen did not say. Warn rather than crit: no reading has gone blank, so this is
-    // a thing to go and look at, not a thing to surface for.
+    // screen did not say. Warn rather than crit: nothing on screen has gone blank
+    // because of it, so this is a thing to go and look at, not a thing to surface for.
+    //
+    // THE SENTENCE USED TO SAY "Nothing on this screen was being drawn from it", AND
+    // THAT WAS FALSE. "leak-probes" landed here, and the hull-integrity glyph IS drawn
+    // from it — the chip was quietly certifying that a fault which had just taken the
+    // leak readout away had taken nothing away. It is accounted for above now, and the
+    // wording no longer makes a claim about what the screen draws from a part this
+    // console may never have heard of: all it can honestly say is that nothing has gone
+    // blank, which is the observation it actually has.
     const rest = unexplainedFaults(v.sensorFaults, explained);
     if(rest.length)
       push('faults','warn',ALERT_ICONS.sensor,
            'NOT ANSWERING · ' + rest.map(c=>chipMeans(c).short).join(' · '),
            'THE VEHICLE REPORTS THAT ' + rest.map(c=>chipMeans(c).long).join(' and ')
-         + ' has stopped answering. Nothing on this screen was being drawn from it, so no '
-         + 'reading has gone blank - but the hull is naming it as faulted, and a fault '
-         + 'nobody is shown is a fault nobody fixes. Check it before the next dive.');
+         + ' has stopped answering. No reading on this screen has gone blank because of '
+         + 'it - so either what it measures is not shown here, or something else is '
+         + 'still standing on the last thing it said - but the hull is naming it as '
+         + 'faulted, and a fault nobody is shown is a fault nobody fixes. Check it '
+         + 'before the next dive.');
   }
   if(v.leakStage==='WARN')
     push('leakwarn','warn',ALERT_ICONS.water,'WATER COLLECTING · FINISH UP',
@@ -617,9 +731,21 @@ function renderAlerts(v){
   if(list.length) LOG.warn('ALERT: ' + list.map(a=>a.text).join(' | '));
 }
 
-let _prev={}, _ballastKnown=true, _ballastRehome=false;
+let _prev={}, _ballastKnown=true, _ballastRehome=false, _simTakeover=null;
 function renderUI(v){
   const stale=!!v.stale;
+  // SIMULATED, WITH THE LINK STILL SHOWING GREEN (main.js sets the flag). Two carriers,
+  // because the status row is actively saying the opposite: a badge across the top where
+  // the STALE one lives — same family, because they are the same kind of statement about
+  // where the numbers came from — and a chip in the alert rail that says it in a
+  // sentence. Never the badge alone: a badge is a colour and a word, and this needs to
+  // say WHY the gauges are still moving.
+  const takeover = !!v.simTakeover;
+  if(_simTakeover !== takeover){
+    _simTakeover = takeover;
+    document.body.classList.toggle('sim-takeover', takeover);
+    const sb=$('sim-badge'); if(sb) sb.classList.toggle('show', takeover);
+  }
   // Numeric readouts (dashed when stale)
   // The pack, and the question mark when nothing is measuring it. `(x!=null?x:'--')+'V'`
   // stood here, which spelled an absent pack "--V" — the STALE shape, the one that means
@@ -711,7 +837,15 @@ function renderUI(v){
   // holding course. map.js's own badge says NO BEARING over it (it reads the same
   // HEADING_FLAGS table), and this marks the dial itself so the ring the picture is
   // drawn in admits it too — the badge must never be the only carrier.
-  document.body.classList.toggle('heading-dead', !stale && v.heading==null);
+  //
+  // ASKED OF BOTH SOURCES, because the dial does not turn on the number beside it. The
+  // bearing on this bar comes off /ws/control and the angle the map is rotated by comes
+  // off /ws/nav, which is a different socket that fails separately — so a nav frame with
+  // a null heading holds the picture (map.js setMapHeading) while telemetry is still
+  // reporting a perfectly good compass, and without this the held picture would wear no
+  // mark at all. Guarded on MAP existing: the map is allowed to fail alone (§3).
+  const hdgHeld = (typeof MAP!=='undefined') && MAP.hdgLive===false;
+  document.body.classList.toggle('heading-dead', !stale && (v.heading==null || hdgHeld));
   // DEPTH AND PRESSURE, each with the two ways it can be absent kept apart. The tint
   // and the number are set together on purpose: they are one claim, and the dive that
   // motivated all of this is the one where they came apart — a frozen 4.3 m wearing a
