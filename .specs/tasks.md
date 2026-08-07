@@ -7,6 +7,128 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 
 ---
 
+## The readings nobody could see
+
+- 🧪 **Twenty facts were leaving the vehicle on every frame and reaching no readout, a
+  twenty-first reached one only on hover, and nothing in the repo could tell which of them
+  were decisions.**
+  The defect is not that a field was unrendered — plenty of them should be. It is that
+  *deliberately not shown* and *forgotten* looked identical from every file, so each round
+  re-discovered the same list and each round guessed differently about it.
+
+  **The inventory.** Every field on both frames is now written down with what its null
+  means and what the console actually does with it — `api/README.md` → *Every field on the
+  wire, and what the console does with it*, which is the page you land on when you add a
+  sensor. Taken by grepping the five client files for each field name, not from memory. It
+  separates five fates that were previously one word: **rendered**, **tooltip only**,
+  **consumed** (something branches on it, nothing shows it), **ingested** (parsed into
+  `state` and read by nothing), and **dead store** — a named slot written every tick that
+  looks like a working consumer at every call site except the one that would draw it.
+  `/ws/nav` had three of those (`range_m`, `payout_m`, `confidence`) and they had survived
+  months precisely because `MAP.rangeM = m.range_m` reads like a feature.
+
+  **Four readings went onto the wire, and one came out of a tooltip.** `gyro_z_dps`,
+  `accel_fwd_ms2`, `pitch_deg` and `roll_deg` existed only on nav's internal
+  `SensorSample` — no amount of client work could have displayed them, because neither
+  frame carried them. They ride on `protocol.Telemetry` and **deliberately not** on
+  `NavState`, for a reason worth keeping: `NavState` does not exist until a dive does (the
+  estimator is built in `start_dive()`, which needs an origin), so a field there would be
+  blanked by the nav freshness gate through the whole pre-dive phase of every healthy
+  boot — spelling *"no datum yet"* and *"the IMU is dead"* with one null. A comment block
+  in `nav/models.py` records that, so a later round cannot re-add them and recreate a
+  two-socket disagreement of the kind `TwoSocketsOneVehicleTest` already exists for.
+  `current_a` needed no contract change at all: its wire shape was already right, and it
+  was being spent inside the pack tooltip — *"drawing 3.1 A"* — which an operator on a bank
+  in sunlight with wet hands is never going to hover. A reading nobody can see is a reading
+  that does not exist.
+
+  **All four are `Optional` with no default, and that is the whole point.** Every plausible
+  default is itself a measurement: `0.0 deg/s` is *"not turning"*, `0.0 m/s²` is
+  *"coasting"*, `(0.0, 0.0)` is *"level"*. Each is the **calm** answer, which is exactly
+  how a dead IMU used to look like a well-behaved vehicle — the same defect as `mag_cal` 0,
+  one round later and four fields wider. On `kill("bno085")` all **six** BNO085 fields go
+  null in one frame with `sensor_faults=['bno085']`, so the blank always arrives with the
+  chip that caused it; amps and volts likewise die together, because they are one chip.
+
+  **What they are for is now written where the person holding the soldering iron will read
+  it** (`docs/hardware.md` §6.4): turn rate is the independent witness that catches a
+  compass being pushed by the thrusters' own magnetic field, or a gyro bias that walks the
+  dead-reckoned track sideways; forward acceleration catches a 90° mounting error before it
+  becomes a mystery in the dive log, and separates *"the paddlewheel died"* from *"the sub
+  genuinely is not moving"*; a standing roll at rest is lead and foam, not software. And
+  pack current is the reading that finds a **fouled prop** — this is a canal-cleaning
+  vehicle, the propellers will pick up line and weed, the camera looks forward rather than
+  aft, and a wrapped prop still spins and still makes noise. The signature is draw **up**
+  with paddlewheel speed **down** at the same throttle. *Measured against `MockHardware` on
+  the ROG Ally, 2026-08-07:* 0.35 A idle, 2.85 A with both thrusters at full, +0.80 A for
+  the white spots and +0.50 A for the green ring — **4.15 A worst case, above the stock
+  0.1 Ω shunt's ±3.2 A ceiling.** A clipped reading is not a maximum; it is a ceiling
+  wearing a measurement's clothes, and the one thing it hides is the overload the sensor
+  was fitted to see.
+
+  **What is still not shown, and now says so out loud.** Twenty of `Telemetry`'s
+  forty-six fields reach no readout, and twelve of `/ws/nav`'s twenty-four keys reach
+  nothing at all. Most are fine — the Pi-health block is duplicated on
+  `/api/system` on purpose, so it survives the control link going down. Three are worth a
+  reviewer's suspicion and are called out as such: the two `light_*_level` echoes (the
+  gauge shows what was *commanded*, so a lamp driver that clamps or comes up at half
+  brightness looks perfect on screen), `signal`, and `link_ms`. None is a safety signal,
+  which is why none has been promoted — and none is a deliberate omission either, which is
+  why the row exists rather than being rediscovered next round.
+
+## The checks stop being able to lie
+
+- 🧪 **Four stale check totals, two of which went stale in the commit that "fixed" them.**
+  214 in `bootstrap.py`, 249 in `client/tests/README.md`, 286 in `client/README.md` and
+  `.specs/design.md`, and a fifth number in reality — every one copied forward from
+  whichever tree its writer had open rather than from a run. The cost is not one wrong
+  number. Someone who reads 286 and watches a different total scroll past has been told the
+  bench is running something other than what it is, and then has no reason to believe
+  anything else on the page.
+
+  **So the counts now live in exactly one place: the runners, which print them.** No
+  document in this repo states a check total any more. `bootstrap.py` globs `suites/*.js`
+  for the suite count (derived off the tree, so it cannot drift) and *asks*
+  `api/tests/run.py --list` for the api figures rather than remembering them. The
+  reasoning, and the list of what may still be written down, is
+  `client/tests/README.md` → *Where the numbers live*. Wall time is the one measured figure
+  kept, because it is the difference between "time for a coffee" and "something has hung" —
+  and it is stamped with the machine and the date and labelled a measurement, not a
+  contract.
+
+  **The suites run on three platforms**, which matters because the api half is meant to be
+  checkable on the Pi it deploys to and the client half on whatever anyone has: Windows
+  finds Chrome or Edge, macOS finds `/Applications/Google Chrome.app`, Raspberry Pi OS
+  finds `chromium-browser` on `PATH`. Standard library either way, and nothing needs the
+  internet once the browser is on the card — the Pi is normally on a sealed tether.
+
+  **And on the Ally there is now one touch:** `Neptune.bat -Test` (`-Test client` /
+  `-Test api` for one half). There is no terminal on that handheld and no keyboard to type
+  one with, so *"run the suites before you get in the boat"* was a ritual nobody could
+  perform at the waterside — and a suite that cannot be run where the vehicle is, is a
+  suite that quietly stops being run. It sits ahead of the single-instance mutex and opens
+  no port, so it works with a dive already up on the machine.
+
+  **Green now means it ran.** The launcher quotes the runner's own total rather than
+  counting anything itself, and treats a zero exit with **no total printed, a total of
+  zero, or an `INCOMPLETE` verdict** as a failure to run rather than a pass — the same
+  three-value language `api/tests/run.py` already speaks (`0` ran and passed · `1` a check
+  failed, which is a *finding* · `2` nothing failed but something could not be **run**,
+  which is an *absence* of findings). The verdict block carries its answer in a frame
+  character as well as a colour (`=` passed, `#` failed, `?` could not tell), because a
+  phone photo of that window may be all anyone has by the time it is discussed, and because
+  in this project colour is never the only carrier — the same rule as the gauges.
+
+  *Verified by running, on the ROG Ally (RC71L, Ryzen Z1 Extreme, Windows 11, PowerShell
+  5.1), 2026-08-07.* The api suite is green and exits 0. The client suite **exits 1 as this
+  is written**, on one check — `Speed — a null renders as "?" and never as the stale "--"` —
+  which is a real finding in the round landing beside this one and is logged below rather
+  than waited out. Wall time on this machine: **api ≈5 s, client ≈145 s**; that is a
+  measurement of one box on one day, not a contract. Totals are deliberately not written
+  here — run them.
+
+---
+
 ## Sensor liveness — four rounds
 
 - 🧪 **A sensor that stops answering now says so, and nothing downstream fills it in.**
@@ -109,10 +231,13 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
   in at the hardware end and asserts what comes out at the client end. Every layer passed its
   own tests the entire time.
 
-  *Verified 2026-08-07 by running, on the ROG Ally.* Both suites green: client
-  **295/295 in 114 s across 12 suites**, api **147/147 in 1 s across 4 suites**; the api
-  runner in a python with no `pydantic` correctly reports `100/103 across 2 of 4 suites`,
-  verdict INCOMPLETE, exit 2, rather than a reassuring total.
+  *Verified 2026-08-07 by running, on the ROG Ally.* Both suites green, both exit 0; the
+  api runner in a python with no `pydantic` correctly reports the un-importable suites as
+  `DEPS`, verdict INCOMPLETE, exit 2, rather than folding them into a reassuring total.
+  (Totals are not quoted here on purpose — this entry has been re-read after the suites
+  grew, and a figure frozen into a changelog is a figure that describes a tree nobody has
+  any more. `python bootstrap.py --test` states them; see *The checks stop being able to
+  lie*, above.)
   Against `MockHardware` + the real `RovState`: healthy frame
   `heading=284.0 card='W' mag_cal=3 depth=3.59 pressure=19.8 batt=8.3 current=0.75 faults=[]`;
   after `_kill_sensor` on all three chips,
@@ -183,11 +308,12 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 
 - 🧪 **`bootstrap.py` reports the Pi-only hardware libraries**, present or absent, and
   installs none of them — absence on the bench is correct, because every hardware import is
-  lazy and `NEPTUNE_HW=auto` then lands on the flagged simulator. Also fixed the stale client
-  check count it had been printing (214 → 286 at the time; **295** as measured 2026-08-07,
-  and that line has now carried four different totals — re-measure it by running the suite,
-  never by adjusting it until it looks right), and `--test` now runs the API suite too when
-  one is present.
+  lazy and `NEPTUNE_HW=auto` then lands on the flagged simulator. It also stopped printing a
+  remembered client check count: that line carried four different totals over four rounds,
+  so it now globs `suites/*.js` for the suite figure (derived off the tree, so it cannot
+  drift) and asks `api/tests/run.py --list` for the api ones, leaving the check totals to
+  the runners — which are the only things entitled to state them. `--test` runs both suites
+  when both are present.
 
 ## Navigation follows the vehicle
 
@@ -557,27 +683,35 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 | ⚠️ | **Chrome geolocation policy unverified** — kept as belt-and-braces; nothing depends on it | topside |
 | ⚠️ | **Blind nav zoom/dial size are judgement calls** — `radarMetersPerPixel`, `blindSpanM` and the dial size were tuned by measurement, not by driving | field trial |
 | ⚠️ | **Nav track unexercised in the field** — needs an origin set at a real site and a dive | field trial |
-| ⚠️ | **No check crosses the whole liveness chain.** Every layer passes its own tests, which is precisely what let this defect ship three times (see `.specs/design.md` §24). There is no check that kills a sensor at the hardware end and asserts what reaches the client — and **not one of the 295 browser checks exercises the `?` mark, the amber wavy underline, `NO BEARING` or `sensor_faults` at all**. The one test that would have caught all four rounds is still the one that does not exist | api + client tests |
-| ⚠️ | **`leak_state: "UNKNOWN"` is collapsed to `NORMAL` topside.** The vehicle correctly refuses to claim the hull is dry when nothing is sampling the probes (verified: `leak=True leak_state='UNKNOWN' faults=['leak-probes']`), but `leakStage()` in `client/js/core.js` maps anything that is not `FLOOD`/`WARN` to `NORMAL`, so the drop glyph reads *"both probes dry"* on evidence nobody is collecting — the exact failure the fourth state was added to remove, undone one file later. `api/protocol.py`'s comment still lists three states | client |
-| ⚠️ | **A dead INA219 renders as `--V`, not `?`.** Voltage and current both null correctly and `ina219` is named in `sensor_faults`, but the pack readout falls back to the **stale** mark instead of the cannot-tell one and raises no alert chip, so "the link blinked" and "nothing is measuring the pack" look identical on the one gauge that decides whether the dive continues | client |
-| ⚠️ | **`client/tests/README.md` still advertises `~95 s, 249 checks`** — the stalest of the four totals this project has carried, and the one file with the counts in it that nobody was assigned. Same class of miss as the unowned `api/nav/sensors.py`: a document nobody owned quietly contradicted every other document that had been fixed | client docs |
-| ⚠️ | **Visual baselines are unblessed after this round.** 11 of 12 suites report drift above the 0.1% tolerance (0.53%–2.04%, `ballast-syringe` worst) because the client changed and `client/tests/baseline/*.layout.png` did not. Drift only reports unless `--strict-visual`, so the run still exits 0 — which means the picture layer is currently telling nobody anything | client tests |
+| ⚠️ | **SPEED still spells cannot-tell as `--`.** `instrument-cluster` fails exactly one check on it: a null `speed_ms` renders as the **stale** dash rather than the `?`, so "the frame is late, wait" and "the paddlewheel is not turning and nothing is measuring speed" read identically on the one gauge the snag warning is built from. Every other reading on the console was converted; this one was written before the rule existed and has been showing a dropped-frame mark about a dead sensor since. *Measured 2026-08-07 on the ROG Ally: client `428/429`, exit 1, this the only failure* | client |
+| ⚠️ | **Visual baselines are unblessed again**, and for the textbook reason: the instrument cluster changed the layout and `client/tests/baseline/*.layout.png` did not move with it. *Measured 2026-08-07:* 12 of the 13 compared suites drift **0.93%–1.31%** against a 0.10% tolerance (`ballast-syringe` worst at 1.31%, 11 598 of 883 116 px), and `instrument-cluster` has no baseline at all. Drift only reports unless `--strict-visual`, so this does **not** show up in the exit code — which is precisely why it is written here: the picture layer is currently telling nobody anything. `--bless` belongs in the commit that changed the UI, after looking at the shots | client tests |
+| ⚠️ | **`.specs/design.md` §14 still quotes four stale totals** — `295 checks`, `~114 s`, `four suites, 147 checks`, and a `100/103 across 2 of 4` no-deps figure, all of which the runners now contradict. It was outside this round's file ownership, which is the same shape of miss as the unowned `api/nav/sensors.py`: the one document nobody was assigned went on saying what every other document had stopped saying. It should say what `client/tests/README.md` → *Where the numbers live* says, and quote nothing | specs |
+| ⚠️ | **The `/ws/nav` dead stores are still dead.** `range_m`, `payout_m` and `confidence` are written into `MAP.*` every frame and read by nothing, and `snap_offset_m` — which spec §5.7 calls "the drift indicator" — is not even ingested. The inventory in `api/README.md` now names them rather than letting each round rediscover them, but naming a gap is not closing it: `confidence` in particular is the estimator's own account of how much the track it just drew is worth, and it reaches the operator nowhere | client |
+| ⚠️ | **Three telemetry fields are shown from somewhere else, so a disagreement is invisible.** `light_green_level` / `light_white_level` (the gauge shows what was *commanded*, so a lamp driver that clamps, fails or comes up at half brightness looks perfect), `signal`, and `link_ms` (the readout is the client's own pong RTT). None is a safety signal; all three are listed in the inventory as suspicious rather than as decided | client |
 
 ---
 
 ## Since the last spec pass — what now exists
 
-- **Tests are real, on both halves.** `client/tests/`: **12 suites, 295 browser checks**
-  against the shipping dashboard, plus a screenshot + drift layer with a measured 0.1%
-  tolerance. `api/tests/`: **4 suites, 147 checks**, standard-library `unittest`, no pytest
-  — a framework that has to be installed on a Pi over a canal-side hotspot is a suite that
-  quietly stops being run. Both measured 2026-08-07 (`295/295 in 114s`, `147/147 in 1s`),
-  both exit 0 only if everything passes. Previously there were none at all.
+- **Tests are real, on both halves**, where previously there were none at all.
+  `client/tests/` drives the shipping dashboard in headless Chrome, plus a screenshot +
+  drift layer with a measured 0.1% tolerance; `api/tests/` is standard-library `unittest`,
+  no pytest — a framework that has to be installed on a Pi over a canal-side hotspot is a
+  suite that quietly stops being run. Both exit 0 only if everything passes, both run on
+  Windows, macOS and Raspberry Pi OS, and `Neptune.bat -Test` runs them from the handheld's
+  desktop with no terminal.
+  **Neither total is written down anywhere**, deliberately: `python bootstrap.py --test`
+  runs both and prints them, and *Where the numbers live* in `client/tests/README.md` says
+  why four hand-copied totals were once in circulation at once.
   The api runner separates **failed** from **never loaded**: without `pydantic` two of its
-  four suites cannot be imported, and it reports `100/103 across 2 of 4 suites`, verdict
-  INCOMPLETE, exit 2 — a failed check is a finding, a suite that never ran is an absence of
-  findings, and adding them into one total is exactly the reassuring-but-false report this
-  project refuses from its instruments.
+  suites cannot be imported, and they are reported as `DEPS`, counted apart, named in the
+  verdict, INCOMPLETE, exit 2 — a failed check is a finding, a suite that never ran is an
+  absence of findings, and adding them into one total is exactly the
+  reassuring-but-false report this project refuses from its instruments.
+- **Every field on both frames is inventoried** (`api/README.md`), with what its null means
+  and what the console does with it — rendered, consumed, ingested-and-read-by-nothing, or
+  a dead store. It is the page to read before adding a sensor, and it exists because
+  *deliberately not shown* and *forgotten* had looked identical from every file in the repo.
 - **Dive logs can be calibrated** (`api/nav/calibrate.py`): the sample carries the control
   channels, and the analyser derives turn rate, depth and speed — refusing to answer where
   the data cannot support it.

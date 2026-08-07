@@ -47,6 +47,23 @@ function simulate(dt){
   // reading that would hide a snag is a model dressed up as a sensor.
   s.speedMs = c.throttle * ((CONFIG.map&&CONFIG.map.subMaxSpeedMs)||1.0);
   s.speedSrc = 'lut';
+  // THE SECONDARY INSTRUMENTS, AND THE MODEL TAKING THEM BACK. Each entry in
+  // FLIGHT_METRICS (core.js) either has a `sim` — a value the bench model can honestly
+  // produce out of what it is already modelling — or it does not, and the ones that do
+  // not are written to NULL rather than left alone.
+  //
+  // Writing the nulls is the whole point of this line, and it is the same failure the
+  // four fields above were fixed for: `state` is where the LAST HULL's readings are, the
+  // simulator resumes from it, and a bench inheriting a dead sub's 9 degrees of roll
+  // would show a listing hull that is not there — for hours, with nothing on screen able
+  // to explain it. The model owns these while it is flying: it has a heading, a depth
+  // and a throttle, so it can say what it is turning at and what it is drawing; it has
+  // no hull, so it has no pitch and no roll, and it says so with the same question mark
+  // a dead sensor gets rather than with a comfortable 0.0 that means LEVEL.
+  for(let i=0;i<FLIGHT_METRICS.length;i++){
+    const m=FLIGHT_METRICS[i];
+    s[m.key] = m.sim ? m.sim(s, dt) : null;
+  }
 }
 
 /* Build a normalized "view" object the renderer consumes. */
@@ -81,10 +98,52 @@ function viewFromState(sim){
   // list, same frame), and any driver serving a cached last-good reading has the same
   // shape. When they disagree the ADMISSION wins: the list can veto a number, never
   // invent one, so a vehicle too old to report faults is completely unaffected.
-  const sensed = (val, at, kind) =>
-    (val!=null && (!live || (sensorFresh(at) && !faultedNow(kind, s.sensorFaults)))) ? val : null;
+  // AND FOURTH, WHOSE FAULT THE SILENCE IS. A per-field stamp can never be fresher than
+  // the frame that carried it, so when nothing is arriving every field ages out at the
+  // same instant — and that is the LINK, not ten chips failing simultaneously. Read as a
+  // sensor failure it painted nine of ten readouts with the cannot-tell "?" and raised
+  // three crit SENSOR STOPPED chips accusing hardware that never faltered, on every
+  // socket hiccup between staleTimeoutMs and simFallbackMs. "Dropped frame, will come
+  // back" already has its own presentation ("--"), and it is a different instruction to
+  // the operator than "go and look at that cable", so it has to win here.
+  const frameFresh = sensorFresh(s.realTelAt);
+  const sensed = (val, at, kind) => {
+    if(val == null) return null;                      // the vehicle sent no reading
+    if(!live) return val;                             // model values, known by construction
+    if(faultedNow(kind, s.sensorFaults)) return null; // the hull named the chip: the admission wins
+    if(!frameFresh) return val;                       // nothing is arriving at all — the link's fault
+    return sensorFresh(at) ? val : null;              // frames ARE arriving and this field stopped
+  };
+  // THE SECONDARY INSTRUMENTS THROUGH THE SAME GATE, AND THAT IS THE POINT OF PUTTING
+  // THEM THROUGH IT. They are advisory readings, which is exactly the argument that
+  // would let them drift onto a weaker rule — and the weaker rule is what makes them
+  // dangerous: a turn rate reading 0.0 deg/s beside a blanked bearing says the sub is
+  // holding a straight course, drawn from a chip that is answering nothing. Every one of
+  // these has a calm, plausible zero, so every one of them is worth more dead than the
+  // primary readings are. `imu` is their kind, so a BNO085 named in sensor_faults vetoes
+  // a cached number here the same way it vetoes a cached bearing.
+  const flight = {};
+  // Whether the hull SPEAKS each of these at all, carried onto the view beside the value.
+  // Absent and null both arrive here as null, and only one of them is a fault worth an
+  // errand: a vehicle too old to send the field has no instrument to have lost.
+  let currentSeen = false;
+  for(let i=0;i<FLIGHT_METRICS.length;i++){
+    const m = FLIGHT_METRICS[i];
+    if(m.key==='currentA') currentSeen = !!s[m.key+'Seen'];
+    flight[m.key] = sensed(s[m.key], s[m.key+'At'], m.kind);
+  }
   return {
     stale:false, sim:!!sim,
+    // IS THERE A HULL BEHIND ANY OF THIS. Not the same question as `sim`: that one says
+    // which source main.js chose, this one says whether a real vehicle spoke recently
+    // enough for its silence to MEAN anything. A blank on a hull is a chip to go and
+    // check; the same blank on the bench is the model admitting it has no such
+    // instrument, and telling an operator to go and check a cable that is not there is
+    // how a console teaches people to ignore it.
+    hull: live,
+    flight: flight,
+    currentSeen: currentSeen,   // does this hull carry current_a at all? absent != null
+
     armed:s.armed, left:s.left, right:s.right,
     ballastLevel:s.ballastLevel, ballastTarget:s.ballastTarget,
     ballastKnown: live ? s.ballastKnown!==false : true,   // the model's tank is known by construction
@@ -126,11 +185,13 @@ function viewFromState(sim){
     snagUnknown: live ? (s.snagged==null && !!s.navAnswered) : false,
     snagStood:   live ? (s.snagged==null && !!s.snagStood)   : false,
     headingFlag: headingFlag(),             // '' | mag | gyro | gyro-mag | nomag | dead | nofilter
-    // Free from the same INA219 as the voltage, so it dies with it. No freshness stamp
-    // of its own: it rides in the pack tooltip and is already null whenever the chip is
-    // silent — the veto is here only for the hull that names the chip and sends a
-    // cached amp figure anyway.
-    currentA: (live && !faultedNow('current', s.sensorFaults)) ? s.currentA : null,
+    // Free from the same INA219 as the voltage, so it dies with it. Taken straight off
+    // the gated list above now that it has a readout of its own — it used to have a
+    // hand-written gate here because it only ever rode in the pack tooltip, and a
+    // tooltip is not somewhere an operator in sunlight with wet hands ever looks. One
+    // value, one gate, so the tile and the tooltip cannot end up disagreeing about
+    // whether anything is measuring the draw.
+    currentA: flight.currentA,
     linkMs:s.linkMs
   };
 }
@@ -341,7 +402,14 @@ function paintMetric(id, color, why){
    sensor dressed as a dropped frame is a sub flown on a number nobody is taking. Three
    carriers — the mark, the amber, and the alert chip naming the chip — so none of them
    has to be the one that gets noticed. */
-function renderSensed(id, val, text, stale, tint, what, kind, v){
+/* `deadWhy` overrides the sentence for callers whose blank has a different cause. There
+   is exactly one such cause and it is the bench: with no vehicle on the link, a missing
+   reading is not a chip that stopped, it is an instrument the console's own model never
+   had. Same mark, same amber, same '?' — genuinely-not-known is genuinely-not-known and
+   a second visual vocabulary for it would teach nobody anything — but the words have to
+   be true, and "the sensor behind this has stopped answering" is not true of a hull that
+   is not there. */
+function renderSensed(id, val, text, stale, tint, what, kind, v, deadWhy){
   const el=$(id); if(!el) return;
   const dead = !stale && val==null;
   setText(el, dead ? '?' : text, stale);
@@ -349,7 +417,21 @@ function renderSensed(id, val, text, stale, tint, what, kind, v){
   // The sentence is built only when there is something to admit — this runs on every
   // frame, and paintMetric's memo means the healthy case must not do work to say
   // nothing.
-  paintMetric(id, dead ? 'var(--hazard)' : tint, dead ? noSensorWhy(what, kind, v) : '');
+  paintMetric(id, dead ? 'var(--hazard)' : tint,
+              dead ? (deadWhy || noSensorWhy(what, kind, v)) : '');
+}
+/* THE BENCH ADMITTING WHAT IT IS NOT MODELLING. The simulator has a heading, a depth, a
+   throttle and a tank; it has no hull, so it has no attitude, and the honest thing to
+   draw is the question mark rather than a level 0.0 that would be a claim. It must not
+   borrow the dead-sensor sentence: that one ends by sending the operator to look at a
+   cable, and on a console with no vehicle attached there is no cable — an errand that
+   cannot be run is how a screen teaches people to stop reading it. */
+function noModelWhy(what){
+  return 'NO ' + what + ' - and nothing has stopped. There is no vehicle on this link, '
+       + 'and the console’s own model does not have this instrument: it flies a heading, '
+       + 'a depth and a tank, and it has no hull to tilt. The question mark is the model '
+       + 'saying it cannot tell you, rather than showing you a level, still, comfortable '
+       + 'number it made up.';
 }
 /* The sentence, with the chip named when the vehicle said which one. Kept in one place
    so the depth tile and the pressure tile cannot drift into telling different stories
@@ -402,13 +484,176 @@ function renderBattery(v){
   liveTitle(el, why);
 }
 
+/* ---- THE SECONDARY INSTRUMENTS -------------------------------------------
+   Five readings the vehicle has always sent and nothing ever drew: the pack's amps
+   (spent inside the pack TOOLTIP, which is not showing it to anybody flying a sub in
+   sunlight) and the four inertial channels off the compass module. The markup, the
+   ingest, the bench model and the wording all come out of ONE table (core.js
+   FLIGHT_METRICS), because the operator has said they will fly with all five and then
+   cut back, and a metric spread across three files is a metric nobody dares delete.
+
+   NOTHING NEW IS INVENTED HERE. The tiles are the same .metric / .m-label / .m-val the
+   whole console is made of, the cannot-tell is renderSensed's existing question mark,
+   and the group head's mark is the same .m-flag the bearing wears. Only the grouping is
+   new, and it is new because five more numbers in the top bar is the wall-of-digits this
+   brief exists to avoid.
+
+   NOT TINTED. The depth ramp means DEPTH everywhere on this console — the track, the
+   syringe, the depth and pressure numbers — and a turn rate wearing band 7 would be
+   borrowing a colour it did not earn from a quantity it is not. These stay the default
+   readout colour and go amber only to say they are not being measured. */
+let _clusterBuilt=false;
+function flightTile(m){
+  const tile=document.createElement('div');
+  tile.className='metric';
+  tile.dataset.metric=m.key;                       // the hook for pruning, and for a test
+  const lab=document.createElement('span');
+  lab.className='m-label'; lab.textContent=m.label;
+  const val=document.createElement('span');
+  val.className='m-val'; val.id=m.id; val.textContent='--';
+  // data-help is what captureHelp() would have written had this lived in index.html, so
+  // liveTitle() keeps appending the live sentence to the explanation instead of erasing
+  // it — and every check that asks an element what it MEANS gets the same answer here as
+  // it does from a hand-written tile.
+  val.dataset.help=m.help; val.title=m.help; val.setAttribute('aria-label', m.help);
+  tile.appendChild(lab); tile.appendChild(val);
+  return tile;
+}
+function buildFlightCluster(){
+  if(_clusterBuilt) return;
+  _clusterBuilt=true;                              // one attempt: the hosts ship in the HTML
+  HUD_GROUPS.forEach(g=>{
+    const mine=FLIGHT_METRICS.filter(m=>m.group===g.id);
+    if(!mine.length) return;                       // every metric pruned: the group goes too
+    // DIRECT SIBLINGS, not a wrapper. #topbar is a flex row whose even gaps come from
+    // space-between dividing the leftover width between its CHILDREN, so a container
+    // holding two readings would be one child holding two — and the bar's spacing, which
+    // has its own test, would quietly stop being even.
+    if(g.after){
+      const anchor=$(g.after);
+      if(!anchor){ LOG.warn('metric group "'+g.id+'" has no anchor #'+g.after); return; }
+      let at=anchor;
+      mine.forEach(m=>{ const el=flightTile(m); at.parentNode.insertBefore(el, at.nextSibling); at=el; });
+      return;
+    }
+    const host=$(g.into);
+    if(!host){ LOG.warn('metric group "'+g.id+'" has no host #'+g.into); return; }
+    const wrap=document.createElement('div');
+    wrap.className='fgroup'; wrap.id='fg-'+g.id; wrap.dataset.group=g.id;
+    const head=document.createElement('button');
+    head.type='button'; head.className='fg-head'; head.id='fg-'+g.id+'-head';
+    head.innerHTML='<span class="fg-chev" aria-hidden="true">▾</span>'
+                 + '<span class="fg-name"></span>'
+                 + '<span class="m-flag fg-flag" id="fg-'+g.id+'-flag"></span>';
+    head.querySelector('.fg-name').textContent=g.label;
+    head.dataset.help=g.title; head.title=g.title; head.setAttribute('aria-label', g.title);
+    // The mark carries its own explanation, because it is a readout like any other and
+    // an operator who sees it needs to know what it is claiming without hovering the
+    // heading behind it.
+    const flag=head.querySelector('.fg-flag');
+    const flagHelp='NOT BEING MEASURED - at least one of the readings under this heading '
+      + 'has no sensor behind it: the vehicle is sending null for it, so there is no '
+      + 'number to show and none is being invented. It is shown on the heading as well as '
+      + 'on the reading itself so that folding the group away can never hide the fact that '
+      + 'something under it stopped. Open the group and the reading with the question mark '
+      + 'is the one; its own tooltip names the chip if the vehicle said which.';
+    flag.dataset.help=flagHelp; flag.title=flagHelp; flag.setAttribute('aria-label', flagHelp);
+    const tiles=document.createElement('div');
+    tiles.className='fg-tiles'; tiles.id='fg-'+g.id+'-tiles';
+    mine.forEach(m=>tiles.appendChild(flightTile(m)));
+    wrap.appendChild(head); wrap.appendChild(tiles);
+    host.appendChild(wrap);
+    // FOLDING. Advisory instruments, so the operator is allowed to put them away — and
+    // the choice survives a reload, because a group that reopens itself on every launch
+    // is a group the operator folds every launch and then stops trusting to stay folded.
+    const KEY='neptune_group_'+g.id;
+    let closed=false;
+    try{ closed = localStorage.getItem(KEY)==='1'; }catch(e){}
+    const apply=()=>{ wrap.classList.toggle('collapsed', closed);
+                      head.setAttribute('aria-expanded', String(!closed)); };
+    apply();
+    head.addEventListener('click', ()=>{
+      closed=!closed; apply();
+      try{ localStorage.setItem(KEY, closed?'1':'0'); }catch(e){}
+      // Hand the keyboard back. This handheld is flown on WASD and the paddles, and a
+      // button that keeps focus after a tap swallows the next Space as "press me again"
+      // instead of passing it to the sub.
+      head.blur();
+    });
+  });
+}
+/* One frame of the cluster. Every reading goes through the SAME renderSensed the depth
+   and the bearing use, so there is one rule about what a missing number looks like and
+   not two — the only thing this adds is the sentence for the bench, where a blank is the
+   model admitting it has no such instrument rather than a chip to go and check. */
+const _flightFlagSig={};
+function renderFlight(v){
+  const stale=!!v.stale;
+  // A view built by anything other than viewFromState has no readings on it, and this
+  // subsystem is allowed to fail alone (§3): it must not take the depth gauge down with
+  // it. An absent set reads as five cannot-tells, which is the true statement about a
+  // view that carries none of them.
+  const flight = v.flight || {};
+  for(let i=0;i<FLIGHT_METRICS.length;i++){
+    const m=FLIGHT_METRICS[i];
+    const val=flight[m.key];
+    renderSensed(m.id, val, (val!=null ? m.fmt(val) : '--'), stale, null,
+                 m.what, m.kind, v, v.hull ? null : noModelWhy(m.what));
+  }
+  HUD_GROUPS.forEach(g=>{
+    if(!g.label) return;                                   // headless group: nothing to mark
+    const el=$('fg-'+g.id+'-flag'); if(!el) return;
+    // ONLY A HULL CAN RAISE IT. On the bench, pitch and roll are permanently unmeasured
+    // by construction, and a mark that is lit from power-on is a mark nobody reads — the
+    // same reasoning that keeps the snag-watch chip silent on a vehicle whose estimator
+    // never ran. And never while STALE: a link that went quiet for a second has not
+    // killed anything, and accusing a chip over a late frame is how an operator learns to
+    // wait out warnings that mean it.
+    const gone = (v.hull && !stale)
+      ? FLIGHT_METRICS.filter(m=>m.group===g.id && flight[m.key]==null) : [];
+    const chips = gone.length ? faultChips(gone[0].kind, v.sensorFaults) : [];
+    // Names the JOB, not the part number, and says the bus when it is the bus — one dead
+    // sensor is one connector and a dead bus is every connector plus its power.
+    const label = !gone.length ? ''
+                : chips.indexOf('i2c')>=0 ? 'I2C BUS DOWN'
+                : chips.length            ? chipMeans(chips[0]).short + ' STOPPED'
+                : 'NOT MEASURED';
+    // Signed on the COUNT as well as the label, for the reason renderBattery's memo
+    // carries `why`: a second reading going quiet under an unchanged label ("NOT
+    // MEASURED" whether one of them is gone or three) would leave the sentence behind
+    // saying "1 of 4" while four question marks sat under it.
+    const sig = label + '|' + gone.length;
+    if(_flightFlagSig[g.id]===sig) return;
+    _flightFlagSig[g.id]=sig;
+    el.textContent=label;
+    el.className='m-flag fg-flag' + (label ? ' on suspect' : '');
+    liveTitle(el, gone.length
+      ? (gone.length + ' of ' + FLIGHT_METRICS.filter(m=>m.group===g.id).length
+         + ' readings here have no sensor behind them right now'
+         + (chips.length ? (' - the vehicle names ' + chips.map(c=>chipMeans(c).long).join(' and ')) : '')
+         + '. They are shown as question marks rather than as the last numbers they gave.')
+      : '');
+  });
+}
+
 /* ---- WATER SPEED ----------------------------------------------------------
    AN ESTIMATE NEVER DRESSES AS A MEASUREMENT. A paddlewheel-backed reading is the
    plain number: something physically counted water going past. Anything from the
    throttle lookup gets the tilde AND the EST tag — the same qualifier-tag idiom the
    tether readout already uses to say PLANNED / LAST KNOWN when its range stops
    being measured. That distinction is the entire reason the paddlewheel was bought:
-   a snagged sub's LUT speed looks exactly like a healthy cruise. */
+   a snagged sub's LUT speed looks exactly like a healthy cruise.
+
+   AND NO SPEED AT ALL IS NOW A QUESTION MARK, NOT A DASH. This readout has spelled
+   cannot-tell '--' since it was written, which is this console's word for a dropped
+   frame — the one kind of missing number an operator is RIGHT to wait out, because it
+   comes back on its own. Nothing here comes back on its own: `speed_ms` and `speed_src`
+   both null means neither the paddlewheel nor the throttle curve produced anything, and
+   'no-origin' means navigation has no launch point to measure against. Both need
+   somebody to DO something, and both were arriving dressed as "be patient". Same '?',
+   same amber, same wavy underline as every other cannot-tell on the bar, with the tag
+   beside it saying which of the two it is: NO SPEED, or NO DATUM with the remedy in its
+   tooltip. */
 let _speedSig='';
 function renderSpeed(v){
   const el=$('speed-val'), tag=$('speed-src');
@@ -425,12 +670,17 @@ function renderSpeed(v){
   // The NUMBER changes shape too, not only its tag: a measured reading is given to
   // the centimetre because the wheel resolves that; an estimate gets a tilde and one
   // decimal, because pretending to a second one would be dressing up a guess.
-  el.textContent = (kind==='stale'||kind==='none'||kind==='no-origin') ? '--'
+  el.textContent = kind==='stale' ? '--'
+                 : (kind==='none' || kind==='no-origin') ? '?'
                  : (measured ? '' : '~') + v.speedMs.toFixed(measured ? 2 : 1) + ' m/s';
   const sig = kind + (v.snagged?'!':'');
   if(_speedSig===sig) return;
   _speedSig=sig;
-  el.className = 'm-val ' + (kind==='stale' ? 'is-stale' : kind==='none' ? '' : kind)
+  // 'no-origin' used to carry its own class here and nothing was ever styled from it, so
+  // the only carrier of "there is no speed" was the tag. It wears the shared cannot-tell
+  // paint now; the TAG is what still separates a silent paddlewheel from a missing datum.
+  el.className = 'm-val ' + (kind==='stale' ? 'is-stale'
+                           : (kind==='none' || kind==='no-origin') ? 'nosensor' : kind)
                + (v.snagged ? ' snag' : '');
   if(tag){
     tag.textContent = kind==='no-origin' ? 'NO DATUM'
@@ -633,11 +883,37 @@ function alertList(v){
       if(v.pressure==null) gone.push(['PRESSURE','pressure']);
     }
     if(v.heading==null) gone.push(['BEARING','heading']);
+    // AND THE FOUR INERTIAL READINGS ARE DELIBERATELY NOT IN THIS LIST. They come off
+    // the same BNO085 as the bearing, so when that chip stops they all blank in the same
+    // frame — and pushing them here would put FIVE crit chips on the rail for ONE dead
+    // connector, with the flood chip somewhere underneath them. The rail exists to turn a
+    // blank into an errand, and there is exactly one errand: go and look at the compass
+    // module. That chip is already above. The four go quiet behind it, each with a
+    // question mark and a tooltip of its own, and the ATTITUDE heading carries the mark
+    // so a folded group cannot hide it either.
+    //
+    // The blank still arrives with a cause on a hull that names one: `imu` is in
+    // SENSOR_BEHIND, so faultChips() finds "bno085" for the group mark and for every
+    // tile's sentence — it is only the CHIP on the alert rail that is spent once.
     // THE PACK BELONGS IN THIS LIST, and its absence from it is the whole of finding
     // two. Every other measured reading on the bar had somewhere to say "the chip
     // behind me stopped"; the voltage did not, so the only thing an absent INA219
     // could produce was a critical alarm about a number nobody took.
-    if(v.batteryV==null) gone.push(['PACK VOLTAGE','battery']);
+    //
+    // AND IT SAYS THE CURRENT WENT WITH IT, because it did: volts and amps are one
+    // INA219, so they null in the same frame, and the operator now has a DRAW readout
+    // that has gone to a question mark alongside. Named on the one chip exactly the way
+    // DEPTH & PRESSURE are named on the one MS5837 — one dead chip is one errand, and
+    // two chips for it would be two people-sized jobs for one connector.
+    //
+    // Deliberately no chip for a current that is missing ON ITS OWN. That is not a
+    // failure this vehicle can produce (one chip, both readings), so the only hull that
+    // reaches it is one too old to send `current_a` at all — and a console that greets an
+    // older Pi with a critical alarm about a reading it never had is a console that gets
+    // its alarms ignored. The DRAW tile still shows the question mark and its own tooltip
+    // still says nothing is measuring it; what it does not do is manufacture an errand.
+    if(v.batteryV==null)
+      gone.push([(v.currentA==null && v.currentSeen) ? 'PACK VOLTAGE & CURRENT' : 'PACK VOLTAGE', 'battery']);
     // WHICH NAMES THE SCREEN HAS NOW ACCOUNTED FOR. Collected as we go so the sweep
     // below can tell a fault that explains a blank from one that explains nothing on
     // screen at all. Seeded with the leak sampler's names when the hull-unknown chip is
@@ -886,6 +1162,11 @@ function renderUI(v){
   renderBattery(v);
   renderSpeed(v);
   renderHeadingFlag(v);
+  // The five readings that used to have nowhere to go. Built on first frame from the
+  // FLIGHT_METRICS table rather than written into index.html, so that cutting one back
+  // later is deleting one entry — see the section above.
+  buildFlightCluster();
+  renderFlight(v);
   renderAlerts(v);
   _prev={green:v.green,greenLevel:Math.round(v.greenLevel*100),white:v.white,whiteLevel:Math.round(v.whiteLevel*100),armed:v.armed,magnet:v.magnet,leakStage:v.leakStage};
 }

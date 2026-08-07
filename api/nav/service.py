@@ -341,6 +341,16 @@ class NavService:
         above) because the snag detector reads thrust against the paddlewheel and
         never touches the compass. Nulling it would invent the very contradiction
         this is fixing, in the other direction.
+
+        THE CHEAPEST WAY TO OBEY THAT RULE IS NOT TO SHARE THE FACT AT ALL, which
+        is why the IMU's raw channels — gyro_z_dps, accel_fwd_ms2, pitch_deg,
+        roll_deg — are not in this frame even though every one of them arrives on
+        the SensorSample that produced the state. They travel on /ws/control, off
+        the hardware handle, with heading and mag_cal (see protocol.py and
+        models.NavState). Nothing here has to keep them consistent with anything,
+        because there is only one copy. A reading this service publishes would also
+        inherit the fresh_state() gate below, and that gate answers "is the
+        ESTIMATE current" — it would blank a live attitude for want of an origin.
         """
         f = {"type": "nav", **ns.model_dump(),
              "simulated": bool(self.sensors.is_sim),

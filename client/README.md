@@ -352,6 +352,100 @@ truth rather than a simulated tank. If the plunger reaches the full end stop at 
 disagrees with the calibrated span, steps were skipped — the level is now wrong by an unknown
 amount, so `needs re-home` is surfaced rather than swallowed.
 
+### The diagnostics cluster — five readings that were being thrown away
+
+Five things the vehicle measures on every frame reached no readout at all. Four of them —
+**turn rate**, **forward acceleration**, **pitch** and **roll** — did not even exist on the
+wire: they lived only on navigation's internal sensor sample, so no amount of client work
+could have shown them. The fifth, **pack current**, was on the wire and was spent inside
+the pack voltage's tooltip (`— drawing 3.1 A`), which an operator on a canal bank in
+sunlight with wet hands is never going to hover. A reading nobody can see is a reading the
+vehicle did not send.
+
+| Readout | Field | What it tells you |
+|---|---|---|
+| **turn rate** | `gyro_z_dps`, + = clockwise | the independent witness on the compass. Heading moving with no turn rate is magnetic interference, not rotation; turn rate moving with no heading is a dead magnetometer |
+| **forward accel** | `accel_fwd_ms2`, + = ahead | thrust with no acceleration *and* no paddlewheel pulses is the **snag** signature — and it is what separates "the wheel sensor died" from "the sub genuinely is not moving" |
+| **pitch** | `pitch_deg`, + = nose up | noses down as the ballast fills. Nose-down getting worse with the ballast steady is water in the bow |
+| **roll** | `roll_deg`, + = starboard down | heels into a turn and returns. A standing heel at rest is weight and buoyancy, not software |
+| **pack current** | `current_a` | **the fouled-prop reading.** Draw up with speed down at the same throttle is something wrapped round a propeller — the camera looks forward, not aft, and a fouled prop still spins and still makes noise |
+
+What a healthy one looks like at the bench, and what each bad one means, is in
+[`docs/hardware.md` §6.4](../docs/hardware.md). What the fields mean on the wire is in
+[`api/README.md`](../api/README.md).
+
+**Every one of these has a real zero, and every one of those zeros is the calm answer.**
+`0.0 °/s` is *"not turning"*. `0.0 m/s²` is *"coasting"*. `0.0°` is *"level"*. `0.0 A` is
+*"drawing nothing"*. So a single `value || null` on the ingest path spells all four
+*"the chip is dead"*, and the same coercion written the other way
+(`value == null ? 0 : value`) turns a dead IMU into a vehicle sitting perfectly still and
+perfectly level — which is exactly the shape of every liveness bug this project has already
+shipped four times. Both directions are checked, on every readout that has a real zero
+(`client/tests/suites/instrument-cluster.js`).
+
+They obey the same three-way vocabulary as every other reading here, and are held to it by
+test rather than by intention: the **number** when the chip is answering, **`?`** in amber
+with a wavy underline when it has stopped, and **`--`** dim when the frame is merely late.
+All four IMU readings blank *together*, in one frame, with `bno085` named in
+`sensor_faults`; pack current blanks *with* the pack voltage, because they are one chip.
+Six gauges going to `?` at once with one chip named is the signature of a dead IMU — one of
+them alone is not a thing that can happen.
+
+And each carries a written `title` **and** `aria-label` saying in a whole sentence what the
+number means, because a label is not an explanation: `Turn` tells a stranger nothing. That
+is the same bar `demo-mode` holds the rest of the console to.
+
+#### Where they sit, and what folds
+
+They are **one table** — `FLIGHT_METRICS` in `js/core.js` — and the entry *is* the
+reading: the wire field it arrives under, the `state` slot it lands in, the
+element it draws into, the group it mounts in, the chip behind it, how it formats, what the
+bench model may honestly say about it, and the sentence explaining what it means. `net.js`
+ingests off that list, `render.js` builds the markup off it and paints off it. That is
+deliberate and it is about *removal*: the operator intends to fly with all five and then cut
+back to whichever two earn their room, and the way that has gone wrong four rounds running
+is a metric added as markup in one file, ingest in a second and a renderer in a third.
+Deleting a reading is deleting one entry.
+
+The two groups mount differently because they answer different questions:
+
+| Group | Where | Folds? |
+|---|---|---|
+| **`pack`** — Draw (`current_a`) | the top bar, as a **direct sibling immediately after the pack voltage** | no |
+| **`attitude`** — Turn, Surge, Pitch, Roll | `#flight-cluster`, **down by the minimap with Speed and the tether range** | yes — tap the `ATTITUDE` heading |
+
+Amps sit beside volts and nowhere else: one chip, one question. A voltage sagging with no
+draw beside it cannot be told from a pack that is simply flat, and that is the entire
+reading. It is a *sibling* rather than a wrapped pair because the bar is a `space-between`
+flex row — a container holding two readings would be one flex item, and the bar's even gaps
+would go with it.
+
+The four attitude readings deliberately do **not** go in the top bar. That bar is one
+`nowrap` row and it has overlapped itself once already — measured at 1280 px, 13 of 20 tiles
+overflowed and 12 pairs of text collided, and it looked fine until a Pi was attached and the
+fields filled up. Four more tiles is how that comes back. They belong next to Speed anyway:
+they are read the same way Speed is, while flying, with the eye already down at the map.
+They travel with Speed into the expanded map too, which is a planning view under all-stop
+where nothing is being flown.
+
+Tapping the `ATTITUDE` heading folds and unfolds it, and **the choice survives a reload**
+(`localStorage`): a group that reopens itself on every launch is a group the operator folds
+on every launch and then stops trusting to stay folded. The heading hands the keyboard back
+after the tap, because this handheld is flown on WASD and the paddles and a button that
+keeps focus swallows the next Space as *"press me again"* instead of passing it to the sub.
+
+**Folding never hides an admission.** `ATTITUDE` is advisory — nothing on the hull is flown
+off it — which is what makes it foldable at all. But the heading carries the group's own
+cannot-tell mark, so a folded `ATTITUDE` over a dead IMU still says so, on the line the
+operator can see, and it names the chip: `NO COMPASS STOPPED`, or `I2C BUS DOWN` when the
+whole bus has gone rather than one connector. A control that can hide a fault is not a
+convenience.
+
+The mark is raised only by a **hull**, and never while the frame is merely stale. On the
+bench there is no IMU by construction, so a mark lit from power-on would be a mark nobody
+reads — the same reasoning that keeps the snag-watch chip silent on a vehicle whose
+estimator never ran.
+
 Every one of these readings still carries the mock/real distinction. A simulated number is
 always badged as one.
 
@@ -365,41 +459,88 @@ client/
 │   └── styles.css       # all styles (self-contained; replaces Tailwind + fonts + icons)
 └── js/
     ├── config.js        # ★ the tunable config — every knob lives here
-    ├── core.js          # $ / clamp helpers, LOG bus, state object, host resolution
+    ├── core.js          # $ / clamp helpers, LOG bus, state object, host resolution,
+    │                    #   and FLIGHT_METRICS / HUD_GROUPS — one entry per secondary reading
+    ├── wire.js          # wraps fetch + WebSocket once at load, so everything crosses the log
+    ├── store.js         # IndexedDB + Cache API: origin, settings, saved areas, dive logs, stills
+    ├── status.js        # the five-subsystem degradation model + /api/system + /__net
     ├── video.js         # WebRTC player (go2rtc) + NO-FEED / reconfiguring overlay
     ├── net.js           # ROV WebSocket link, telemetry ingest, send/ping/level loops
     ├── commands.js      # discrete commands (arm, stop, surface, magnet, lights)
     ├── input.js         # gamepad + keyboard, remappable actions/bindings, computeInput
     ├── controls.js      # on-screen sliders, SURFACE hold, CONFIG/mapper modal
-    ├── render.js        # local simulation + telemetry→UI + status badges
+    ├── render.js        # local simulation + telemetry→UI + status badges + the cluster
     ├── camera.js        # WOLFANG camera plane: telemetry, record/capture, config, files
+    ├── recorder.js      # the topside half of the two-sided blackbox
+    ├── logview.js       # the live LOGS overlay (CONFIG → LOGS)
     ├── tiles.js         # zero-dep raster XYZ satellite tile engine (Esri), overzoom, screen↔latlon
     ├── map.js           # radar: camera-primary circular minimap, satellite basemap, track, expand
     ├── navui.js         # origin (device geolocation + tap-to-refine) + navigate-and-select area download
     └── main.js          # RAF frame loop + bootstrap + window.NEPTUNE console API
 └── tests/
     ├── run.py           # browser test runner (stdlib + headless Chrome, no deps)
+    ├── cdp.py           # ~130-line CDP WebSocket client, for the screenshots
+    ├── baseline/        # committed layout portraits; screenshots/ is gitignored
     └── suites/          # one file per concern; see tests/README.md
 ```
 
 ## Tests
 
 ```bash
-python client/tests/run.py          # 12 suites, 295 checks, ~114 s, exit 0 only if all pass
+python client/tests/run.py          # every suite; exit 0 only if all pass
 python client/tests/run.py tether   # one suite
+python client/tests/run.py --list   # what the suites are
+python bootstrap.py --test          # both halves of the system, one command
 ```
-
-Measured on the ROG Ally, 2026-08-07: `295/295 checks passed in 114s across 12 suites`.
-That figure is re-measured by running it, never adjusted by eye — the numbers previously
-printed here (`286`, and `249` in `tests/README.md`) were each carried forward from an
-older tree, and a count that disagrees with what scrolls past teaches the reader to stop
-believing the rest of the page.
 
 Browser checks against the **real dashboard** — `run.py` serves `client/`, injects one
 suite as an extra `<script>`, and runs it in headless Chrome. Nothing is stubbed or
 rebuilt, so a passing check passed in a browser rather than in an approximation of one.
-No framework and no dependencies, same as the client. See
-[`tests/README.md`](tests/README.md) for the suites, how to add one, and the list of
+No framework and no dependencies, same as the client.
+
+**No check total appears on this page, and that is deliberate.** This line used to read
+`295 checks`, `tests/README.md` said `249`, `bootstrap.py` said `214` and `.specs/design.md`
+said `286` — four totals for one suite, in circulation simultaneously, each copied forward
+from whichever tree its writer had open. The runner prints the number; nothing else claims
+it. The reasoning, and what may still be written down, is in
+[`tests/README.md` → *Where the numbers live*](tests/README.md).
+
+### Running the suites on each platform
+
+The runner is standard-library Python 3.9+ and a browser it locates itself — install
+locations first, then `NEPTUNE_CHROME`, then `PATH`, with `--chrome <path>` overriding.
+
+| Platform | What it finds |
+|---|---|
+| **Windows** (the ROG Ally) | Chrome in `Program Files` / `Program Files (x86)` / `%LOCALAPPDATA%`, then Edge — same engine |
+| **macOS** | `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` |
+| **Raspberry Pi OS / Linux** | `chromium-browser`, `chromium` or `google-chrome` on `PATH` (`sudo apt install -y chromium-browser`) |
+
+Nothing here needs the internet once the browser is on the machine, which is the point —
+the Pi is normally on a sealed tether.
+
+**On the Ally, one touch:**
+
+```
+Neptune.bat -Test           both suites, then a pass/fail block
+Neptune.bat -Test client    the dashboard only
+Neptune.bat -Test api       the vehicle only
+```
+
+Same double-click as launching the console, because that is the only interaction this
+handheld has: no terminal, no keyboard in the field. A check gate that needs a shell is a
+check gate that stops being run on the machine it exists to guard. It runs ahead of the
+single-instance mutex and opens no port, so it works with a dive already up.
+
+**Green means it ran.** The launcher quotes the runner's own total rather than counting
+anything itself, and treats a zero exit with *no total printed*, *a total of zero checks*,
+or an `INCOMPLETE` verdict as a failure to run — not a pass. The verdict block carries its
+answer in a frame character as well as a colour (`=` passed, `#` failed, `?` could not
+tell), for the same reason every gauge on this console does: colour is never the only
+carrier, and a phone photo of that window may be all anyone has by the time it is
+discussed.
+
+See [`tests/README.md`](tests/README.md) for the suites, how to add one, and the list of
 gotchas that have each produced a test which passed while the product was wrong.
 
 ### Why classic scripts (not ES modules)

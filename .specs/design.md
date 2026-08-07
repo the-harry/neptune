@@ -695,21 +695,33 @@ shipping client byte for byte plus that tag, so the suites drive the same `MAP`,
 `STATUS`, `CONFIG` and `state` the operator drives. Standard library and an installed
 Chrome — no framework, no dependencies, matching the client's own rule.
 
-Twelve suites, **295 checks, ~114 s**, exit 0 only if every one passes. Measured
-2026-08-07: `295/295 checks passed in 114s across 12 suites`. Re-measure it by running
-it. Four different totals for this one suite have been in circulation at once — 214 in
-`bootstrap.py`, 249 in `client/tests/README.md`, 286 here and in `client/README.md`, 295
-in reality — because each was copied forward from whichever tree the writer had open. A
-count that disagrees with what scrolls past does not just misinform; it teaches the reader
-to stop believing the document.
+**This section quotes no totals.** It used to open with "Twelve suites, 295 checks,
+~114 s" and give the api runner "four suites, 147 checks" — and by the time you are
+reading this both were wrong again, because a count copied into prose ages the moment
+anyone adds an assertion. Four different totals for the client suite were once in
+circulation at the same time (214 in `bootstrap.py`, 249 in `client/tests/README.md`,
+286 here and in `client/README.md`, and a fifth in reality), each copied forward from
+whichever tree its writer had open. Two of them went stale in the very commit that
+"fixed" them, and this paragraph itself went stale twice more while being written about.
 
-The api has its own runner of the same shape (`api/tests/run.py`): **four suites, 147
-checks**, ~1 s. Measured 2026-08-07: `147/147 checks passed in 1s across 4 suites`. Its
-count is quoted with the condition attached because it changes with the machine — in a
-python with no `pydantic`, `replay` and `telemetry` never load at all and the run
-reports `100/103 checks passed in 0s across 2 of 4 suites`, verdict **INCOMPLETE**, exit
-**2**. That is deliberate: a suite that failed is a finding, a suite that never loaded is
-an *absence* of findings, and the two must not add up into one reassuring total.
+The runners are the only thing entitled to state a total, and they print it. Run them:
+
+    python client/tests/run.py
+    python api/tests/run.py
+
+See `client/tests/README.md` → *Where the numbers live* for the rule and where it is
+enforced.
+
+WHAT IS WORTH WRITING DOWN is the SHAPE of the verdict, because that does not age. Both
+runners separate three outcomes that a single number would flatten into one: a check that
+failed is a FINDING; a suite that never loaded is an ABSENCE of findings; and drift in the
+layout portrait is a THIRD thing again. A suite blocked by a missing dependency reports
+`DEPS -/-`, is counted apart from the pass total, is named in an **INCOMPLETE** verdict and
+exits **2** — never a number, because there is no measurement to state. In a python with no
+`pydantic`, `replay` and `telemetry` do exactly that rather than quietly shrinking the
+denominator. And an over-tolerance visual drift now fails the run on its own: it reported
+and exited 0 for twelve rounds, during which nobody re-blessed a baseline and the pictures
+stopped being looked at.
 
 ### The visual layer, and why its tolerance is measured
 

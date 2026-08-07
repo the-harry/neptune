@@ -125,6 +125,166 @@ const LOG = (function(){
 })();
 
 /* ============================================================================
+   THE SECONDARY INSTRUMENTS — ONE ENTRY PER READING, AND THE ENTRY *IS* THE READING
+
+   Five numbers the vehicle has been sending every frame with nothing on this console
+   drawing them: the turn rate, forward acceleration and the attitude pair off the
+   BNO085, and the pack current off the INA219 — which was worse than orphaned, because
+   it WAS rendered, inside the pack's tooltip ("drawing 3.1 A"), where an operator on a
+   canal bank in sunlight with wet hands is never going to hover it. A reading that only
+   exists on hover is a reading that does not exist.
+
+   THEY ARE A TABLE BECAUSE THEY ARE GOING TO BE PRUNED. The operator has said out loud
+   that they will fly with all five and then cut back to whichever two earn their room,
+   and the way that goes wrong is the way it has gone wrong here four rounds running: a
+   metric is added as markup in one file, ingest in a second and a renderer in a third,
+   and removing it six weeks later means finding all three. So each entry carries
+   EVERYTHING about its metric — the wire name it arrives under, the state field it
+   lands in, the element it draws into, the group it sits in, the chip behind it, how it
+   formats, what the bench model does about it, and the sentence explaining what it
+   MEANS. net.js ingests off this list, render.js builds the markup off it and paints
+   off it. Deleting a metric is deleting one entry; adding one is adding one.
+
+   THE SENTENCE LIVES HERE RATHER THAN IN THE HTML, which is a deliberate departure from
+   this console's usual rule that index.html owns the wording. The markup is generated,
+   so wording left in the HTML would be exactly the loose end the table exists to
+   prevent: a tile deleted from the list and a paragraph about it left behind. The
+   builder writes it into data-help, which is the same place captureHelp() would have
+   put it, so liveTitle() and every test that reads a written explanation are unaffected.
+
+     key    the state field, and `key+'At'` is its "a real number last arrived" stamp
+     wire   the protocol.Telemetry field name
+     id     the element the number is drawn into (a leaf span, like every other m-val)
+     kind   which SENSOR_BEHIND entry names the chip, so a blank can say WHICH cable
+     what   the SHOUTED name used in the cannot-tell sentence
+     fmt    a live value -> the rendered string. Never called with null.
+     sim    what the BENCH MODEL can honestly say, or absent when it can say nothing
+   ============================================================================ */
+/* A signed reading, with -0.0 refused. `(-0.04).toFixed(1)` is the string "-0.0", which
+   reads as "turning left, very slightly" about a number that rounded to nothing at all;
+   the sign is meaningful on all four of these, so a sign that is pure rounding artefact
+   has to go. Zero is written unsigned because it is not a direction. */
+function signedFixed(v, dp){
+  const r = +v.toFixed(dp);
+  const z = Object.is(r, -0) ? 0 : r;
+  return (z > 0 ? '+' : '') + z.toFixed(dp);
+}
+const FLIGHT_METRICS = [
+  { key:'currentA', wire:'current_a', id:'current-a', label:'Draw', group:'pack',
+    kind:'current', what:'PACK CURRENT',
+    fmt:v=>v.toFixed(1)+' A',
+    // The bench has no shunt, but it does have thrusters and lamps, so it can say what
+    // its own model is drawing rather than sitting at a permanent question mark beside a
+    // pack that is visibly sagging. Same standing as every other simulated number on the
+    // screen, and the SIM presentation qualifies all of them at once. The knobs are read
+    // through defaults so config.js can adopt them later without this line changing.
+    sim:(s)=>{
+      const B = (typeof CONFIG!=='undefined' && CONFIG.sim) || {};
+      const thrust = (Math.abs(s.left||0) + Math.abs(s.right||0)) / 2;
+      const lamps  = (s.lights.green.on ? s.lights.green.level : 0)
+                   + (s.lights.white.on ? s.lights.white.level : 0);
+      return (B.idleAmps||0.35) + thrust*(B.thrustAmps||2.6) + lamps*(B.lampAmps||0.5);
+    },
+    help:'PACK CURRENT - how many amps the whole sub is pulling out of the battery right '
+       + 'now, measured by the same pack monitor as the voltage beside it. It is what '
+       + 'turns "the pack is sagging" into "the pack is sagging BECAUSE both thrusters '
+       + 'are at full": read it against the throttle, and a draw that stays high with the '
+       + 'thrusters idle is something jammed, fouled or shorted. 0.0 A is the MEASUREMENT '
+       + 'that nothing is being drawn, which is what a sub floating with its lamps off '
+       + 'actually reads. A QUESTION MARK means the pack monitor has stopped answering, '
+       + 'so nothing is measuring the draw - and the voltage beside it will be a question '
+       + 'mark too, because it is one chip. That is not the same as the dashes of a '
+       + 'dropped frame, which come back on their own.' },
+  { key:'turnRate', wire:'gyro_z_dps', id:'turn-val', label:'Turn', group:'attitude',
+    kind:'imu', what:'TURN RATE',
+    fmt:v=>signedFixed(v,1)+' °/s',
+    // The model turns at exactly steer x headingRatePerS - that is the line simulate()
+    // applies to the heading - so reporting it is the model quoting itself, not the
+    // console inventing an instrument.
+    sim:(s)=>(s.input.steer||0) * ((CONFIG.sim && CONFIG.sim.headingRatePerS) || 40),
+    help:'TURN RATE - how fast the sub is swinging round, in degrees per second, from the '
+       + 'spin sensor inside the compass module. PLUS is clockwise (bow going right), '
+       + 'minus is anticlockwise. 0.0 is the MEASUREMENT that it is not turning, which is '
+       + 'what holding a straight course looks like - so a question mark here is a very '
+       + 'different thing from a zero. Read it when the bearing looks wrong: a steady '
+       + 'bearing with a turn rate on it is a compass that has frozen, and a moving '
+       + 'bearing with no turn rate under it is a compass being pulled round by the '
+       + 'thrusters rather than by the sub actually turning.' },
+  { key:'surge', wire:'accel_fwd_ms2', id:'accel-val', label:'Surge', group:'attitude',
+    kind:'imu', what:'FORWARD ACCELERATION',
+    fmt:v=>signedFixed(v,2)+' m/s²',
+    // GIVE THE BENCH SUB SOME MASS, rather than differentiating a speed that has none.
+    // The model's speed is `throttle x maxSpeed` with no lag at all, so its derivative is
+    // an impulse: a keyboard throttle going 0 to 1 in one 16 ms frame differentiates to
+    // 60 m/s2, which is a number no hull in water has ever produced and reads as a broken
+    // instrument. So the model tracks a LAGGED speed - a hull that takes about a second
+    // to get going - and reports the acceleration that lag implies, which is bounded by
+    // the lag itself and settles back to 0.00 the moment the speed is steady. The working
+    // value rides on `state` so the whole model of this metric stays inside its entry.
+    sim:(s,dt)=>{
+      const tau = (CONFIG.sim && CONFIG.sim.surgeTauS) || 0.8;
+      const lag = (s._simSpeedLag==null) ? (s.speedMs||0) : s._simSpeedLag;
+      const a   = ((s.speedMs||0) - lag) / tau;
+      s._simSpeedLag = lag + a*Math.min(dt, tau);
+      return a;
+    },
+    help:'FORWARD ACCELERATION - how hard the sub is gaining or losing speed along its '
+       + 'own nose-to-tail line, in metres per second squared, from the accelerometer in '
+       + 'the compass module. PLUS is picking up speed ahead, minus is slowing or being '
+       + 'pushed backwards. 0.00 is the MEASUREMENT that it is coasting at a steady speed, '
+       + 'which is what most of a transit looks like. Read it beside SPEED: thrust on, '
+       + 'speed flat and nothing at all here is a sub that never accelerated, which is a '
+       + 'sub being held by something.' },
+  { key:'pitchDeg', wire:'pitch_deg', id:'pitch-val', label:'Pitch', group:'attitude',
+    kind:'imu', what:'PITCH',
+    fmt:v=>signedFixed(v,1)+'°',
+    help:'PITCH - how far the sub’s nose is above or below level, in degrees, from the '
+       + 'attitude sensor in the compass module. PLUS is nose UP. 0.0 is the MEASUREMENT '
+       + 'that it is sitting level. Nose-down while the tank is filling is the sub diving '
+       + 'and is normal; a pitch that will not come back to level once the ballast has '
+       + 'settled is weight that has shifted inside the hull, or a tether pulling the '
+       + 'tail. Note what it reads on a trimmed hull at the start of a dive - the number '
+       + 'is only worth anything against that.' },
+  { key:'rollDeg', wire:'roll_deg', id:'roll-val', label:'Roll', group:'attitude',
+    kind:'imu', what:'ROLL',
+    fmt:v=>signedFixed(v,1)+'°',
+    help:'ROLL - how far the sub is leaning to one side, in degrees, from the attitude '
+       + 'sensor in the compass module. PLUS is starboard (right) side down. 0.0 is the '
+       + 'MEASUREMENT that it is sitting level. A hull heels into a turn and comes back; '
+       + 'a lean that stays put with the thrusters idle is weight shifted inside, a caught '
+       + 'tether, or one thruster no longer pushing. It also says how much the camera is '
+       + 'tilted, which is why a picture can look wrong while nothing is wrong.' }
+];
+/* WHERE EACH GROUP MOUNTS, and whether it can be folded away.
+
+     after   the tiles become DIRECT SIBLINGS of this element. The top bar is a flex row
+             with space-between doing the spacing, so a tile wrapped in a container would
+             be one flex item holding two readings and the bar's even gaps would go with
+             it. The pack's amps belong beside the pack's volts and nowhere else: one
+             chip, one question, and a voltage that sags without a draw beside it cannot
+             be told from a pack that is simply flat.
+     into    the tiles are appended INSIDE this element, under a heading that folds.
+             ATTITUDE goes with the driving instruments by the minimap rather than into
+             the top bar, because that is where Speed already lives and these are read
+             the same way Speed is: while flying, with the eye already down there. It
+             costs the top bar nothing, which matters - the bar is one nowrap row and
+             adding four tiles to it is how it starts overlapping itself again.
+
+   FOLDING NEVER HIDES AN ADMISSION. The head carries the group's own cannot-tell mark,
+   so a folded ATTITUDE with a dead IMU under it still says so on the line the operator
+   can see. */
+const HUD_GROUPS = [
+  { id:'pack', after:'pack-tile' },
+  { id:'attitude', into:'flight-cluster', label:'ATTITUDE',
+    title:'ATTITUDE AND RATES - how the sub is sitting and how it is moving, all four '
+        + 'read off the same compass module as the bearing: how fast it is swinging '
+        + 'round, how hard it is gaining speed, and how far it is tipped nose-up and '
+        + 'side-down. Advisory instruments - nothing here flies the sub - so tap this '
+        + 'heading to fold them away when the screen is busy. If any of them stops being '
+        + 'measured, this line says so whether the group is folded or not.' }
+];
+
+/* ============================================================================
    STATE — the single live state object the whole app reads/writes.
    ============================================================================ */
 const state = {
@@ -225,7 +385,10 @@ const state = {
   // reading a null as false makes a subsystem's death look like good news.
   // They start false because the SIMULATOR is genuinely not snagged and has no gyro
   // to coast on; only a hull can make them null.
-  snagged:false, gyroOnly:false, magCal:null, currentA:null,
+  // currentA is NOT here any more, and neither are the four inertial readings: they are
+  // seeded from FLIGHT_METRICS below, so that deleting a metric deletes its state field
+  // with it instead of leaving an orphan nobody dares remove.
+  snagged:false, gyroOnly:false, magCal:null,
   // WHAT NAVIGATION LAST *DEFINITELY* SAID, kept because a null must not be able to
   // clear a standing alarm in silence. navAnswered is false until nav commits to a
   // real true/false, so a hull that never had an estimator stays quiet instead of
@@ -247,6 +410,16 @@ const state = {
   zoomArm:{},                 // paddle pressed alone → zooms the map on release (see input.js)
   lastFrame:0
 };
+/* THE SECONDARY INSTRUMENTS' STATE, seeded from the one list that describes them.
+   Every one starts NULL, and null here is the same word it is everywhere else on this
+   console: nothing has reported this yet. It is emphatically not 0 — 0.0 deg/s is "not
+   turning", 0.00 m/s2 is "coasting", 0.0 deg is "level" and 0.0 A is "drawing nothing",
+   and every one of those is the CALM answer. A console that started them at zero would
+   spend the walk down to the water drawing a sub sitting perfectly still and perfectly
+   level, off a vehicle that had not said a word. The `At` stamp is 0 for the same
+   reason: it means "a real number has never arrived", which is what sensorFresh() is
+   asked and how a hull that drops the field entirely is caught. */
+FLIGHT_METRICS.forEach(m=>{ state[m.key]=null; state[m.key+'At']=0; });
 
 /* TOOLTIPS THAT SURVIVE.
 
@@ -472,7 +645,16 @@ function chipMeans(c){
    (api/hardware.py: `sampling = not self._stalled & {"leak-probes", "sensor-thread"}`).
    `leak` is not a `sensed()` kind: the stage is a string ladder, not a number, so this
    entry is only ever read to NAME the cause beside the cannot-tell drop. */
+/* AND THE FOUR INERTIAL READINGS ARE ON IT UNDER ONE NAME, because they are one chip.
+   The BNO085 backs six things — the bearing, its cardinal, the calibration mark, the
+   turn rate, forward acceleration and the attitude pair — and api/rov.py takes all six
+   off the same hardware handle, so they arrive together and they stop together. `imu`
+   is deliberately not a sixth copy of `heading`: the bearing is a primary instrument
+   with a chip named on the alert rail when it dies, and these four are advisories that
+   go quiet behind that ONE errand rather than raising four more. Same chips, different
+   loudness. */
 const SENSOR_BEHIND = { depth:['ms5837','i2c'], pressure:['ms5837','i2c'], heading:['bno085','i2c'],
+                        imu:['bno085','i2c'],
                         battery:['ina219','i2c'], current:['ina219','i2c'],
                         leak:['leak-probes','sensor-thread'] };
 function normalizeFaults(v){

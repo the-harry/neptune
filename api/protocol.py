@@ -212,8 +212,69 @@ class Telemetry(BaseModel):
     # this at 3 — so a frozen bearing shipped wearing the strongest trust mark the
     # system has. If heading is null this must be null too: they are one chip.
     mag_cal: Optional[int] = None
+    # --- the rest of what the BNO085 measures ---------------------------------
+    # THESE FOUR EXISTED AND NEVER LEFT THE VEHICLE. api/hardware.py has measured
+    # all of them since the IMU was wired (read_gyro_z_dps / read_accel_fwd_ms2 /
+    # read_pitch_roll) and api/nav/models.py carries them on SensorSample, where
+    # the heading filter and the speed KF read them — but SensorSample never goes
+    # topside. It is an internal ingest record: it reaches the dive journal
+    # (nav/divelog.py) and the replay harness and stops there. So the console
+    # could not have shown a turn rate or an attitude if it had wanted to; there
+    # was no field to read. A measurement the vehicle takes, logs, and refuses to
+    # transmit is a measurement the operator does not have.
+    #
+    # THEY ARE ON THIS FRAME AND NOT ON NavState, DELIBERATELY, for three reasons
+    # that all point the same way:
+    #
+    #   1. They are READINGS, not estimates. /ws/nav carries what the estimator
+    #      concluded; these are what it was fed. rov.py takes them off the same
+    #      hardware handle it takes heading and mag_cal off, so they arrive with
+    #      exactly the authority those two have and no more.
+    #   2. NavState does not exist before a dive does. The estimator is built in
+    #      NavService.start_dive, which needs an origin, so on every healthy boot
+    #      there is no NavState at all until somebody sets a datum — and the nav
+    #      freshness gate (NavService.fresh_state) would then blank an attitude
+    #      the IMU is reporting perfectly well, for a reason that has nothing to
+    #      do with the IMU. "No origin yet" and "the chip is dead" would arrive as
+    #      one indistinguishable null, which is the failure this project keeps
+    #      undoing. Nothing here goes through that gate; it does not apply.
+    #   3. A fact carried on both sockets is a fact that can disagree with itself.
+    #      tests/test_consumers.py TwoSocketsOneVehicleTest exists because
+    #      gyro_only was null on one socket and False on the other in the same
+    #      tick. Adding four more shared facts would be four more of those.
+    #
+    # ALL SIX BNO085 FIELDS GO NULL TOGETHER — heading, mag_cal, and these four —
+    # because they are one chip and the hardware layer gates them on one liveness
+    # answer (`self._answering("bno085")`). null here is NOT a neutral zero:
+    #   * 0.0 deg/s is the measurement "the sub is not turning", which is the
+    #     single most reassuring thing a turn-rate readout can say, and it is what
+    #     a dead gyro used to say (nav/models.py records what that cost the
+    #     heading filter: it coasted on a rate nothing produced).
+    #   * 0.0 m/s² is "coasting".
+    #   * (0.0, 0.0) is "level" — the attitude of a hull that is not rolling over.
+    # Every one of those is the calm answer, so a default would make an IMU dying
+    # look like a vehicle behaving itself. There is no default; there is None.
+    #
+    # pitch and roll are independently nullable because read_pitch_roll returns a
+    # pair and the base class says either element may be absent on its own; in
+    # practice they arrive and leave together with the chip.
+    gyro_z_dps: Optional[float] = None      # yaw rate, deg/s, + = clockwise (compass convention)
+    accel_fwd_ms2: Optional[float] = None   # forward linear acceleration, m/s², + = ahead
+    pitch_deg: Optional[float] = None       # + = nose up
+    roll_deg: Optional[float] = None        # + = starboard down
     # Pack current from the INA219 — free from the same chip as the voltage, and
     # the number the power budget is written against. None = no current sense.
+    #
+    # THE WIRE SHAPE IS ALREADY RIGHT FOR A READOUT OF ITS OWN and needs nothing
+    # done to it: Optional[float], amps, rounded to 0.01 A, null exactly when the
+    # INA219 is silent — which is exactly when battery_v is null, because it is
+    # one chip and "ina219" rides in sensor_faults naming it. Any tile the console
+    # builds on this inherits the pack's cannot-tell behaviour for free and cannot
+    # drift from it. Its only defect was topside: client/js/render.js spends it
+    # inside the pack tooltip ("drawing 3.1 A") and nowhere else, so the one number
+    # that turns "the pack is sagging" into "the pack is sagging BECAUSE both
+    # thrusters are at full" is invisible to an operator who is not hovering a
+    # tooltip with wet hands. That is a console fix, not a contract fix.
     current_a: Optional[float] = None
     # Which leak probe reads open or shorted: "warn" | "flood" | "warn+flood".
     # None = both probes look sane. A dead probe reads dry forever, which is the

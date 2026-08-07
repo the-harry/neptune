@@ -292,6 +292,11 @@ TLM_FIELDS = (
     "leak", "leak_state", "leak_probe_fault",
     "battery_v", "battery_band", "current_a",
     "speed_ms", "speed_src", "snagged", "gyro_only", "mag_cal",
+    # THE INERTIAL READINGS, which main.py started journalling when they reached the
+    # wire and this list did not follow. An unlisted-but-journalled field is the one
+    # case the "missing" report cannot catch: it is present in the log and absent from
+    # the question, so nobody is ever told it went unrecorded on an older recorder.
+    "gyro_z_dps", "accel_fwd_ms2", "pitch_deg", "roll_deg",
     "magnet", "light_green", "light_white", "signal",
     # WHICH CHIP STOPPED, and WHETHER NAVIGATION WAS ANSWERING. Both were being
     # journalled and neither was listed, so a report could not distinguish "no

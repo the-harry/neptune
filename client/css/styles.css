@@ -485,6 +485,23 @@ body.map-blind #radar-dial{background:rgba(12,1,24,.78);border-radius:50%;
              0 0 18px rgba(0,0,0,.6),0 0 14px rgba(77,255,166,.18)}
 /* The wrap (dial + scale + tether readout) rides above the full-screen map. */
 body.map-blind #radar-wrap{z-index:42}
+/* ...AND SO DO ITS OWN CHILDREN, WHICH UNTIL THIS LINE THEY DID NOT. The rule above
+   lifts the wrap against the rest of the page; it says nothing about the order INSIDE
+   it, and #map-panel goes position:fixed with z-index:2 four rules up. A positioned
+   element with a z-index paints above every UNPOSITIONED sibling — and .radar-scale and
+   .sonar-readout are exactly that — so the full-screen #map-canvas, which carries an
+   opaque background:#0c0118, was painting straight over the scale bar, SPEED, the
+   tether range and now the attitude group.
+
+   In the one mode where the camera is gone and the sub is being flown on instruments
+   alone, the instruments were underneath the map. It survived this long because it is
+   invisible in every test portrait: those hide #map-canvas to make the picture
+   reproducible, and hiding it reveals the readouts it was covering.
+
+   position:relative with a z-index between the map (2) and the dial (4) — the dial has
+   to stay on top, it is drawn over the map on purpose. */
+body.map-blind .radar-scale,
+body.map-blind #radar-wrap .sonar-readout{position:relative;z-index:3}
 /* Do NOT hide #radar with opacity/visibility here: #map-panel is a CHILD of it, so
    that blanks the entire map. The ring is already made invisible above via
    border:0 + background:transparent, which is enough. */
@@ -718,6 +735,15 @@ body.sim-takeover #stale-badge{top:116px}
   font-size:15px;font-weight:800;letter-spacing:.02em;transition:opacity .12s linear}
 .sonar-num.live{fill:var(--primary);opacity:1}
 .sonar-readout{display:flex;flex-direction:column;gap:6px;padding-bottom:8px}
+/* THE FOLD BUTTONS ARE THE FIRST CONTROLS THIS COLUMN HAS EVER HAD, and #radar-wrap is
+   pointer-events:none on purpose so a tap over SPEED or TETHER falls through to the map
+   underneath. .radar-col takes its pointer-events back because the dial is interactive;
+   .sonar-readout never did, because until now nothing in it could be pressed. So the
+   ATTITUDE header was drawn, styled, aria-wired, remembered in localStorage — and
+   untappable, every tap landing on #map-canvas beneath it.
+   Restored on the BUTTON alone rather than the column, so the pass-through the wrap
+   exists for still works everywhere the finger is not on a control. */
+#radar-wrap .sonar-readout .fg-head{pointer-events:auto}
 /* TETHER — range against the cable. Amber approaching the limit, red at or past it.
    Sits with THROTTLE/STEER because that is where the eye already is while driving. */
 #sonar-teth.warn{color:var(--hazard)}
@@ -734,6 +760,44 @@ body.sim-takeover #stale-badge{top:116px}
 .tether-warn.on{display:block}
 .tether-warn.over{color:var(--error);border-color:var(--error);
   background:color-mix(in srgb,var(--error) 16%,rgba(12,1,24,.85))}
+
+/* ---- A FOLDABLE GROUP OF SECONDARY READINGS -------------------------------
+   ATTITUDE (turn rate, forward acceleration, pitch, roll) sits under Speed and the
+   tether range, with the driving instruments, and folds away on a tap.
+
+   IT IS A GROUP AND NOT FIVE MORE TILES IN THE TOP BAR because the operator has said
+   they will fly with all of this and then cut it back — so it has to be prunable, and a
+   wall of digits along the bar is neither prunable nor readable. The heading is the
+   affordance: one tap puts four numbers away without touching anything that is flown.
+
+   NOTHING NEW IS DRAWN. The tiles are the same .metric / .m-label / .m-val as every
+   other reading, the mark on the heading is the same .m-flag the bearing wears, and the
+   only styling here is the layout and the chevron. A group with its own look would be a
+   second visual language for the same kind of fact.
+
+   THE CHEVRON TURNS. Shape before colour, as everywhere else: folded and unfolded differ
+   by which way the arrow points, not by a tint that a colour-blind operator on a canal
+   bank in sunlight has to resolve. */
+.fgroup{display:flex;flex-direction:column;gap:2px;margin-top:3px}
+.fg-head{display:flex;align-items:center;gap:4px;padding:0;background:none;border:0;
+  cursor:pointer;text-align:left;
+  font-family:var(--font-sans);font-size:9px;font-weight:700;letter-spacing:.06em;
+  color:var(--on-surface-variant);text-transform:uppercase}
+.fg-head:hover{color:var(--primary)}
+/* Big enough to read which way it points at arm's length on a 7" handheld — the whole
+   job of this glyph is to be the SHAPE that says folded or not, and a chevron nobody can
+   resolve leaves the state carried by nothing at all. */
+.fg-chev{display:inline-block;font-size:11px;line-height:1;color:var(--on-surface-variant);
+  transition:transform .12s linear}
+.fgroup.collapsed .fg-chev{transform:rotate(-90deg)}
+.fgroup.collapsed .fg-tiles{display:none}
+/* Two columns of content-sized tiles: four readings read as two pairs rather than as a
+   row of eight things, and the column has the radar beside it, not a full bar's width. */
+.fg-tiles{display:grid;grid-template-columns:repeat(2,minmax(58px,max-content));
+  column-gap:14px;row-gap:2px;justify-content:start}
+/* Left-aligned like Speed and Tether above them, which set the same thing inline. The
+   labels are what the eye scans down; centring them would make four ragged columns. */
+.fg-tiles .metric{align-items:flex-start}
 
 /* ---- top-bar metric tiles: sized to their CONTENT, label over value ----
    This used to be `flex:1 1 0` - equal columns filling the bar. Twenty metrics in

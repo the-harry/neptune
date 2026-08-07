@@ -193,8 +193,10 @@ def topside(args) -> int:
         # several of them inside loops, so nothing short of running Chrome knows how
         # many there are. So it stays a MEASURED figure with the measurement attached.
         #
-        # MEASURED on the ROG Ally, re-run 2026-08-07: "295/295 checks passed in 109s
-        # across 12 suites", exit 0. FOUR different totals for this one suite were in
+        # NO TOTAL HERE, ON PURPOSE. Every figure this line has ever carried went
+        # stale, twice in the commit that corrected it. The runner prints the count;
+        # this only says roughly how long to expect to wait, because that is what
+        # someone deciding whether to run it at a canal bank actually needs.
         # circulation simultaneously - 214 on this very line, 249 in
         # client/tests/README.md, 286 in client/README.md and .specs/design.md, and 295
         # in reality - because each was copied forward from whichever tree the writer had

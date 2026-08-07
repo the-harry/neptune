@@ -20,6 +20,31 @@ import urllib.request
 from hashlib import sha1
 
 
+def devtools_port(profile_dir: str, timeout: float = 20.0) -> int:
+    """The debugging port Chrome actually opened, read from its own notebook.
+
+    The runner launches with --remote-debugging-port=0 and asks here rather than
+    picking a number itself. Picking one means finding a free port, closing it, and
+    hoping it is still free when Chrome gets there — a race that is lost silently: the
+    port is taken, Chrome fails to listen, and the only symptom is every screenshot
+    going missing with a connection error that names nothing. Chrome writes the port it
+    got to <user-data-dir>/DevToolsActivePort (line 1) the moment it is listening, on
+    Windows, macOS and Linux alike.
+    """
+    import time
+    f = os.path.join(profile_dir, "DevToolsActivePort")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            first = open(f, "r", encoding="utf-8").read().split("\n")[0].strip()
+            if first.isdigit():
+                return int(first)
+        except OSError:
+            pass
+        time.sleep(0.1)
+    raise RuntimeError(f"Chrome never wrote {f} - no debugging port to photograph through")
+
+
 def _page_ws_url(port: int, timeout: float = 15.0) -> str:
     """Find the page target. Chrome takes a moment to open the port after launch."""
     import time

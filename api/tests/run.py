@@ -28,6 +28,12 @@ A SUITE THAT WOULD NOT IMPORT IS NOT A SUITE THAT FAILED
     this project refuses to accept from its instruments. Those suites are now marked
     DEPS, counted separately, named in the verdict, and cannot be read as a pass.
 
+    A third way to contribute nothing is quieter still: a test_*.py that discovery
+    finds NO checks in — a class that stopped inheriting TestCase, a rename that took
+    `test_` off the front of every method. unittest says nothing at all about that
+    file, so the suite simply stops appearing and the count gets smaller. The files on
+    disk are therefore the roll call, and a file discovery skipped is reported NONE.
+
 USAGE
     python api/tests/run.py              # every suite, from the repo root
     python tests/run.py                  # the same, from api/
@@ -39,14 +45,16 @@ USAGE
     Exit status:
         0   every check ran and passed
         1   a check failed
-        2   nothing failed, but something could not be RUN (a missing dependency).
-            Not success. Non-zero on purpose, so a pre-push gate stops either way.
+        2   nothing failed, but something could not be RUN — a missing dependency, or
+            a suite file with no checks in it. Not success. Non-zero on purpose, so a
+            pre-push gate stops either way.
 """
 from __future__ import annotations
 
 import argparse
 import io
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -145,8 +153,23 @@ def _detail(tb: str, limit: int = 25) -> list[str]:
 
 
 def _interpreter_in(venv: Path) -> Path:
-    """Where python lives inside `venv` — Scripts on Windows, bin everywhere else."""
-    return venv / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
+    """Where python lives inside `venv` — Scripts on Windows, bin everywhere else.
+
+    Both names are tried on POSIX. `bin/python` is a symlink the venv module creates,
+    and on a Raspberry Pi it is also the first thing to break: a distro upgrade that
+    moves /usr/bin/python3 leaves that link dangling while `bin/python3` still resolves,
+    and `.exists()` on a dangling symlink is False — so the runner would decide the
+    checkout has no venv and quietly test a python that has none of the api's packages.
+    The first name that exists wins; if none does, the canonical one is returned so the
+    caller's own .exists() check reads False, which is the honest answer.
+    """
+    if os.name == "nt":
+        return venv / "Scripts" / "python.exe"
+    for name in ("python", "python3"):
+        py = venv / "bin" / name
+        if py.exists():
+            return py
+    return venv / "bin" / "python"
 
 
 def _repo_venv_python() -> Path | None:
@@ -224,6 +247,16 @@ def main(argv=None) -> int:
     for test in discovered:
         groups.setdefault(_suite_of(test), []).append(test)
 
+    # A suite discovery walked straight past. unittest reports "this file contained no
+    # tests" as SILENCE: a test_*.py whose class stopped inheriting from TestCase, or
+    # whose methods no longer start with test_ after a rename, contributes nothing and
+    # appears nowhere — the total just gets smaller and every line still says ok. That
+    # is a suite vanishing from the count, which is the one thing this runner exists to
+    # make impossible, so the files on disk are the roll call and discovery answers it.
+    empty = {p.stem for p in HERE.glob("test_*.py") if p.stem not in groups}
+    for name in empty:
+        groups[name] = []
+
     # Sort the suites that never loaded out of the ones that merely failed, BEFORE
     # anything counts or prints them. See the module docstring: unittest gives both the
     # same shape, and only the wrapped exception tells them apart.
@@ -239,6 +272,8 @@ def main(argv=None) -> int:
         for n in names:
             if n in blocked:
                 print(f"{_label(n):<24} cannot load here - needs {blocked[n]}")
+            elif n in empty:
+                print(f"{_label(n):<24} no checks discovered in {n}.py")
             else:
                 print(f"{_label(n):<24} {len(groups[n])} checks")
         return 0
@@ -253,7 +288,14 @@ def main(argv=None) -> int:
     # verdict must only ever speak about this run: `run.py hardware` once reported
     # "2 of 1 suites never loaded", indicting suites nobody had asked for.
     blocked = {n: need for n, need in blocked.items() if n in names}
+    empty = {n for n in empty if n in names}
 
+    # The machine is part of the result. This suite's totals are quoted in four
+    # documents and not one of them could say which box produced them - Pi or handheld,
+    # 3.9 or 3.14 - which is exactly how "260/260 on the Ally" gets read as "260/260
+    # everywhere". Printed before the run, so it is attached to whatever follows.
+    print(f"machine: {platform.platform()}  ({sys.platform}, "
+          f"{platform.machine() or 'unknown arch'})")
     print(f"python : {sys.version.split()[0]}  {sys.executable}")
     print(f"api    : {API}")
     print(f"suites : {len(names)}\n")
@@ -270,6 +312,12 @@ def main(argv=None) -> int:
             # number; a suite whose module never loaded is the same situation, and a
             # "0/1" here would be a number where there is no measurement.
             print(f"  {_label(name):<24} DEPS {'-':>3}/-   never loaded: needs {blocked[name]}")
+            continue
+        if name in empty:
+            # Same rule as DEPS, different cause: no count where there was no
+            # measurement. "0/0" would read as a suite that ran and had nothing to say.
+            print(f"  {_label(name):<24} NONE {'-':>3}/-   no checks discovered in "
+                  f"{name}.py")
             continue
         suite = unittest.TestSuite(groups[name])
         # The suite's own stdout goes nowhere: this runner prints the report, and a
@@ -311,8 +359,8 @@ def main(argv=None) -> int:
             print(f"      skip  {test.id().rsplit('.', 1)[-1]}  ({why})")
 
     dt = time.time() - t0
-    ran = len(names) - len(blocked)
-    if blocked:
+    ran = len(names) - len(blocked) - len(empty)
+    if blocked or empty:
         print(f"\n{total - failed - skipped}/{total} checks passed in {dt:.0f}s "
               f"across {ran} of {len(names)} suites")
     else:
@@ -327,14 +375,24 @@ def main(argv=None) -> int:
     # The verdict goes LAST because it is the line a person actually reads, and when
     # something could not be run it has to be the thing that contradicts the pass
     # count immediately above it rather than a footnote above it.
-    if blocked or dep_skipped:
+    if blocked or dep_skipped or empty:
         print("\nINCOMPLETE - this run certifies nothing about the api as a whole.")
         if blocked:
             print(f"  {len(blocked)} of {len(names)} suites never loaded: "
                   f"{', '.join(_label(n) for n in sorted(blocked))}")
+        if empty:
+            print(f"  {len(empty)} of {len(names)} suites contained no checks at all: "
+                  f"{', '.join(_label(n) for n in sorted(empty))} - the file is there "
+                  "and discovery found nothing in it to run")
         if dep_skipped:
             print(f"  {dep_skipped} check(s) inside a suite that did load were skipped "
                   "because a package they need is absent")
+        if not missing:
+            # An empty suite has no package to install and no command to suggest; the
+            # rest of this block is about absent dependencies and would send the reader
+            # off to pip for a file that needs editing.
+            print(f"  in this python: {sys.executable}")
+            return 1 if failed else 2
         print(f"  not installed: {', '.join(sorted(missing))}")
         print(f"  in this python: {sys.executable}")
         # Named as CORE deps explicitly. api/requirements.txt also lists gpiozero,

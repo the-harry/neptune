@@ -22,6 +22,7 @@
     -Kiosk                 locked kiosk window (NOT recommended on the handheld)
     -Setup                 steps 1-2 only, don't launch
     -Stop                  kill any running Neptune server/browser and exit
+    -Test [client|api]     run the check suites, show the result, exit nonzero if bad
 #>
 param(
   [string]$PiHost = "",
@@ -30,7 +31,8 @@ param(
   [switch]$Setup,
   [switch]$Stop,
   [switch]$SafeGraphics,
-  [switch]$NoGpu
+  [switch]$NoGpu,
+  [switch]$Test
 )
 
 $ErrorActionPreference = "Stop"
@@ -107,6 +109,217 @@ if ($Stop) {
   Write-Host "stopped $n Neptune browser process(es)." -ForegroundColor Magenta
   # the server dies with its own process; nothing else to do
   return
+}
+
+# ---------------------------------------------------------------------------
+# -Test : run the check suites and show the result.
+#
+# WHY THIS IS A LAUNCHER FLAG AND NOT A README INSTRUCTION.
+#   There is no terminal on this handheld and no keyboard to type one with, so
+#   "run the suites before you get in the boat" was a checkout ritual nobody could
+#   perform at the waterside - and a suite that cannot be run where the vehicle is
+#   is a suite that quietly stops being run. Testing has to be the same double-click
+#   as everything else here.
+#
+# Deliberately placed BEFORE the single-instance mutex and before anything opens a
+# port: checking the build starts no server, creates no shortcut and kills no browser,
+# so it must work while a dive is already up on this machine.
+#
+# Exit status is the SAME LANGUAGE api/tests/run.py speaks, so a gate anywhere in this
+# repo reads the same:
+#     0  every suite ran and every check passed
+#     1  a check failed
+#     2  nothing failed, but something could not be RUN. Not success.
+# ---------------------------------------------------------------------------
+if ($Test) {
+
+  # The result has to survive being read on a 7-inch screen in sunlight by someone
+  # holding a wet ROV, so it is a filled block and not a line of text. The FRAME
+  # character carries the answer as well as the colour does, because in this project
+  # colour is never the only carrier - and a phone photo of this window may be all
+  # anyone has by the time it is discussed.
+  #   '='  passed
+  #   '#'  failed
+  #   '?'  could not tell - the same '?' the dashboard shows for a sensor that is not
+  #        answering, and for exactly the same reason: this is not a pass.
+  function Verdict([string[]]$body, [string]$fg, [string]$bg, [string]$frame) {
+    $w = 62
+    Write-Host ""
+    Write-Host ($frame * $w) -ForegroundColor $fg -BackgroundColor $bg
+    foreach ($line in $body) {
+      Write-Host (($frame + $frame + "  " + $line).PadRight($w)) -ForegroundColor $fg -BackgroundColor $bg
+    }
+    Write-Host ($frame * $w) -ForegroundColor $fg -BackgroundColor $bg
+    Write-Host ""
+  }
+
+  # `-Test client` / `-Test api`. That bare word binds to the first POSITIONAL
+  # parameter, which is $PiHost, so it is read from there rather than inventing a
+  # second flag to remember; nothing in this branch wants a Pi address. Anything the
+  # runner does not recognise is REFUSED rather than ignored - a typo that silently ran
+  # everything would be a runner lying about what it had just covered.
+  $only = ""
+  if ($PiHost) { $only = $PiHost.Trim().ToLowerInvariant() }
+  if ($only -eq "both" -or $only -eq "all") { $only = "" }
+  if ($only -and $only -ne "client" -and $only -ne "api") {
+    Write-Host "`n-Test takes nothing, 'client' or 'api' - not '$PiHost'." -ForegroundColor Red
+    Write-Host "    Neptune.bat -Test          both suites" -ForegroundColor DarkGray
+    Write-Host "    Neptune.bat -Test client   the dashboard only" -ForegroundColor DarkGray
+    Write-Host "    Neptune.bat -Test api      the vehicle only" -ForegroundColor DarkGray
+    PauseBriefly 20
+    exit 2
+  }
+
+  # Python block-buffers stdout the moment it is a pipe instead of a console, so a
+  # suite that takes minutes would print NOTHING until it finished and look hung on a
+  # handheld with no other feedback. The env var (not just -u) because api/tests/run.py
+  # re-execs itself into the repo venv, and only the environment reaches that child.
+  $env:PYTHONUNBUFFERED = "1"
+
+  Write-Host "`n========  NEPTUNE CHECKS  ========" -ForegroundColor Magenta
+
+  # Find python the way the rest of the repo already does, and for the same reason:
+  # bootstrap.py's venv_python() and api/tests/run.py's VENVS both believe ROOT/.venv
+  # first (bootstrap.py --dev builds it on a dev box), then api/.venv (install.sh builds
+  # it on the Pi and runs uvicorn from it). A launcher that assumed 'python' was on PATH
+  # would be a third opinion about which interpreter owns the api, and the one machine
+  # where that matters is the one being tested.
+  #
+  # Only when this checkout has neither venv do we fall back to PATH, and then the
+  # interpreter is PROVED to run before it is used: on Windows `python.exe` is usually
+  # the Microsoft Store alias stub, which is not an interpreter at all - it opens the
+  # Store. Trusting the name alone is how a launcher reports a green run it never made.
+  function TryPython([string]$exe, [string[]]$pre) {
+    if (-not $exe) { return $null }
+    try {
+      $probe = @()
+      if ($pre) { $probe += $pre }
+      $probe += @("-c", "import sys; print(sys.version.split()[0])")
+      $out = & $exe @probe
+      if ($LASTEXITCODE -ne 0) { return $null }
+      $ver = "$($out | Select-Object -First 1)".Trim()
+      if ($ver -notmatch '^\d+\.\d+') { return $null }
+      return @{ exe = $exe; pre = $pre; ver = $ver }
+    } catch { return $null }
+  }
+
+  $repoRoot = (Resolve-Path (Join-Path $root "..")).Path
+  $py = $null
+  $pyHow = ""
+  foreach ($venv in @((Join-Path $repoRoot ".venv"), (Join-Path $repoRoot "api\.venv"))) {
+    $cand = Join-Path $venv "Scripts\python.exe"
+    if (Test-Path $cand) {
+      $py = TryPython $cand @()
+      if ($py) { $pyHow = "repo venv"; break }
+    }
+  }
+  if (-not $py) {
+    foreach ($name in @("python.exe", "python3.exe")) {
+      foreach ($c in @(Get-Command $name -All -ErrorAction SilentlyContinue)) {
+        $py = TryPython $c.Source @()
+        if ($py) { $pyHow = "found on PATH"; break }
+      }
+      if ($py) { break }
+    }
+  }
+  if (-not $py) {
+    $c = @(Get-Command "py.exe" -ErrorAction SilentlyContinue) | Select-Object -First 1
+    if ($c) { $py = TryPython $c.Source @("-3"); if ($py) { $pyHow = "py launcher" } }
+  }
+  if (-not $py) {
+    Nope "no working python found (tried the repo venvs, PATH, then the py launcher)"
+    Info "install Python 3, or run:  python bootstrap.py --dev  from $repoRoot"
+    Verdict @("DID NOT RUN", "no python interpreter - NOTHING was checked") Black Yellow "?"
+    PauseBriefly 45
+    exit 2
+  }
+  $pyExe = $py.exe
+  OK "python $($py.ver)  ($pyHow)"
+  Info $pyExe
+
+  $suites = @()
+  if ($only -ne "client") { $suites += @{ name = "api";    path = (Join-Path $repoRoot "api\tests\run.py");    note = "" } }
+  if ($only -ne "api")    { $suites += @{ name = "client"; path = (Join-Path $repoRoot "client\tests\run.py"); note = "opens headless Chrome - this is the slow one" } }
+
+  $results = @()
+  foreach ($s in $suites) {
+    Write-Host "`n---- $($s.name) ----" -ForegroundColor Cyan
+    if (-not (Test-Path $s.path)) {
+      Nope "not in this checkout: $($s.path)"
+      $results += @{ name = $s.name; code = 2; line = "runner missing" }
+      continue
+    }
+    if ($s.note) { Info $s.note }
+
+    $lines = New-Object System.Collections.ArrayList
+    $code = 0
+    try {
+      $cmdArgs = @()
+      if ($py.pre) { $cmdArgs += $py.pre }
+      $cmdArgs += @("-u", $s.path)
+      # Streamed line by line rather than captured and dumped: on a handheld a window
+      # that prints nothing for two minutes is indistinguishable from a wedged one.
+      # The lines are kept as well so the verdict below can QUOTE the runner's own
+      # total instead of inventing a second count that could disagree with it.
+      & $pyExe @cmdArgs | ForEach-Object { Write-Host $_; [void]$lines.Add("$_") }
+      $code = $LASTEXITCODE
+    } catch {
+      Nope "could not run it: $($_.Exception.Message)"
+      $code = 2
+    }
+
+    $summary = @($lines | Where-Object { $_ -match 'checks passed' }) | Select-Object -Last 1
+    $ran = 0
+    if ($summary -and ("$summary" -match '(\d+)\s*/\s*(\d+)\s+checks passed')) { $ran = [int]$Matches[2] }
+    $incomplete = @($lines | Where-Object { $_ -match 'INCOMPLETE' }).Count -gt 0
+
+    # GREEN MUST MEAN "IT RAN AND IT PASSED", never merely "nothing complained".
+    # A zero exit with no total printed, or a total of zero checks, is a suite that
+    # exercised nothing - and reporting that as a pass is the exact failure this whole
+    # project exists to refuse: an instrument reading calm when it cannot tell. No count
+    # is hardcoded here; the only thing asserted is that the runner counted SOMETHING.
+    if ($code -eq 0 -and ($ran -le 0 -or $incomplete)) { $code = 2 }
+    $results += @{ name = $s.name; code = $code; line = "$summary".Trim() }
+  }
+
+  # Worst wins, and a real failure outranks a could-not-run: if anything actually broke,
+  # that is the thing to say first.
+  $worst = 0
+  foreach ($r in $results) {
+    if ($r.code -eq 1) { $worst = 1 }
+    elseif ($r.code -ne 0 -and $worst -eq 0) { $worst = 2 }
+  }
+
+  # Repeated down here because the per-suite detail above has almost certainly scrolled
+  # off a handheld screen by now, and this is the part somebody has to act on.
+  Write-Host ""
+  foreach ($r in $results) {
+    $mark = switch ($r.code) { 0 { "PASSED" } 1 { "FAILED" } default { "DID NOT RUN" } }
+    $col  = switch ($r.code) { 0 { "Green"  } 1 { "Red"    } default { "Yellow" } }
+    Write-Host ("  {0,-8} {1,-12} {2}" -f $r.name, $mark, $r.line) -ForegroundColor $col
+  }
+
+  if ($worst -eq 0 -and $results.Count -ge 2) {
+    Verdict @("ALL CHECKS PASSED", "api and client both ran; every check in them passed") Black Green "="
+  } elseif ($worst -eq 0) {
+    # A half-run is still a pass, but it is a pass about HALF THE SYSTEM and has to say
+    # so on the block itself. api/tests/run.py refuses to let a partial run read as a
+    # whole-system certificate ("this run certifies nothing about the api as a whole");
+    # a green block here that said "both suites ran" after `-Test api` would be the same
+    # lie one level up, and it is the block, not the scrollback, that gets remembered.
+    Verdict @("$($results[0].name.ToUpperInvariant()) CHECKS PASSED",
+              "ONLY the $($results[0].name) suite ran - the other half of the system",
+              "was not checked at all. Plain -Test runs both.") Black Green "="
+  } elseif ($worst -eq 1) {
+    Verdict @("FAILED", "a check did not pass - the name and the numbers are", "above, under the suite that printed FAIL") White Red "#"
+  } else {
+    Verdict @("DID NOT RUN", "something could not be run, so nothing was proved.", "This is NOT a pass - see the reason above") Black Yellow "?"
+  }
+  # A pass can close sooner than a failure: nobody needs to read a green block twice,
+  # and a failure is the one an operator has to photograph or act on. Never a keypress
+  # wait - there is no keyboard on this machine.
+  PauseBriefly $(if ($worst -eq 0) { 20 } else { 60 })
+  exit $worst
 }
 
 # ---------------------------------------------------------------------------

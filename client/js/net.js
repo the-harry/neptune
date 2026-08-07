@@ -226,7 +226,36 @@ function onTelemetry(t){
   // mag_cal: 0..3, and null means no IMU answered at all — a different fault from an
   // IMU answering "uncalibrated" (0), so the null is kept rather than folded into 0.
   if(t.mag_cal!==undefined) state.magCal = (typeof t.mag_cal==='number') ? t.mag_cal : null;
-  if(t.current_a!==undefined) state.currentA = (typeof t.current_a==='number') ? t.current_a : null;
+  // THE SECONDARY INSTRUMENTS, OFF THE ONE LIST THAT DESCRIBES THEM (core.js
+  // FLIGHT_METRICS): the pack's amps and the four inertial readings.
+  //
+  // Written as a loop rather than five hand-copied lines ON PURPOSE, and the reason is
+  // this file's own history. The guard below is the fourth version of a line that has
+  // been got wrong twice — `typeof x === 'number'` dropping a null on the floor, and a
+  // `||` collapsing a legitimate zero — and hand-copying it five more times is five more
+  // chances to write one of them differently. Every one of these fields has a REAL ZERO
+  // and every one of those zeroes is the calm answer: 0.0 deg/s is "not turning", 0.00
+  // m/s2 is "coasting", 0.0 deg is "level", 0.0 A is "drawing nothing". `x || null` on
+  // any of them spells a perfectly good measurement "the chip is dead", and the same
+  // mistake written the other way round (`x == null ? 0 : x`) hands the console a dead
+  // IMU dressed as a sub sitting still and level — the calm answer again, from a chip
+  // that answered nothing. One guard, five metrics, no room for the two to disagree.
+  //
+  // AND ONLY A REAL NUMBER WRITES THE STAMP, the same rule depth, heading and the pack
+  // follow: the stamp says "a measurement arrived", never "a frame arrived", because a
+  // frozen driver ships frames at 15 Hz while measuring nothing.
+  for(let i=0;i<FLIGHT_METRICS.length;i++){
+    const m=FLIGHT_METRICS[i];
+    if(t[m.wire]===undefined) continue;      // an older hull that has never sent it
+    // ABSENT IS NOT NULL, and the alert rail has to tell them apart: a hull too old to
+    // carry this field has no instrument to have lost, while a hull that sends null has
+    // one and it stopped. Both leave the value null, so the fact that the field was ever
+    // spoken is recorded here - otherwise an older vehicle gets accused of a failure it
+    // does not have the hardware to suffer.
+    state[m.key+'Seen'] = true;
+    state[m.key] = (typeof t[m.wire]==='number') ? t[m.wire] : null;
+    if(state[m.key]!=null) state[m.key+'At']=Date.now();
+  }
 }
 // Fixed-rate send loop — ALWAYS transmits, even zeros (feeds server watchdog).
 function startSendLoop(){

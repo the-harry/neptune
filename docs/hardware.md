@@ -603,6 +603,144 @@ value the vehicle read: that is what lets a check prove the readout neither foll
 water down nor sat frozen. Test the recovery too — a gauge that goes blank and *stays*
 blank after the connector is reseated is its own fault, and one nobody finds until a dive.
 
+### 6.4 The five diagnostic readings, and what a healthy one looks like
+
+Turn rate, forward acceleration, pitch, roll and pack current are **diagnostic**, not
+navigational. Nothing safety-critical branches on attitude and the forward accelerometer is
+never integrated twice into a position — they are on screen because they are the readings
+that tell you *whether the vehicle is doing what you told it to*, and every one of them was
+being produced by the hull and displayed nowhere. Four of them reached no readout at all;
+pack current was spent inside the pack tooltip, which nobody hovers on a canal bank in
+sunlight with wet hands.
+
+They are what you fly the sub on **at the bench**, before there is any water to check them
+against. All five come off chips that already had a purpose here, so none of them costs a
+part: four from the BNO085, one from the INA219.
+
+Every one of them has a **real zero**, and every one of those zeroes is the calm answer —
+`0.0 deg/s` is *"not turning"*, `0.0 m/s²` is *"coasting"*, `(0.0, 0.0)` is *"level"*,
+`0.0 A` is *"drawing nothing"*. That is the whole reason each ships as `Optional` with no
+default: a dead IMU defaulting to zeroes is a vehicle sitting perfectly still, perfectly
+level, and perfectly believable.
+
+| Reading | Chip | Sign convention | At rest, healthy | Under way, healthy |
+|---|---|---|---|---|
+| **turn rate** `gyro_z_dps` | BNO085 | **+ = clockwise**, compass convention | within ±0.5 °/s of zero | tracks the steer; sign matches the direction the bow swings |
+| **forward accel** `accel_fwd_ms2` | BNO085, *linear* accel (gravity already removed) | **+ = ahead** | within ±0.2 m/s² of zero | a brief spike on throttle-up, back to ~0 at steady speed |
+| **pitch** `pitch_deg` | BNO085 | **+ = nose up** | whatever the trim is; note it and expect it back | noses down as the ballast fills, up as it empties |
+| **roll** `roll_deg` | BNO085 | **+ = starboard down** | within ±2° of zero on a trimmed hull | heels *into* a turn, and returns |
+| **pack current** `current_a` | INA219, high-side shunt (§4.4) | always positive; this vehicle never charges | idle draw only — see below | rises with thrust, and it is the *comparison* that matters |
+
+#### What each one catches
+
+**Turn rate — the reading that proves the compass.** The BNO085's fused yaw is polluted by
+the thrusters' own magnetic field; that is the entire reason `GYRO ONLY` exists. Turn rate
+is the independent witness. Steer hard over on the bench and watch both:
+
+- **heading moves, turn rate does not** → the bearing is being pushed by something that is
+  not rotation. Magnetic interference, almost always the thrusters or a steel fastener too
+  close to the IMU. Move the IMU, not the threshold.
+- **turn rate moves, heading does not** → the magnetometer is dead or saturated. Check
+  `mag_cal` on the same screen; if it is `0`, run the calibration dance in §8.5.
+- **turn rate is non-zero on a bench that is not moving** → uncorrected gyro bias. A few
+  tenths of a degree per second is normal and the heading filter estimates it out; a
+  standing 2 °/s is a chip that never finished its startup calibration, and it will walk
+  the dead-reckoned track sideways at roughly 2° per second of dive.
+- **sign is backwards** → `NAV_IMU_YAW_OFFSET_DEG` does not fix this. The mounting axis is
+  wrong; turn the board, do not negate the number in software, or every other axis stays
+  wrong and you will find out about it underwater.
+
+**Forward acceleration — the reading that catches a bad mount.** It is *linear*
+acceleration, so gravity is already removed by the BNO085's fusion. On a level, still hull
+it must sit at approximately zero.
+
+- **a standing offset at rest** (a persistent ±1–3 m/s², and the classic value is about
+  **9.8**, or a fraction of it) means gravity is leaking into the forward axis: the board is
+  mounted on the wrong face, or the fusion has not converged. It is the fastest way to catch
+  a 90° mounting error before it becomes a mystery in the dive log.
+- **thrust applied, no acceleration, no paddlewheel pulses** → the sub is held. That is the
+  **snag** signature, and this is the reading that separates *"the wheel sensor died"* from
+  *"the vehicle genuinely is not moving"*: a dead hall sensor stops the pulses and leaves the
+  accelerometer alone, while a snag stops both. The wheel alone cannot tell those apart,
+  which is why there is a spare in the BOM.
+- **acceleration with no thrust** → current, or someone pulling the tether.
+
+**Pitch and roll — the readings that catch a build problem, not a software one.** Attitude
+is advisory here, and the useful information is almost always in the *offset*, not the
+value:
+
+- **a standing roll at rest** is weight or buoyancy asymmetry. Fix it with lead and foam,
+  not with a number: a hull that flies with a permanent heel loses thrust to the wrong axis
+  and the camera never looks where the operator points it.
+- **roll that grows during a dive and does not come back** is a compartment taking water, or
+  something heavy that has broken loose inside. Check the leak stage (§6.1) on the same
+  screen; roll drifting while both probes stay dry means the mass moved, not the water.
+- **nose-down pitch that gets worse as the dive goes on**, with the ballast steady, is water
+  in the bow. Come up.
+- **pitch swinging with the ballast** is correct and expected — the syringe is not on the
+  centre of buoyancy. Note the two values (§8.3 gives you a full stroke to measure them
+  over) so the abnormal one is recognisable.
+
+**Pack current — the reading that finds a fouled prop.** This is a canal-cleaning vehicle;
+the propellers *will* pick up fishing line, bag handles and weed, and the fouled state is
+almost invisible from topside. The camera looks forward, not at the thrusters, and a wrapped
+prop still spins and still makes noise.
+
+The number that matters is not the absolute draw, it is **current against speed**:
+
+| What you see | What it means |
+|---|---|
+| draw up, paddlewheel speed down, same throttle | **something is on a prop.** The motor is working harder and moving the boat less — the definition of fouling. Stop before the driver heats up |
+| draw up, speed up | you are just going faster. Nothing wrong |
+| draw **down**, speed down | the opposite fault: a thruster has stopped. A disconnected motor, a stripped coupling, or an H-bridge that has gone open |
+| a step change in draw with no command | a short, a stalled ballast stepper, or a lamp that has flooded and is now conducting through the water |
+| draw high and rising at rest, with no thrust | a stalled motor or a shorted lamp. Kill it — a stall is the fastest way to cook a small brushed motor |
+
+Take the numbers once on a clean hull and write them on this page; they are vehicle-specific
+and nobody else's are worth anything to you. For the shape to expect,
+`MockHardware.read_current_a()` in `api/hardware.py` models it — read out on the ROG Ally,
+2026-08-07:
+
+| State | Modelled draw |
+|---|---|
+| idle: Pi, IMU and electronics, no thrust, lamps off | **0.35 A** |
+| both thrusters at full | **2.85 A** |
+| white bow spots at full, no thrust | 1.15 A (**+0.80 A**) |
+| both lamps at full, no thrust | 1.65 A (**+0.50 A** for the green ring) |
+| **worst case** — full thrust and both lamps | **4.15 A** |
+
+The thrusters dominate everything else, which is exactly why this number is worth a readout.
+Those are **modelled** figures and not measurements — no part of this vehicle has been
+bought — so treat the shape as real and the digits as placeholders.
+
+> **The stock shunt clips before this vehicle does.** §4.4's 0.1 Ω shunt with the driver's
+> 320 mV gain setting reads to **±3.2 A**, and full throttle plus both lamps is above that
+> on the numbers above. A clipped reading is not a maximum — it is a ceiling wearing a
+> measurement's clothes, and the one thing it hides is the overload you fitted the sensor
+> to see. If your peak reaches it, fit a 0.01 Ω shunt and change `INA219_SHUNT_OHMS` in
+> `api/hardware.py` and §4.4 **together**; a shunt swapped in hardware alone scales every
+> amp by exactly the wrong factor and nothing anywhere looks broken.
+
+#### When they say nothing
+
+All four IMU readings are gated on the BNO085's liveness verdict, exactly like `heading` and
+`mag_cal` — so they blank **together**, in the same frame, with `"bno085"` in
+`sensor_faults`. Six readouts going to `?` at once with one chip named is the signature of a
+dead IMU; one of them alone is not a thing that can happen, and if you ever see it, suspect
+the console rather than the hull.
+
+Pack current is gated on the INA219 and blanks **with the pack voltage**, for the same
+reason: one chip, one verdict. Amps present with volts missing is likewise impossible; the
+mock refuses to model it, because a test that passed against that combination would be
+proving something about the mock rather than about the vehicle.
+
+Reproduce all of it with no hardware, the same way as §6.3:
+
+```python
+hw._kill_sensor("bno085")     # heading, heading_card, mag_cal, gyro, accel, pitch, roll
+hw._kill_sensor("ina219")     # pack volts AND amps — never one without the other
+```
+
 ---
 
 ## 7. Power tree

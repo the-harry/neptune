@@ -173,6 +173,28 @@ class NavState(BaseModel):
     # estimate is degraded on purpose; this says it has stopped.
     no_heading: bool = False
     has_origin: bool = True
+    # WHAT IS DELIBERATELY NOT HERE: gyro_z_dps, accel_fwd_ms2, pitch_deg, roll_deg.
+    #
+    # They are on SensorSample above — this frame's INPUTS — and they now reach the
+    # client on protocol.Telemetry instead, taken straight off the hardware handle.
+    # Do not add them here as well, however natural it looks that the frame carrying
+    # gyro_only should also carry the gyro:
+    #
+    #   * A fact on two sockets is a fact that can disagree with itself, and this
+    #     file has already paid that bill once. See NavService.nav_frame and
+    #     tests/test_consumers.py TwoSocketsOneVehicleTest: gyro_only was null on
+    #     /ws/control and False on /ws/nav in the same tick, and the client writes
+    #     both into the same state slots, so whichever frame landed last won.
+    #   * This object does not exist until a dive does. The estimator is built in
+    #     start_dive, which requires an origin, and every reader goes through
+    #     fresh_state() — so a field here is absent for the whole pre-dive phase of
+    #     every boot and blanks again three nav periods after the loop stops. That
+    #     gate is right for an ESTIMATE and wrong for a reading: it would spell "no
+    #     datum yet" and "the IMU is dead" with the same null, on a hull whose IMU
+    #     is answering perfectly.
+    #
+    # The estimator's VERDICT on the gyro belongs here and does (gyro_only). The
+    # gyro's reading belongs to the chip that took it.
 
 
 class ReadinessItem(BaseModel):

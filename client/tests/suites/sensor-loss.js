@@ -29,6 +29,21 @@
      estimator, and it must not clear one that a real `true` raised: navigation going
      quiet is not evidence the sub came free.
 
+     THE IMU, WHICH IS ONE CHIP AND MUST FAIL AS ONE. The BNO085 carries six readings —
+     the bearing, its cardinal, the calibration mark, the turn rate, forward acceleration
+     and the attitude pair — and api/rov.py takes all six off the same hardware handle,
+     so they arrive together and they stop together. A cluster where one of them survives
+     the chip's death is not a partial failure, it is a LIE: a turn rate still reading
+     "0.0 deg/s" beside a blanked bearing says the sub is holding a steady course, which
+     is the calm answer, made from a chip that is answering nothing. Every one of them
+     goes to cannot-tell in the same frame, and one alert chip names the compass once.
+
+     THE PACK, WHICH IS ALSO ONE CHIP. Voltage and current both come off the INA219, so a
+     silent chip blanks BOTH — and the current had nowhere to be blanked, because it was
+     spent inside the pack's tooltip ("drawing 3.1 A") where an operator in sunlight with
+     wet hands never sees it. A reading that only exists on hover cannot go cannot-tell in
+     any way anybody notices.
+
    DRIVEN THROUGH handleMessage(), the client's own WebSocket message handler, exactly as
    a Pi frame arrives. The coercion bugs live in the INGEST path — `typeof x === 'number'`
    dropping a null on the floor, `-null` becoming 0 — so a suite that wrote into `state`
@@ -36,7 +51,14 @@
 (function(){
   const R=[]; const errs=[];
   window.addEventListener('error', e=>errs.push(String(e.message)));
-  const ok=(n,p,d)=>R.push({name:n, pass:!!p, detail:String(d)});
+  // Details quote text straight off the page, and the page has glyphs in it. run.py
+  // prints to a Windows console whose codepage cannot encode them and dies mid-report
+  // with a UnicodeEncodeError, taking every result after it with it. Anything the
+  // codepage cannot carry is escaped rather than dropped: a report that cannot be
+  // printed is a report that did not run.
+  const safe=s=>String(s).replace(/[^\x20-\x7E\u00A0-\u00FF\u2013\u2014\u2018\u2019\u201C\u201D\u2022\u2026]/g,
+                                  c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
+  const ok=(n,p,d)=>R.push({name:n, pass:!!p, detail:safe(d)});
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const cls=id=>($(id).className||'');
   const txt=id=>($(id).textContent||'').replace(/ /g,' ').trim();
@@ -54,8 +76,15 @@
   // something when they appear. snagged and gyro_only are deliberately ABSENT from
   // this frame: they are what section 4 is about, and `state.navAnswered` must still
   // be false when it starts.
+  //
+  // THE FOUR NEW BNO085 READINGS RIDE IN THE HEALTHY FRAME TOO, and they have to: the
+  // point of section 5 is that they all go dark WITH the compass, and a check that they
+  // are dark is worth nothing unless they were lit first. Distinct digits (12.0 / 0.35 /
+  // -6.5 / 9.0, against a 1.2 A pack draw) so a readout wired to the wrong field cannot
+  // hide behind a coincidence.
   const BASE = {type:'telemetry', mock:false, armed:false, seq:1,
     heading:284, heading_card:'NW', mag_cal:3,
+    gyro_z_dps:12.0, accel_fwd_ms2:0.35, pitch_deg:-6.5, roll_deg:9.0,
     depth:4.2, pressure:20.7, battery_v:8.1, current_a:1.2,
     ballast_level:0.4, ballast_homed:true, ballast_needs_rehome:false, ballast_target:0.4,
     left:0, right:0, magnet:false, light_green:false, light_white:false,
@@ -100,6 +129,50 @@
   const liveOf=el=>{ const h=el.dataset.help||'', t=el.getAttribute('title')||'';
     return (t.indexOf(h)===0 ? t.slice(h.length) : t).replace(/^[\s—-]+/,'').trim(); };
 
+  // FINDING A READOUT THIS SUITE DOES NOT OWN THE NAME OF. The file that draws the
+  // instrument cluster owns its element ids; this suite is written against the
+  // BEHAVIOUR, so each new reading is looked up by the ids the console's naming
+  // convention makes likely and, failing that, by the one property every number here is
+  // guaranteed to have — a written explanation of what it means. Nothing already spoken
+  // for can answer: renderBattery appends "drawing 1.2 A" to the pack tooltip, which
+  // would otherwise let the VOLTAGE stand in for the current and make the whole of
+  // section 5's pack half pass on the defect it exists to catch. A reading found neither
+  // way fails its own named check — never a silent skip.
+  const TAKEN=['depth-val','pressure-val','heading-val','battery-v','ballast-pct',
+               'link-ms','cpu-c','cpu-pct','ram-pct','disk-gb','net-eth','origin-val',
+               'origin-tile','sonar-teth','speed-val','speed-src','hdg-flag','hdg-warning',
+               'cam-battery','cam-sd','cam-quality','cam-awb','cam-ev','cam-remaining','cam-mode'];
+  function findReadout(ids, re){
+    for(let i=0;i<ids.length;i++){ const el=$(ids[i]); if(el) return el; }
+    const all=[...document.querySelectorAll('[id]')];
+    for(let i=0;i<all.length;i++){
+      const el=all[i];
+      if(TAKEN.indexOf(el.id)>=0 || el.children.length) continue;
+      const t=(el.dataset.help||el.getAttribute('title')||'');
+      if(t && re.test(t)) return el;
+    }
+    return null;
+  }
+  const CLUSTER = {
+    'the turn rate': {re:/turn rate|rate of turn|yaw rate|degrees per second|deg\/s|\u00b0\/s/i,
+      ids:['turn-val','turn-rate','turn-rate-val','turnrate-val','yaw-val','yaw-rate',
+           'gyro-val','gyro-z','gyro-z-val','rate-val','rot-val']},
+    'forward acceleration': {re:/accelerat|m\/s2|m\/s²|surge|speeding up/i,
+      ids:['accel-val','accel-fwd','accel-fwd-val','acc-val','accel','surge-val','a-fwd']},
+    'pitch': {re:/\bpitch\b/i,
+      ids:['pitch-val','pitch','pitch-deg','attitude-val','att-val','tilt-val',
+           'pitch-roll-val','pitchroll-val']},
+    'roll': {re:/\broll\b/i,
+      ids:['roll-val','roll','roll-deg','attitude-val','att-val','tilt-val',
+           'pitch-roll-val','pitchroll-val']},
+    'the pack current': {re:/\bcurrent\b|\bamps?\b|\bamperes?\b/i,
+      ids:['current-a','current-val','current','pack-a','pack-current','battery-a',
+           'amps-val','amp-val','draw-val','load-a']}
+  };
+  const CEL={};
+  const elText=el=>((el&&el.textContent)||'').replace(/ /g,' ').trim();
+  const clusterText=n=>{ const el=CEL[n]; return el ? elText(el) : '(NO READOUT)'; };
+
   async function run(){
     await sleep(2600);
     // The collapsed 200 px dial is the one the rotation checks are about, and blind-nav
@@ -111,6 +184,9 @@
     await sleep(400);
     ok('the radar is collapsed, so heading-up rotation is live', !MAP.expanded && MAP.headingUp,
        'expanded='+MAP.expanded+' headingUp='+MAP.headingUp+' blind='+MAP.blind);
+    // Resolved ONCE, up front, so sections 2 and 5 are talking about the same elements
+    // and a readout that appears halfway through the run cannot make them disagree.
+    Object.keys(CLUSTER).forEach(n=>{ CEL[n]=findReadout(CLUSTER[n].ids, CLUSTER[n].re); });
 
     // ================= 0. A HULL WHOSE ESTIMATOR HAS NEVER RUN =================
     // FIRST, and it has to be first: `state.navAnswered` latches for the life of the
@@ -209,6 +285,27 @@
     ok('a null pack voltage does the same',
        deadBatt.text==='?' && !isNumber(deadBatt.text) && /\bnosensor\b/.test(deadBatt.cls),
        'text="'+deadBatt.text+'" class="'+deadBatt.cls+'"');
+    // THE OTHER HALF OF THE SAME CHIP. Volts and amps are one INA219 and go null in one
+    // frame, so a console showing a confident current beside a blanked voltage would be
+    // reporting a chip that is half dead — which is not a state this hardware has. The
+    // known defect this is written against is quieter than that and worse: the current
+    // had no readout at all, only the pack's tooltip, so it could not be seen going
+    // cannot-tell because it could not be seen.
+    ok('the pack current has a readout of its own, not just a line in the pack tooltip',
+       !!CEL['the pack current'],
+       CEL['the pack current'] ? ('#'+CEL['the pack current'].id)
+         : 'no element on the page shows the current draw - "drawing 1.2 A" inside the '
+         + 'battery tooltip is invisible to an operator in sunlight who is not hovering '
+         + 'anything, and it cannot blank in any way anybody notices');
+    ok('a null pack current renders as cannot-tell, exactly as the voltage beside it does',
+       !!CEL['the pack current'] && clusterText('the pack current')==='?',
+       CEL['the pack current'] ? ('current reads "'+clusterText('the pack current')+
+         '" class="'+(CEL['the pack current'].className||'')+'"')
+         : 'NOT RUN - there is no pack-current readout to blank');
+    ok('the pack and its current go dark TOGETHER - one chip, one admission',
+       !!CEL['the pack current'] && deadBatt.text==='?' && clusterText('the pack current')==='?',
+       'pack="'+deadBatt.text+'" current="'+clusterText('the pack current')+
+       '" — one of them still showing a number claims a chip that is half answering');
     ok('an absent pack raises NO battery alarm at all',
        !/BATTERY/.test(alertText()) && /\bbatt-none\b/.test(deadBatt.cls),
        'class="'+deadBatt.cls+'" alerts="'+alertText()+'" — "BATTERY 0.0V · SURFACE" was '+
@@ -216,6 +313,31 @@
     ok('the blanked readings are explained rather than left as a dashboard glitch',
        /NO DEPTH/.test(alertText()) && /NO PACK VOLTAGE/.test(alertText()),
        'alerts="'+alertText()+'"');
+    // AND THE CHIP IS NAMED, ON THE RAIL, IN WORDS. A blank with no cause attached reads
+    // as a dashboard glitch, and a glitch is a thing an operator waits out. "PACK
+    // MONITOR" is the job and not the part number, because "ina219" sends nobody
+    // anywhere; the sentence behind it carries the part number for whoever opens the
+    // hull. This is the chip that both blanked readings above belong to, so it must be
+    // named ONCE and not twice - a screen that reports the same dead chip in two places
+    // is a screen inviting the operator to go and check two things.
+    const packChips = alerts().filter(a=>/PACK MONITOR/.test(a.text));
+    ok('an alert chip names the pack monitor as the chip that stopped',
+       packChips.length>=1 && packChips.some(a=>a.kind==='crit'),
+       'chips naming the pack monitor: '+(packChips.map(a=>'"'+a.text+'" ['+a.kind+']').join(', ')||'none')+
+       '  all alerts="'+alertText()+'"');
+    // ONE INSTRUMENT, ONE INDICATOR (design.md §3), and it is not pedantry: the rail is
+    // severity-ordered and finite, so a second chip about the SAME dead chip pushes a
+    // real one down or off. render.js already merges depth and pressure into "NO DEPTH &
+    // PRESSURE" for exactly this reason - one MS5837, one errand - and volts and amps are
+    // the same relationship on the INA219.
+    ok('...and it names it ONCE - one chip is one errand, and the rail is not a log',
+       packChips.length===1,
+       packChips.length+' chips for one INA219: '+
+       (packChips.map(a=>'"'+a.text+'"').join(', ')||'none'));
+    ok('...and it is not double-reported as an unexplained fault as well',
+       !/NOT ANSWERING/.test(alertText()),
+       'alerts="'+alertText()+'" — the INA219 is accounted for by the blanked readings, '+
+       'so it must not also appear as a fault nothing on screen was drawn from');
 
     // THE STALE SHAPE, for comparison. A dropped frame on a still-open socket: the whole
     // bar dashes together and comes back on its own. setWsStatus is the client's own
@@ -273,9 +395,15 @@
        rotLive==='rotate(-284.0)', 'radar-north transform="'+rotLive+'" at heading 284');
 
     // THE COMPASS DIES. Both sockets say so at once, which is what the vehicle does —
-    // heading, its cardinal and mag_cal all come off the BNO085.
+    // heading, its cardinal, mag_cal AND the four inertial readings all come off the one
+    // BNO085 handle, so all six null in the same frame. Written out in full rather than
+    // nulling only the bearing, because a frame that keeps a turn rate alive beside a
+    // dead compass is a frame this vehicle cannot send, and a suite that feeds one is
+    // asking the console questions about a hull that does not exist.
     navFrame(null);
-    await say({heading:null, heading_card:null, mag_cal:null, sensor_faults:['bno085']});
+    await say({heading:null, heading_card:null, mag_cal:null,
+               gyro_z_dps:null, accel_fwd_ms2:null, pitch_deg:null, roll_deg:null,
+               sensor_faults:['bno085']});
     await sleep(300);
     const rotDead=$('radar-north').getAttribute('transform');
     ok('a null bearing does NOT rotate the radar to north',
@@ -358,14 +486,101 @@
     ok('a real "no snag" is what clears it, and it does',
        !/SNAG/.test(alertText()), 'alerts="'+alertText()+'"');
 
+    // ================= 5. THE IMU IS ONE CHIP AND DIES AS ONE =================
+    // Six readings come off the BNO085 and api/rov.py takes all six off the same handle,
+    // so on a real vehicle they are never anything but unanimous. The console's job is
+    // to be unanimous with them — and the failure mode is not "a reading is missing", it
+    // is that EVERY ONE OF THE FOUR NEW READINGS HAS A CALM DEFAULT. 0.0 deg/s is "not
+    // turning". 0.0 m/s2 is "coasting". (0.0, 0.0) is "level". A survivor left showing
+    // any of those beside a blanked bearing is not a partial failure, it is a picture of
+    // a sub holding a steady, level course, drawn from a chip that is answering nothing —
+    // which is the exact shape of the dive that started all of this.
+    const IMU = ['the turn rate','forward acceleration','pitch','roll'];
+    const present = IMU.filter(n=>CEL[n]);
+    ok('the four inertial readings have somewhere to be read at all',
+       present.length===IMU.length,
+       present.length===IMU.length
+         ? IMU.map(n=>n+'=#'+CEL[n].id).join(', ')
+         : 'no readout for: ' + IMU.filter(n=>!CEL[n]).join(', ') +
+           ' — the vehicle sends them every frame and nothing on this screen shows them, '
+         + 'which is a reading that does not exist as far as the operator is concerned');
+
+    // The healthy control FIRST: a check that they are all dark is worth nothing unless
+    // they were all lit a moment earlier.
+    await say({});
+    const lit = present.filter(n=>{ const t=clusterText(n); return t!=='?' && t!=='--' && /\d/.test(t); });
+    ok('a healthy IMU lights all four of them (the control)',
+       present.length>0 && lit.length===present.length,
+       present.map(n=>n+'="'+clusterText(n)+'"').join('  ')||'nothing to light');
+
+    // AND NOW THE CHIP STOPS. Every field the BNO085 backs goes null in one frame, with
+    // "bno085" beside it — which is exactly what MockHardware.kill("bno085") puts on the
+    // wire, so this frame is the real one and not a suite's idea of one.
+    await say({heading:null, heading_card:null, mag_cal:null,
+               gyro_z_dps:null, accel_fwd_ms2:null, pitch_deg:null, roll_deg:null,
+               sensor_faults:['bno085']});
+    const survivors = present.filter(n=>clusterText(n)!=='?');
+    const shown = ()=>present.map(n=>n+'="'+clusterText(n)+'"').join('  ')
+                  || 'NOT RUN - none of the four has a readout to blank';
+    ok('the IMU dying takes ALL FOUR inertial readings to cannot-tell, in the same frame',
+       present.length>0 && survivors.length===0,
+       shown() +
+       (survivors.length ? ('  — STILL CLAIMING A READING: '+survivors.join(', ')+
+         '. One survivor is worse than all four missing: it is the calm answer, drawn '
+         + 'from a chip that answered nothing') : ''));
+    ok('...and none of them fell back to the stale dash, which would say "wait for it"',
+       present.length>0 && present.every(n=>clusterText(n)!=='--'), shown());
+    ok('the bearing goes with them, off the same chip',
+       txt('heading-val')==='?' && /\bnosensor\b/.test(cls('heading-val')),
+       'heading-val="'+txt('heading-val')+'" class="'+cls('heading-val')+'"');
+    // ONE CHIP, ONE ERRAND. Six blanked readings must not produce six chips telling the
+    // operator to go and check six things; the whole rail is about turning a blank into
+    // a single errand, and "the compass" is that errand.
+    const compassChips = alerts().filter(a=>/COMPASS/.test(a.text));
+    ok('an alert chip names the compass as the chip the whole cluster went dark behind',
+       compassChips.length>=1,
+       'chips naming the compass: '+(compassChips.map(a=>'"'+a.text+'"').join(', ')||'none')+
+       '  all alerts="'+alertText()+'"');
+    ok('...and it names it ONCE - six blanked readings off one BNO085 are one errand',
+       compassChips.length===1,
+       compassChips.length+' chips for one BNO085: '+
+       (compassChips.map(a=>'"'+a.text+'"').join(', ')||'none')+
+       ' — the rail is severity-ordered and finite, so five chips about one dead chip '
+       + 'push a flood off the bottom of it');
+    ok('nothing the vehicle named is left unaccounted for on the rail',
+       !/NOT ANSWERING/.test(alertText()),
+       'alerts="'+alertText()+'" — a fault the hull reported and the screen dropped is '+
+       'the failure this rail exists to prevent');
+
+    // AND THEY COME BACK, INCLUDING THROUGH ZERO. The chip answers again and reports a
+    // sub sitting still and level — 0.0 on all four, which is the reading a moored sub
+    // gives and is a MEASUREMENT, not an absence. `value || null` anywhere on the ingest
+    // path renders this frame identically to the dead one above, so the recovery check
+    // and the real-zero check are deliberately the same frame.
+    await say({gyro_z_dps:0.0, accel_fwd_ms2:0.0, pitch_deg:0.0, roll_deg:0.0});
+    const stillBlank = present.filter(n=>{ const t=clusterText(n); return t==='?'||t==='--'; });
+    ok('a REAL zero on all four reads as a still, level sub — not as a dead chip',
+       present.length>0 && stillBlank.length===0 &&
+       present.every(n=>/0/.test(clusterText(n))),
+       (present.map(n=>n+'="'+clusterText(n)+'"').join('  ')
+        || 'NOT RUN - none of the four has a readout to zero') +
+       (stillBlank.length ? ('  — blanked by a falsy zero: '+stillBlank.join(', ')) : ''));
+    await say({});
+
     // ================= NOTHING ELSE BROKEN =================
     stopFeed();
     ok('no script errors', errs.length===0, errs.join(' | ')||'none');
+    // The cluster ids are appended from what actually resolved, rather than written out
+    // by hand: this suite does not own those names, and a hand-written list would fail
+    // for the wrong reason the day the cluster renames something.
     const need=['leak-icon','leak-pulse','depth-val','pressure-val','battery-v','heading-val',
-                'hdg-flag','hdg-warning','radar-north','alerts'];
+                'hdg-flag','hdg-warning','radar-north','alerts']
+               .concat(Object.keys(CEL).filter(n=>CEL[n]).map(n=>CEL[n].id));
     const missing=need.filter(id=>!$(id));
     ok('every element these checks read is still on the page', missing.length===0,
-       missing.length? 'MISSING: '+missing.join(', ') : need.length+' elements found');
+       missing.length? 'MISSING: '+missing.join(', ')
+                     : need.length+' elements found (cluster: '+
+                       (Object.keys(CEL).filter(n=>CEL[n]).map(n=>n+'=#'+CEL[n].id).join(', ')||'none resolved')+')');
 
     fetch('/__result',{method:'POST',body:JSON.stringify(R,null,1)});
   }

@@ -58,6 +58,49 @@ internet path** — the cable only reaches the Pi.
 - `Neptune.bat -Port 8090` — different local port (it auto‑advances if one is busy anyway).
 - `Neptune.bat -Setup` — steps 1–2 only, don't launch.
 - `Neptune.bat -Kiosk` — locked kiosk window. **Not recommended on the handheld** (see below).
+- `Neptune.bat -Test` — **run both check suites and show the result.** `-Test client` or
+  `-Test api` for one half. See [Checking the build](#checking-the-build-neptunebat--test).
+
+## Checking the build (`Neptune.bat -Test`)
+
+Same double‑click as launching the console, because that is the only interaction this
+handheld has. There is no terminal on it and no keyboard to type one with, so *"run the
+suites before you get in the boat"* was a checkout ritual nobody could perform at the
+waterside — and **a suite that cannot be run where the vehicle is, is a suite that quietly
+stops being run.**
+
+```
+Neptune.bat -Test           api, then client
+Neptune.bat -Test client    the dashboard only
+Neptune.bat -Test api       the vehicle only
+```
+
+It runs `api/tests/run.py` and `client/tests/run.py` — the same two runners you would type
+by hand, unchanged. **No totals are written on this page on purpose:** the runners print
+their own, this repo has already carried four stale counts, and a number in prose is a
+number that goes wrong quietly. Run it and read what it says.
+
+| | |
+|---|---|
+| **Where it sits** | Ahead of the single‑instance mutex. It starts no server, opens no port, creates no shortcut and closes no browser — so it works with a dive already up on the machine. |
+| **Which python** | The repo venv first (`.venv`, then `api/.venv`) exactly as `bootstrap.py`'s `venv_python()` and `api/tests/run.py`'s `VENVS` believe them, and only then `PATH`. A `PATH` python is *proved to run* before it is used: on Windows `python.exe` is usually the Microsoft Store alias stub, which is not an interpreter at all. |
+| **What it needs** | Python 3 for both halves; a Chrome or Edge for the client half (the runner finds it and says so). If the api half reports missing packages, it prints the one command that fixes it — `python bootstrap.py --dev`. |
+| **Exit status** | `0` everything ran and passed · `1` a check failed · `2` nothing failed but something could not be **run**. The same three‑value language `api/tests/run.py` speaks, and `Neptune.bat` hands it back to whoever called it. |
+
+**Green means it ran.** The verdict quotes the runner's own total instead of counting
+anything itself, and a zero exit is *not* accepted as a pass when there was **no total
+printed**, **a total of zero checks**, or an `INCOMPLETE` verdict. `-Test api` says on the
+block that only half the system was checked, rather than "all checks passed".
+
+**The result is built to be read on a small screen in sunlight**, by someone holding a wet
+ROV: a filled colour block whose **frame character carries the answer as well as the colour
+does** — `=` passed, `#` failed, `?` could not tell. That `?` is the same one the dashboard
+shows for a sensor that is not answering, and it means the same thing here. Colour is never
+the only carrier in this project, and a phone photo of that window may be all anyone has by
+the time it is discussed.
+
+The window then holds itself open long enough to read (longer on a failure) and closes by
+itself. **It never waits for a keypress** — there is no keyboard on this machine.
 
 ## Why it is not a kiosk any more
 
@@ -89,7 +132,7 @@ does, `Neptune.bat -Stop` fixes it without a reboot:
 | File | What |
 |---|---|
 | `Neptune.bat` | double‑click launcher (runs the script) |
-| `neptune.ps1` | discovery + shortcut + concurrent static server + fullscreen browser |
+| `neptune.ps1` | discovery + shortcut + concurrent static server + fullscreen browser, and `-Test` (the check suites) |
 | `tether-setup.ps1` | **run once as admin** — fixed tether IP, USB power fixes, location auto-grant |
 | `crash-diagnostics.ps1` | **run as admin** — kernel crash dumps + GPU timeout headroom |
 | `neptune-host.txt` | last known Pi address (discovery overwrites it when it finds a live one) |

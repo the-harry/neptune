@@ -197,6 +197,19 @@ class TelemetryJournal:
             "leak_probe_fault": tel.leak_probe_fault,
             "battery_v": tel.battery_v, "battery_band": battery_band(tel.battery_v),
             "current_a": tel.current_a,
+            # THE IMU'S OWN CHANNELS, ON THE HEARTBEAT AND DELIBERATELY NOT IN THE
+            # DISCRETE KEY. They are continuous floats off a chip that answers at
+            # telemetry rate, so keying a record on them would emit a record every
+            # single tick and bury the six transitions this class exists to
+            # preserve — the same reason tick_faults is kept out of _discrete.
+            # Worth recording at all because they are what explains the shape of a
+            # dive afterwards: a roll trace says the hull heeled over before the
+            # snag, and a yaw rate beside a frozen bearing is the difference
+            # between "the compass died" and "the sub genuinely stopped turning".
+            # They are already null whenever mag_cal and heading are, so a replay
+            # reads one BNO085 death rather than six unrelated gauges stopping.
+            "gyro_z_dps": tel.gyro_z_dps, "accel_fwd_ms2": tel.accel_fwd_ms2,
+            "pitch_deg": tel.pitch_deg, "roll_deg": tel.roll_deg,
             "speed_ms": tel.speed_ms, "speed_src": tel.speed_src,
             "snagged": tel.snagged, "gyro_only": tel.gyro_only, "mag_cal": tel.mag_cal,
             # WHICH CHIP, beside the nulls it caused. Without it a replay can see

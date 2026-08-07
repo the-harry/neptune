@@ -332,6 +332,31 @@ class RovState:
         # loop's path can trip over this and "ina219" still rides in sensor_faults
         # to say WHY the gauge is blank.
         volts = self.hw.read_voltage()
+        # THE REST OF THE BNO085, off the same handle as `heading` above and gated
+        # by the hardware layer on the same liveness answer — so all six IMU fields
+        # in this frame (heading, heading_card, mag_cal, and these four) are null
+        # together whenever the chip stops, without this file having to coordinate
+        # anything. They were measured and logged into the dive journal for months
+        # and never put on the wire; see protocol.py for why they belong on this
+        # frame and not on NavState.
+        gyro_z = self.hw.read_gyro_z_dps()
+        accel_fwd = self.hw.read_accel_fwd_ms2()
+        # UNPACKING A PAIR IS A NEW WAY FOR THE CONTROL LOOP TO DIE, which is why
+        # this one call is guarded and the scalar readbacks around it are not.
+        # `pitch, roll = hw.read_pitch_roll()` raises on None, on a bare float and
+        # on a three-tuple, and rov.telemetry() is called from _control_loop with
+        # nothing above it catching anything — so a backend that returns the wrong
+        # shape would take telemetry, the watchdog and the blackbox down together,
+        # over a reading nothing safety-critical branches on. api/nav/sensors.py
+        # guards the identical call for the identical reason. A broken backend is
+        # a backend that cannot tell us the attitude; it is not a reason to stop
+        # driving the sub.
+        try:
+            pitch, roll = self.hw.read_pitch_roll()
+        except Exception:  # noqa: BLE001 — not a pair; the backend is broken, not the sub
+            log.debug("read_pitch_roll() did not return a pair; reporting cannot-tell",
+                      exc_info=True)
+            pitch, roll = None, None
         return Telemetry(
             armed=self.armed,
             left=round(self.left, 3),
@@ -373,6 +398,23 @@ class RovState:
             # answers None itself now, so the probe is gone and both failures land
             # on the same honest null.
             mag_cal=self.hw.read_mag_cal(),
+            # Rounded for a READOUT, and only a readout. The heading filter and the
+            # speed KF never read this frame — they take their own copy off
+            # SensorSample at full precision (api/nav/sensors.py) — so no estimate
+            # is being made from a rounded number.
+            #
+            # The None-guard is spelled out on each one, four times, rather than
+            # folded into a helper, because the short version is the bug: round(None)
+            # raises and the tempting repair is `round(x or 0.0, 2)`, which lands a
+            # dead gyro on 0.0 deg/s — "measured, and the sub is not turning" — and a
+            # dead accelerometer on "coasting". Those are the two calmest readings
+            # each gauge can show, invented by the absence of the chip that takes
+            # them. Same shape as depth, heading and battery_v above; written out so
+            # it can be argued with.
+            gyro_z_dps=None if gyro_z is None else round(gyro_z, 2),
+            accel_fwd_ms2=None if accel_fwd is None else round(accel_fwd, 2),
+            pitch_deg=None if pitch is None else round(pitch, 1),
+            roll_deg=None if roll is None else round(roll, 1),
             current_a=None if current is None else round(current, 2),
             leak_probe_fault=self.hw.leak_probe_fault(),
             # WHICH chips are silent, so a blank gauge arrives with its reason. The
