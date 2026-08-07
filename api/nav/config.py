@@ -49,6 +49,49 @@ class NavSettings:
     # operator entirely. "real" = the (unwired) IMU/depth/encoder stubs.
     sensor_backend: str = field(default_factory=lambda: _s("NAV_SENSORS", "vehicle"))
 
+    # --- estimator backend (§4) ---
+    # "dr" (DEFAULT) = the existing dead reckoner, behaviour untouched.
+    # "filtered" = the same position integration, tether clamp, snapping and
+    # confidence logic, fed by a gyro/mag complementary heading and a speed KF.
+    # Selection is config-only and the default stays "dr" on purpose: promoting
+    # the filter is a decision to be made against real dive data with
+    # `python -m nav.cli replay --filter both`, not a decision to be made by taste.
+    filter_backend: str = field(default_factory=lambda: _s("NAV_FILTER", "dr"))
+
+    # --- sensor calibration constants (§2) ---
+    # EVERY DEFAULT BELOW IS A PLACEHOLDER. They exist so the code runs on the
+    # bench, not because anyone measured them; shipping them unchanged means the
+    # map is confidently wrong, which is worse than an obvious failure. Each one
+    # has a procedure in docs/hardware.md and each must be replaced by the number
+    # that procedure produces.
+    #
+    # Paddlewheel metres-per-pulse. Depends on the printed wheel's diameter, how
+    # many magnets ended up in the paddles and how the flow reaches it — a guess
+    # scales EVERY measured speed, and therefore every distance, by a constant
+    # error. Measure: a timed run along a known length of canal wall at fixed
+    # throttle, distance / pulses.
+    m_per_pulse: float = field(default_factory=lambda: _f("NAV_M_PER_PULSE", 0.05))
+    # Spool metres-per-tick for a ~600 PPR quadrature encoder: 0.0005 assumes a
+    # ~0.3 m circumference drum, which is arithmetic, not measurement — and the
+    # effective circumference grows as cable layers build on the drum anyway.
+    # Measure: pay out a marked length and divide by the ticks counted.
+    m_per_spool_tick: float = field(default_factory=lambda: _f("NAV_M_PER_SPOOL_TICK", 0.0005))
+    # How the BNO085 is bolted into the hull, in degrees, added after the ENU→
+    # compass conversion. 0.0 asserts the board's X axis points dead ahead, which
+    # it almost certainly does not once it is epoxied in. An uncorrected mounting
+    # offset does not look like a bug — the track just leans consistently off true.
+    # Measure: point the sub along a known bearing and record the difference.
+    imu_yaw_offset_deg: float = field(default_factory=lambda: _f("NAV_IMU_YAW_OFFSET_DEG", 0.0))
+    # Rolling window the paddlewheel pulse rate is averaged over. Short enough to
+    # respond to a real throttle change, long enough that at canal speeds the
+    # window still contains several pulses — quantisation at low pulse counts is
+    # why the speed KF widens R instead of trusting a one-pulse window.
+    paddle_window_s: float = field(default_factory=lambda: _f("NAV_PADDLE_WINDOW_S", 0.5))
+    # No pulse for this long = STALE, reported as None rather than 0.0. The wheel
+    # stalls below ~0.1 m/s, so silence means "slower than I can see" — which is
+    # not the same claim as "stopped", and only the throttle can tell them apart.
+    paddle_stale_s: float = field(default_factory=lambda: _f("NAV_PADDLE_STALE_S", 2.0))
+
     # --- storage ---
     data_dir: Path = field(default_factory=lambda: Path(_s("NAV_DATA_DIR", str(_ROOT / "data"))))
     areas_dir: Path = field(default_factory=lambda: Path(_s("NAV_AREAS_DIR", str(_ROOT / "data" / "areas"))))

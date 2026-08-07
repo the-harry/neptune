@@ -96,6 +96,20 @@ function bindOnScreen(){
     // the syringe's flange is solid; a full tank stops under it
     insetTop:(el)=>parseFloat(getComputedStyle(el).getPropertyValue('--syr-flange'))||0,
     get:()=>state.ballastTargetRaw, set:v=>{ state.ballastTargetRaw=clamp(v,0,1); }, step:CONFIG.ballastStep, rampPerS:CONFIG.ballastRampPerS });
+  // HOME THE SYRINGE. Appears in the rail only while the tank cannot say where it is
+  // (never homed, or it skipped steps and lost the count) — see render.js, which puts
+  // `ballast-home-needed` on the body. A single tap, not a hold: it is a slow, safe,
+  // interruptible move onto the empty stop, and making it awkward would only tempt
+  // somebody to dive on a tank whose reading is fiction.
+  const home=$('btn-ballast-home');
+  if(home) home.addEventListener('click', ()=>{
+    if(!cmd('ballast_home')) return;
+    // The answer comes back as telemetry (ballast_homed / a real level). Nothing is
+    // assumed here: claiming "homed" locally would put a number back on screen that
+    // no switch has confirmed, which is the exact lie this whole path exists to stop.
+    LOG.cmd('ballast HOME requested — waiting for the vehicle to confirm the empty stop');
+    vibrate(12);
+  });
   bindSurfaceHold();       // top-bar SURFACE emergency (hold to fire)
   $('btn-config').addEventListener('click', openMapper);   // CONFIG (rail) opens the config / input-map menu
 }

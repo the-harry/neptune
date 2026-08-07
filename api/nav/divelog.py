@@ -6,6 +6,15 @@ operator can drag a track back onto the waterway without losing the raw data.
 
 Log from day one (§8): depth alone builds a usable picture, and the same file
 becomes a bathymetry raster the moment a sounder is fitted — no format change.
+
+A NULL IS LOGGED AS NULL. Every measured channel here is nullable, and JSON null
+is what "no instrument answered" is written as — never 0.0, never the last value,
+never a key quietly dropped. This is the file whose entire purpose is replay and
+calibration: a log that records 0.0 for a depth nobody measured produces a
+bathymetry raster with a hole punched through it at the surface, and a depth model
+(nav/calibrate.py) fitted against readings that were never taken. Worse, the one
+thing a post-incident replay most needs to establish — WHEN the sensor stopped —
+is exactly the thing a default erases. Absent data must stay visibly absent.
 """
 from __future__ import annotations
 
@@ -87,11 +96,37 @@ class DiveLog:
         log analysable afterwards: throttle next to distance gives speed per unit
         throttle, steer next to heading gives turn rate, ballast next to depth gives
         the depth model. See nav/calibrate.py, which reads exactly these fields.
+
+        The same argument, pushed one step further, is why the MEASURED channels are
+        here now. `nav.cli replay` re-runs a finished dive through either estimator
+        and scores them against each other, and it can only do that if the journal
+        carries what the SENSORS said rather than only what the filter concluded:
+        the compass's own heading (the filtered backend overwrites ns.heading_deg
+        with its filtered one), the paddlewheel, the gyro rate, the forward
+        acceleration and the tether payout. A dive logged as conclusions alone can
+        be read back, but it can never be re-judged — and re-judging the filter with
+        real data is the entire reason NAV_FILTER defaults to the old estimator.
         """
+        # depth_m and heading_deg go in exactly as the estimator produced them,
+        # INCLUDING None. They are the two the tempting `or 0.0` would ruin: a null
+        # depth written as 0.0 says the sub surfaced, and a null heading written as
+        # 0.0 says it turned due north — both are events, both are false, and both
+        # are indistinguishable from real ones a year later when this file is all
+        # that is left of the dive.
         smp = {
             "t": ns.t, "x": ns.x_m, "y": ns.y_m, "depth_m": ns.depth_m,
             "heading_deg": ns.heading_deg, "snapped": ns.snapped,
             "confidence": ns.confidence,
+            # What the estimator concluded about ITSELF. speed_src is what separates
+            # a measurement from an estimate after the fact, and snagged/gyro_only
+            # mark the stretches where the track is least trustworthy — which are
+            # exactly the stretches worth replaying. no_heading marks the stretches
+            # where x/y are NOT a track at all but a held last fix; without it a
+            # replay reads a straight run of identical coordinates as a sub sitting
+            # still, which is the opposite of what was happening.
+            "speed_ms": ns.speed_ms, "speed_src": ns.speed_src,
+            "snagged": ns.snagged, "gyro_only": ns.gyro_only,
+            "no_heading": ns.no_heading,
         }
         if raw is not None:
             smp.update({
@@ -99,12 +134,44 @@ class DiveLog:
                 "steer": getattr(raw, "steer", 0.0),
                 "left": getattr(raw, "left", 0.0),
                 "right": getattr(raw, "right", 0.0),
-                "ballast": getattr(raw, "ballast_level", 0.0),
+                # None, not 0.0: an unhomed stepper has no position, and 0.0 here
+                # would be logged as the specific claim "the syringe was empty".
+                "ballast": getattr(raw, "ballast_level", None),
                 "ballast_tgt": getattr(raw, "ballast_target", 0.0),
-                "psi": getattr(raw, "pressure_psi", 0.0),
+                # Pressure travels with depth and goes null with it — a depth in this
+                # file with no pressure beside it is a number with no provenance, and
+                # 0.0 psi absolute is not a low reading, it is an impossible one.
+                "psi": getattr(raw, "pressure_psi", None),
                 "armed": bool(getattr(raw, "armed", False)),
-                "mag_cal": getattr(raw, "mag_cal", 3),
+                # None = no IMU answered. NOT 3, which was the old fallback and is the
+                # strongest trust mark in the system: every replay of a dive with a
+                # dead compass would have been scored as though the magnetometer had
+                # been perfectly calibrated throughout.
+                "mag_cal": getattr(raw, "mag_cal", None),
+                # ---- what the instruments measured, unfiltered ----
+                "raw_heading_deg": getattr(raw, "heading_deg", None),
+                "encoder_m": getattr(raw, "encoder_m", 0.0),
+                # None survives into the journal as null on purpose: the wheel was
+                # stale or not fitted, which is not the same reading as 0.0 m/s. The
+                # same argument applies to every line below it — 0.0 °/s is "measured:
+                # not turning", 0.0 m/s² is "measured: coasting", 0.0° of pitch is
+                # "measured: level". Each is a reading a dead BNO085 cannot have taken,
+                # and each was being written into the record as though it had.
+                "speed_ms_measured": getattr(raw, "speed_ms_measured", None),
+                "gyro_z_dps": getattr(raw, "gyro_z_dps", None),
+                "accel_fwd_ms2": getattr(raw, "accel_fwd_ms2", None),
+                "pitch_deg": getattr(raw, "pitch_deg", None),
+                "roll_deg": getattr(raw, "roll_deg", None),
             })
+            # Ground truth, only when the sample actually carries it — the simulator
+            # knows where it really is; a canal does not. §4e's acceptance tests score
+            # "filtered" against "dr" on track error, and an error needs something to
+            # be an error FROM. A real dive simply has no such keys: absent truth is
+            # left absent rather than filled in with the estimate that is on trial.
+            tx = getattr(raw, "true_x_m", getattr(raw, "true_x", None))
+            ty = getattr(raw, "true_y_m", getattr(raw, "true_y", None))
+            if tx is not None and ty is not None:
+                smp["true_x"], smp["true_y"] = tx, ty
         self._samples.append(smp)
         self._write({"type": "s", **smp})
 
@@ -138,6 +205,12 @@ class DiveLog:
             samples.append({
                 "t": smp["t"], "depth_m": smp["depth_m"], "heading_deg": smp["heading_deg"],
                 "snapped": smp["snapped"], "confidence": smp["confidence"],
+                # Carried out to the GeoJSON as well, because this is the artifact
+                # somebody opens in a map viewer: without it a stretch of repeated
+                # identical coordinates reads as "the sub stopped here", when what
+                # actually happened is that the compass stopped and the track was
+                # held. .get() so a log rebuilt from an older journal still renders.
+                "no_heading": smp.get("no_heading", False),
             })
         return {
             "type": "Feature",

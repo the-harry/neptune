@@ -127,9 +127,14 @@ STATUS.tick = function(){
   // unreachable" both mean SIM to the operator, and the old code split them into
   // 'sim' and an em-dash that rendered as muted grey - so the sub icon said nothing
   // in the exact situation where it most needed to shout.
-  if(STATUS.link !== 'online')  STATUS.vehicle = 'sim';    // no live vehicle -> RED
-  else if(state.alarmLeak)      STATUS.vehicle = 'fault';  // leak -> pulsing red
-  else                          STATUS.vehicle = state.armed ? 'armed' : 'idle';
+  // FLOOD, and only FLOOD, takes the vehicle to `fault`. The leak is two stages now:
+  // WARN means water is collecting and the answer is to finish up, which is an
+  // advisory and must not paint the tether icon as a failure — if every stage pulsed
+  // red, the pulse would stop meaning "surface now" within one damp afternoon. WARN
+  // is carried by the leak drop (which changes SHAPE) and by its advisory chip.
+  if(STATUS.link !== 'online')     STATUS.vehicle = 'sim';    // no live vehicle -> RED
+  else if(leakStage()==='FLOOD')   STATUS.vehicle = 'fault';  // flooding -> pulsing red sub
+  else                             STATUS.vehicle = state.armed ? 'armed' : 'idle';
 
   STATUS.applyGates();
   // BLIND NAV: with no feed, hand the screen to the map so the sub can still be
@@ -141,6 +146,11 @@ STATUS.tick = function(){
   const nwv = (state.net && state.net.wifi) || {}, nev = (state.net && state.net.eth) || {};
   const sig = [STATUS.internet, STATUS.link, STATUS.video, STATUS.cam, STATUS.nav,
                STATUS.vehicle, STATUS.camLink, STATUS.camBy, STATUS.piSeen,
+               // The leak STAGE is in the signature even though only FLOOD reaches
+               // STATUS.vehicle: a WARN qualifies the tether tooltip, and without it
+               // here that sentence would only appear if something else happened to
+               // change on the same tick.
+               leakStage(),
                nwv.nic, nwv.up, nwv.internet, nwv.ssid, nev.nic, nev.up].join('|');
   if(sig !== STATUS._last){
     STATUS._last = sig;
@@ -311,8 +321,16 @@ STATUS.render = function(){
   if(STATUS.link === 'online'){
     // Green is the whole chain: cable, API, and the control link carrying commands.
     rGlyph=ROV_SUB;
-    if(STATUS.vehicle === 'fault'){ rCls='bad'; rTitle='FAULT - leak detected'; }
-    else { rCls='ok'; rTitle='connected to the sub (' + STATUS.vehicle + ')'; }
+    if(STATUS.vehicle === 'fault'){
+      rCls='bad';
+      rTitle='FLOODING - water is above the upper probe. SURFACE NOW. The sub is still '
+           + 'answering: this is a hull fault, not a lost link';
+    }
+    else {
+      rCls='ok';
+      rTitle='connected to the sub (' + STATUS.vehicle + ')'
+           + (leakStage()==='WARN' ? ' - water is collecting inside; finish up' : '');
+    }
   } else if(STATUS.piSeen){
     // Answers on HTTP but the control socket is not up: booting, API restarting.
     // Same PLUG as the cable-only case, because it is the same story - something is

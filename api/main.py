@@ -28,8 +28,8 @@ from nav.app import create_nav_service
 from nav.service import build_router as build_nav_router
 from config import settings
 from hardware import get_hardware
-from protocol import COMMAND_NAMES, Ack, Alarm, Pong, parse_inbound
-from rov import RovState
+from protocol import COMMAND_NAMES, Ack, Alarm, Pong, Telemetry, parse_inbound
+from rov import RovState, cardinal
 from blackbox import BlackBox, build_router as build_blackbox_router
 
 logging.basicConfig(
@@ -70,17 +70,365 @@ class ConnectionManager:
         return len(self._clients)
 
 
+def battery_band(v: float | None) -> str:
+    """2S pack band — "ok" | "warn" | "critical" | "unknown". One colour, one meaning (§5).
+
+    Recorded alongside the raw voltage rather than derived at analysis time: the
+    thresholds live in config and can be retuned, and a dive log that only carried
+    volts would be re-scored against whatever the thresholds happened to be years
+    later. The band is what the operator was actually shown, so the band is logged.
+
+    "unknown" IS A BAND, and adding it is what let battery_v become nullable. This
+    runs on the control loop's own path — twice per journal record — with nothing
+    above it catching anything, so `None < 6.6` here would have raised inside the
+    journal and taken telemetry, the watchdog and the blackbox down together. That
+    is why rov.py used to substitute 0.0 for a dead INA219, and 0.0 V bands as
+    "critical": the console showed a red BATTERY 0.0V · SURFACE on a vehicle with a
+    full pack, a critical alarm invented entirely by an absent sensor.
+
+    So it is TOTAL: every input has an answer and no input has an exception. A
+    reading that is not a finite number is not a voltage, and the honest band for a
+    voltage nobody could take is the one that says so — never "ok" (which would
+    certify a pack nothing is measuring) and never "critical" (which would cry wolf
+    with the alarm that must never be distrusted). Everything it needs is a
+    parameter or `settings`, deliberately: tests/test_telemetry.py compiles this
+    one function out of the source to check the 2S thresholds against the shipped
+    rule, and a reference to any other module-level name here would break that.
+    """
+    if v is None:
+        return "unknown"
+    try:
+        if v != v:                      # NaN — arithmetic on a failed read, not a reading
+            return "unknown"
+        if v < settings.battery_crit_v:
+            return "critical"
+        if v < settings.battery_warn_v:
+            return "warn"
+    except TypeError:                   # not a number at all; still not a crash
+        return "unknown"
+    return "ok"
+
+
+class TelemetryJournal:
+    """Writes telemetry VALUES into the blackbox, not merely frame counts.
+
+    The `tlm_tx` seq ranges prove a frame left the Pi; they say nothing whatever
+    about what was in it, so until now a session could be audited for lost packets
+    and for nothing else. A dive you cannot replay is a dive you cannot learn from.
+
+    Two triggers, because the two kinds of question are different:
+      * every change of a DISCRETE state — armed, leak stage, probe fault, ballast
+        homed / needs-rehome, speed source, snagged, gyro-only, mag_cal, battery
+        band, and WHICH CHIPS ARE NOT ANSWERING. The transitions ARE the story and
+        must never be averaged away. A sensor dying is the sharpest transition the
+        vehicle has: every reading behind it goes null in the same instant, and a
+        log that recorded only the nulls would show a gauge that simply stopped —
+        which is what the end of a dive looks like too. sensor_faults names the
+        chip, so the record says "bno085 stopped at t=412 s" instead of "heading
+        went blank around then".
+      * a heartbeat every `period_s` for the continuous numbers, so a long steady
+        stretch still has depth/heading/volts/amps to plot.
+
+    Writing every field at telemetry_hz instead would be ~15 fat JSON lines per
+    second: it fills the card, it burns flash write cycles, and it buries the six
+    transitions that mattered under nine thousand identical ones.
+
+    `min_gap_s` bounds a flapping signal (gyro_only hinges on thrust crossing 0.5,
+    which an operator can hold right on the boundary). Changes inside the gap are
+    coalesced, not dropped silently: the next record carries `n_changes` so the log
+    admits how many intermediate states it collapsed.
+
+    NAVIGATION'S OWN STATE IS ONE OF THE DISCRETE ONES. The moment nav stops
+    answering, every nav number in the frame goes to cannot-tell — and a log that
+    only carried the numbers would show them simply ceasing, which is the same
+    thing a finished dive looks like. The transition that matters ("the loop died
+    at t=412 s with an OSError off the I2C bus") is nav's state, not the numbers,
+    so the loop state is journalled beside them and its change triggers a record.
+    """
+
+    def __init__(self, period_s: float = 2.0, min_gap_s: float = 0.25) -> None:
+        self.period_s = period_s
+        self.min_gap_s = min_gap_s
+        self._pending: tuple | None = None
+        self._dirty = True          # the first tick always emits: a log needs a baseline
+        self._changes = 0
+        self._last_emit = -1e9      # so both triggers are due immediately at startup
+
+    @staticmethod
+    def _discrete(t: Telemetry, nav: dict | None) -> tuple:
+        # tick_faults is deliberately NOT in here: it counts up while a bus is
+        # down, and a key that changes every tick would emit a record every tick
+        # and bury the transitions this whole class exists to preserve.
+        # sensor_faults is SORTED into the key: the hardware layer is free to
+        # report its chips in any order, and a reordering that emitted a "state
+        # change" record would be the same noise tick_faults was kept out for.
+        return (t.armed, t.leak_state, t.leak_probe_fault, t.ballast_homed,
+                t.ballast_needs_rehome, t.speed_src, t.snagged, t.gyro_only,
+                t.mag_cal, battery_band(t.battery_v),
+                tuple(sorted(t.sensor_faults or ())),
+                None if nav is None else (nav["loop"], nav["answering"],
+                                          nav["reads_vehicle"], nav["used"]))
+
+    def record(self, bb: BlackBox, tel: Telemetry, now: float, nav: dict | None = None) -> None:
+        key = self._discrete(tel, nav)
+        if key != self._pending:
+            self._pending = key
+            self._dirty = True
+            self._changes += 1
+        since = now - self._last_emit
+        if self._dirty and since >= self.min_gap_s:
+            self._emit(bb, tel, "tlm_state", now, nav)
+        elif since >= self.period_s:
+            self._emit(bb, tel, "tlm", now, nav)
+
+    def _emit(self, bb: BlackBox, tel: Telemetry, event: str, now: float,
+              nav: dict | None = None) -> None:
+        d = {
+            "seq": tel.seq, "armed": tel.armed, "mock": tel.mock,
+            "left": tel.left, "right": tel.right,
+            "depth": tel.depth, "pressure": tel.pressure, "heading": tel.heading,
+            # None survives into the log as JSON null and is NEVER stripped or
+            # defaulted: "the stepper was never homed" is a finding, and a replay
+            # that silently read it as 0.0 would exonerate the exact fault that
+            # left the sub on the bottom.
+            "ballast_level": tel.ballast_level, "ballast_target": tel.ballast_target,
+            "ballast_homed": tel.ballast_homed, "ballast_needs_rehome": tel.ballast_needs_rehome,
+            "leak": tel.leak, "leak_state": tel.leak_state,
+            "leak_probe_fault": tel.leak_probe_fault,
+            "battery_v": tel.battery_v, "battery_band": battery_band(tel.battery_v),
+            "current_a": tel.current_a,
+            "speed_ms": tel.speed_ms, "speed_src": tel.speed_src,
+            "snagged": tel.snagged, "gyro_only": tel.gyro_only, "mag_cal": tel.mag_cal,
+            # WHICH CHIP, beside the nulls it caused. Without it a replay can see
+            # that depth stopped and cannot see why — and "the MS5837 dropped off
+            # the bus at 4.33 m" is the finding, while "depth went null" is only
+            # the symptom. Copied to a list because the hardware hands back a tuple
+            # and the journal is JSON.
+            "sensor_faults": list(tel.sensor_faults or ()),
+            "magnet": tel.magnet, "light_green": tel.light_green, "light_white": tel.light_white,
+            "signal": tel.signal, "link_ms": tel.link_ms,
+        }
+        if nav is not None:
+            # nav_answering is navigation's own claim; nav_used is what this frame
+            # actually took from it. They differ exactly when nav is answering
+            # about something that is not this hull (a scripted source against a
+            # real vehicle), and the gap between them is the finding.
+            d.update({"nav_loop": nav["loop"], "nav_answering": nav["answering"],
+                      "nav_used": nav["used"], "nav_reads_vehicle": nav["reads_vehicle"],
+                      "nav_faults": nav["tick_faults"]})
+        if self._changes > 1:
+            d["n_changes"] = self._changes
+        bb.event(event, d)
+        self._last_emit = now
+        self._dirty = False
+        self._changes = 0
+
+
+def fill_nav_fields(app: FastAPI, tel: Telemetry) -> dict | None:
+    """Stitch the estimator's outputs into the telemetry frame — the ONE place this happens.
+
+    Returns navigation's account of itself (NavService.health(), plus has_origin)
+    so the caller can log the transition, or None when this process has no
+    navigation at all.
+
+    THE HEADING PRECEDENCE RULE IS IN THE BODY, beside the two lines that implement
+    it. It is the one thing in this file that decides which of two subsystems gets
+    to speak about a number both of them have an opinion on, and a rule stated in a
+    docstring drifts away from the code under it; stated on top of the code, it
+    cannot.
+
+    speed / speed_src / snagged / gyro_only are navigation's answers, not the
+    hardware's: the paddlewheel reports an unsigned magnitude and the filter alone
+    decides what it means, whether to believe it, and whether the sub is pinned. So
+    rov.py leaves them None rather than reaching into the nav service, and it is
+    done here instead: the control plane holding a reference into navigation would
+    let a nav fault reach the thruster loop, and the two subsystems already start
+    and fail independently (see the lifespan) — this keeps them that way.
+
+    A STATE THAT EXISTS IS NOT A STATE THAT IS TRUE. `NavService.last_state` is an
+    attribute that keeps its final value forever, so a finished dive or a nav loop
+    that died on an exception used to leave speed / speed_src / snagged / gyro_only
+    frozen at their last values and broadcast as live readings at telemetry_hz — a
+    dive that ended snagged reported snagged=true until the process restarted. So
+    nothing is copied out of a state this cannot prove is CURRENT: svc.fresh_state()
+    answers None once the state is older than a few nav loop periods.
+
+    NOT ANSWERING IS ITSELF A REPORTABLE STATE, WHICH IS THE FIX IN THIS ROUND.
+    Leaving the fields alone when nav goes quiet was not neutral, because their
+    defaults are not neutral: snagged=False and gyro_only=False are the two
+    reassuring answers. So at the exact instant navigation died the console got
+    QUIETER — a standing snag warning cleared itself, the GYRO badge went out, and
+    the bearing silently swapped the estimator's heading for the raw compass with
+    nothing on screen marking the change. A subsystem's death must never look like
+    good news. False now means "nav looked and says no"; None means "nav cannot
+    tell", and it covers every reason at once — not started, no origin, between
+    dives, sensor bus down, loop dead. Which of those it is travels in the
+    blackbox record and out of /api/nav/health, because a null on its own says
+    nothing about what to go and fix.
+
+    AND AN ESTIMATE THAT NEVER LOOKED AT THIS HULL IS NOT ABOUT THIS HULL. With
+    NAV_SENSORS=sim the estimator is fed a scripted path — canned heading legs that
+    ignore the operator entirely — and it will happily produce a confident NavState
+    while a real sub is in the water. Stamping that heading, speed and snag state
+    onto a real hull's frame put simulated data on screen under mock=false, which
+    is the one thing this project does not allow anywhere. svc.reads_vehicle is
+    false for exactly that source, and then nav's answers do not enter this frame
+    at all: the raw compass rov.py measured stands, and the estimator's answers
+    stay where they belong — on /ws/nav, whose frames now carry `simulated` and
+    `reads_vehicle` so the map can say what it is drawing.
+    """
+    svc = getattr(app.state, "nav_svc", None)
+    if svc is None:
+        tel.snagged = None
+        tel.gyro_only = None
+        return None
+    nav = svc.health()
+    # Whether navigation has anything to estimate FROM. health() cannot say, and
+    # the difference is the whole of finding 4: with no origin the loop is healthy
+    # and simply has nothing to report, which is the state of every vehicle at
+    # every boot. Read here so the control loop can log a quiet start as a quiet
+    # start instead of as a fault.
+    nav["has_origin"] = getattr(svc, "origin", None) is not None
+    # Asked ONCE and acted on once. A second fresh_state() call could age out
+    # between the two and leave the log claiming nav answered a frame it did not —
+    # a small lie, but of precisely the kind being hunted here.
+    ns = svc.fresh_state() if nav["reads_vehicle"] else None
+    nav["used"] = ns is not None
+    if ns is None:
+        tel.snagged = None
+        tel.gyro_only = None
+        return nav
+    # Nothing from the estimator is coerced on the way in. round(None) is a
+    # TypeError, and the tempting `ns.speed_ms or 0.0` would put a confident
+    # "0.0 m/s — stopped" on screen for a sub nothing can measure. An estimator
+    # that has no number for a field sends that field's null straight through.
+    tel.speed_ms = None if ns.speed_ms is None else round(ns.speed_ms, 3)
+    tel.speed_src = ns.speed_src
+    tel.snagged = ns.snagged
+    tel.gyro_only = ns.gyro_only
+    # ---- HEADING PRECEDENCE. Stated here, implemented exactly, nowhere else. ----
+    #
+    #   1. The estimator's heading REPLACES the compass reading iff BOTH exist.
+    #   2. A null NEVER overwrites a number. Navigation going quiet, or unable to
+    #      say, must not blank a compass that is still answering.
+    #   3. A number NEVER overwrites a null. If the BNO085 is not answering there
+    #      is no bearing to refine, and anything still coming out of the estimator
+    #      is coasting on an input that has stopped.
+    #   4. heading_card is recomputed from whatever heading survives, always, so
+    #      the letter can never outlive or contradict the number it restates.
+    #
+    # ONE heading on screen, from ONE source, is why rule 1 prefers the estimator.
+    # The map draws NavState.heading_deg, so the HUD has to carry that same number:
+    # under NAV_FILTER=filtered the estimator's heading comes from the
+    # complementary filter, and the raw compass rov.py stamped is out by the whole
+    # magnetic error the thrusters induce (the sim models 22° at full throttle).
+    # Two headings on one screen disagreeing by 22° is bad on its own; the trust
+    # marks make it worse. The HUD's GYRO / MAG? badges are drawn from gyro_only
+    # and mag_cal, which describe what the FILTER is doing — hang them on the raw
+    # compass and they annotate a number the filter is not producing. Under the
+    # default "dr" backend the two values are identical (the dead reckoner passes
+    # s.heading_deg straight through), so this only bites in the mode that needs it.
+    #
+    # RULE 3 IS THE ONE THIS ROUND EXISTS FOR, and the stamp used to be
+    # unconditional. api/nav/sensors.py handed every cannot-tell a default that was
+    # itself a measurement — `read_heading()` fell back to 0.0 — so a dead compass
+    # became a confident bearing one layer below here and this line stamped it over
+    # the null rov.py had correctly sent. Reproduced end to end: rov.py sent
+    # heading=None card=None mag_cal=None faults=['bno085'] and the client received
+    # heading=0.0 card='N' — DUE NORTH beside a NO COMPASS badge and a "bno085 not
+    # answering" fault, on one screen. The radar is heading-up, so the map swung
+    # north and the dead reckoner ran the track north with it. That is worse than
+    # the frozen bearing this round set out to fix: a frozen bearing at least
+    # started life as a measurement.
+    #
+    # The guard stays whatever nav does next. Even once nav stops coercing, "the
+    # compass is silent" is a verdict this frame already carries from the hardware
+    # layer, and it is not navigation's to overturn.
+    est = getattr(ns, "heading_deg", None)
+    if est is not None and tel.heading is not None:
+        tel.heading = round(est % 360.0, 1)
+    tel.heading_card = cardinal(tel.heading)
+    if tel.heading is None:
+        # No bearing survived, so the mark that qualifies one has nothing left to
+        # qualify. "Coasting on the gyro, on purpose" printed beside a blank
+        # bearing reads as a heading the operator simply cannot see — same reason
+        # cardinal(None) is None rather than "N". mag_cal is already null here: it
+        # comes off the same chip as the heading and rov.py nulls them together.
+        tel.gyro_only = None
+    return nav
+
+
+def log_nav_change(nav: dict, ever_answered: bool) -> None:
+    """Say what navigation just did — at the level the situation actually deserves.
+
+    A WARNING THAT FIRES ON EVERY HEALTHY START IS A WARNING NOBODY READS, and that
+    is what this used to be. The old line warned on any frame navigation did not
+    contribute to, and before an origin is set navigation contributes to nothing:
+    the loop is turning, the sensors are fine, there is simply no fix to estimate
+    from yet. So a completely healthy vehicle with a completely healthy nav loop
+    printed "navigation is not answering for this hull" at every boot, every time,
+    and the day it means something it will look exactly like the day it did not.
+
+    Two situations, and the operator does something different in each:
+
+      * NOTHING TO SAY YET — the loop is running, no tick has ever failed, and it
+        has never produced a state. Ordinary; INFO, and it names the reason so the
+        reader is not left to infer it.
+      * STOPPED ANSWERING — the loop is stopped, stalled or never started, OR a
+        tick has raised, OR navigation was answering earlier in this session and
+        has gone quiet. Each of those is a fault someone must go and fix, and each
+        of them means every nav field topside is now cannot-tell; WARNING.
+
+    `ever_answered` is what separates the two when the loop still looks healthy: a
+    subsystem that answered and stopped is broken, whatever its loop says about
+    itself, and without that memory a dead sensor bus with no origin set would
+    read as a quiet start forever.
+    """
+    if nav["used"]:
+        if ever_answered:
+            log.info("navigation is answering again (loop=%s source=%s)",
+                     nav["loop"], nav["source"])
+        return
+    if not nav["reads_vehicle"]:
+        # Answering, but about a scripted path rather than this hull, so its
+        # answers are deliberately kept out of the frame. Not a fault in
+        # navigation and not something waiting for an origin — a configuration
+        # that would put simulated numbers on a real vehicle's console.
+        log.warning("navigation is not reading THIS hull (source=%s simulated=%s) — its "
+                    "speed, snag and heading stay on /ws/nav and the frame keeps the raw "
+                    "compass. Set NAV_SENSORS=vehicle to bind it to the sub.",
+                    nav["source"], nav["simulated"])
+        return
+    stopped = (nav["loop"] != "running" or nav["last_fault"] is not None or ever_answered)
+    if stopped:
+        log.warning("navigation has STOPPED answering for this hull — speed, snag and "
+                    "heading-trust go to cannot-tell (loop=%s answering=%s reads_vehicle=%s "
+                    "source=%s faults=%d last_fault=%s end_reason=%s)",
+                    nav["loop"], nav["answering"], nav["reads_vehicle"], nav["source"],
+                    nav["tick_faults"], nav["last_fault"], nav["loop_end_reason"])
+    else:
+        log.info("navigation has nothing to say yet — the loop is running and healthy, "
+                 "there is just nothing to estimate from (origin=%s, source=%s). Speed, "
+                 "snag and heading-trust read cannot-tell until a fix is set.",
+                 "set" if nav.get("has_origin") else "not set", nav["source"])
+
+
 async def _control_loop(app: FastAPI) -> None:
     """Advance sim, run the watchdog, refresh metrics, broadcast telemetry."""
     rov: RovState = app.state.rov
     mgr: ConnectionManager = app.state.manager
     bb: BlackBox = app.state.bb
+    journal = TelemetryJournal()
     period = 1.0 / max(1.0, settings.telemetry_hz)
     metrics_cache = sysinfo.telemetry_fields()
     last_metrics = time.monotonic()
     last = time.monotonic()
     seq = 0
     tx_from = None                    # telemetry seq-range accumulator (§4 — log ranges, not every frame)
+    last_nav_key = None               # nav's last reported state, for edge-logging below
+    nav_ever_answered = False         # has navigation EVER contributed to a frame this session
+    nav_fail_logged = -1e9            # last time the nav-stitch exception was logged (see below)
+    nav_fail_n = 0                    # how many it has collapsed since
     log.info("control loop @ %.0f Hz (watchdog %.2fs)", settings.telemetry_hz, settings.watchdog_timeout_s)
     while True:
         now = time.monotonic()
@@ -99,11 +447,86 @@ async def _control_loop(app: FastAPI) -> None:
                 log.warning("sysinfo failed: %s", exc)
             last_metrics = now
 
+        # Telemetry is built EVERY tick now, not only when someone is watching. The
+        # blackbox exists to explain the dive that went wrong, and the dive that goes
+        # wrong is very often the one where the tether dropped and there was no client
+        # left to broadcast to — recording only while a client is attached loses
+        # exactly the minutes you came to read. Broadcasting still depends on
+        # mgr.count; recording and the leak edge machine no longer do.
+        tel = rov.telemetry(metrics_cache)
+        tel.t = round(bb.now_ms(), 3)
+        try:
+            nav = fill_nav_fields(app, tel)
+        except Exception as exc:  # noqa: BLE001
+            # A NAV FAULT MUST NOT REACH THE THRUSTER LOOP. That is the whole
+            # reason rov.py has no handle on navigation and the stitching happens
+            # out here — and it would be undone by letting an exception from the
+            # nav side unwind this loop, which runs the watchdog. The frame goes
+            # out with navigation's fields at cannot-tell, which is exactly what
+            # they mean.
+            #
+            # RATE-LIMITED for the same reason nav's own tick faults are (see
+            # NavService._note_fault): whatever raises here raises on EVERY tick,
+            # so a level-triggered line is fifteen identical warnings a second and
+            # the first one — the only one carrying information — is buried inside
+            # a minute. The count says how many were collapsed, so nothing is
+            # silently swallowed.
+            nav_fail_n += 1
+            if now - nav_fail_logged >= 10.0:
+                log.warning("nav fields could not be filled (%d time(s) since the last "
+                            "line) — speed, snag and heading-trust go to cannot-tell: %s",
+                            nav_fail_n, exc, exc_info=True)
+                nav_fail_logged, nav_fail_n = now, 0
+            tel.snagged = None
+            tel.gyro_only = None
+            nav = None
+        # SAY IT ONCE, AT THE EDGE. Navigation stopping is an event, and an event
+        # that only shows up as fields going null is an event somebody has to
+        # notice the absence of. Logged on the TRANSITION rather than every tick:
+        # at telemetry_hz a level-triggered line would be fifteen a second, which
+        # is the same as not logging it.
+        #
+        # last_fault is in the key as a BOOLEAN, not as a count: the count climbs
+        # on every tick of a dead I2C bus and would re-fire this line at
+        # telemetry_hz, but the first fault arriving is a genuine edge — it is what
+        # turns "nothing to say yet" into "stopped answering" on a loop that still
+        # reports itself as running.
+        nav_key = None if nav is None else (nav["loop"], nav["used"], nav["reads_vehicle"],
+                                            nav["last_fault"] is not None)
+        if nav_key != last_nav_key:
+            if nav is not None:
+                log_nav_change(nav, nav_ever_answered)
+            last_nav_key = nav_key
+        # Set AFTER the log, so "answering again" means what it says, and never
+        # cleared: a subsystem that answered once and then went quiet is broken for
+        # the rest of the session, however healthy its own loop looks.
+        if nav is not None and nav["used"]:
+            nav_ever_answered = True
         if mgr.count:
+            # seq counts BROADCAST frames only, and is stamped here so the journal
+            # below records the same number the client will see. Numbering unsent
+            # frames would open a gap in the client's sequence for every second it
+            # was disconnected and its gap detector would call that packet loss; a
+            # journalled record with seq=null instead says plainly "nobody was
+            # listening when this was recorded".
             seq += 1
-            tel = rov.telemetry(metrics_cache)
             tel.seq = seq
-            tel.t = round(bb.now_ms(), 3)
+
+        # Two-stage, edge-triggered leak alarm (§5). WARN and FLOOD are separate
+        # alarms because the client draws them differently — advisory vs surface
+        # prompt — and the edge logic lives in RovState, which owns the state.
+        # Logged before broadcasting: an alarm raised into a dead socket still
+        # happened, and the log is the only place that will remember it.
+        for name in rov.leak_alarm_edges(tel.leak_state):
+            log.warning("ALARM %s (leak_state=%s, probe_fault=%s)",
+                        name, tel.leak_state, tel.leak_probe_fault)
+            bb.event("alarm", {"name": name, "leak_state": tel.leak_state,
+                               "probe_fault": tel.leak_probe_fault, "depth": tel.depth})
+            await mgr.broadcast(Alarm(name=name).model_dump_json())
+
+        journal.record(bb, tel, now, nav)
+
+        if mgr.count:
             await mgr.broadcast(tel.model_dump_json())
             # record what we SENT as compact ranges so `rovlog diverge` can compare
             # against the client's received ranges (§4/§6) without 30 Hz of log lines.
@@ -112,8 +535,6 @@ async def _control_loop(app: FastAPI) -> None:
             if seq - tx_from >= 99:
                 bb.event("tlm_tx", {"seq_from": tx_from, "seq_to": seq, "n": seq - tx_from + 1})
                 tx_from = None
-            if rov.leak_alarm_edge(tel.leak):
-                await mgr.broadcast(Alarm(name="leak").model_dump_json())
 
         await asyncio.sleep(period)
 
@@ -236,6 +657,17 @@ async def ws_control(ws: WebSocket) -> None:
     await mgr.connect(ws)
     bb.event("ws_connect", {"clients": mgr.count})
     try:
+        # Replay any leak alarm still standing. The control loop runs the rising-edge
+        # machine every tick whether or not anyone is attached — it must, so the
+        # blackbox records the edge when the water arrived — which means an alarm that
+        # rose during a tether dropout went into an empty socket set and was consumed.
+        # The dropout is the minute the water gets in, so the client that comes back is
+        # the one that most needs telling. Inside the try, and before the receive loop,
+        # so a socket that dies on this send still reaches the finally and is removed.
+        for name in rov.latched_alarms():
+            log.warning("ALARM %s replayed to a client that connected after it rose", name)
+            bb.event("alarm_replay", {"name": name, "clients": mgr.count})
+            await ws.send_text(Alarm(name=name).model_dump_json())
         while True:
             raw = await ws.receive_text()
             msg = parse_inbound(raw)

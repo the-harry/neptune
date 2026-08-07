@@ -210,6 +210,151 @@ checks backend availability for a dependency it doesn't have.
   (a late `throttle 100%` is a hazard). Only inert data (telemetry/log records)
   buffers through an outage and uploads on reconnect.
 
+## What the sub reports about itself
+
+The signals above are about the *links*. These are about the vehicle on the end of them —
+each one a reading that can be taken, or admitted to be untakeable, and never faked.
+
+### A dead sensor and a dropped frame are different words
+
+The link going quiet for a moment and the chip behind a gauge dying are two different
+events that demand two different reactions, so they get two different marks. Reading one
+as the other is how a sub gets flown on a number nobody is taking.
+
+| On screen | Means | What to do |
+|---|---|---|
+| `42.7`, tinted by its band | the sensor is reporting | nothing |
+| **`--`**, dim, whole bar dashes together | **STALE** — the socket went quiet for a moment | nothing; it comes back on its own |
+| **`?`**, amber, **wavy underline** | **CANNOT-TELL** — the chip behind this reading has stopped answering | waiting will not help; go and look at that cable |
+
+The question mark is this console's existing word for *genuinely not known* — the unhomed
+syringe has always used it — and it is deliberately **not** the stale dash. A dash reads
+as a dropped frame, and a dropped frame is something an operator waits out.
+
+**The last number is not shown, on purpose.** A reading that has frozen and one that is
+holding steady look identical, and a frozen depth is the more dangerous of the two: the
+sub keeps descending while the console keeps painting the depth it last managed to read.
+
+**Three carriers, so none of them has to be the one that gets noticed:** the mark (`?`),
+the amber, and an alert chip that *names the chip* — `NO DEPTH · SENSOR STOPPED`, with
+"the vehicle names the MS5837 depth/pressure sensor" in the explanation. A blank gauge
+with no cause attached reads as a glitch in the dashboard, and a glitch is something you
+wait out. Naming the part turns it into an errand.
+
+Telemetry carries `sensor_faults` — the bare chip names the vehicle uses (`ms5837`,
+`bno085`, `ina219`, `i2c`), the same ones in `docs/hardware.md` and on the wiring
+diagram. The list only ever supplies the **cause**: a reading goes cannot-tell because
+its value is null, so a vehicle too old to report faults still blanks the number instead
+of showing a frozen one. A dead `i2c` bus names itself rather than its three passengers,
+so one unplugged connector does not report three unrelated sensor failures.
+
+**With no heading there is no track.** The radar is heading-up, so a heading nobody is
+measuring rotates the entire map and runs the dead reckoner off in whatever direction the
+placeholder happened to be. The bearing shows `?`, the badge reads **`NO BEARING`**, and
+the radar stays drawn on the *last angle the compass actually gave* rather than swinging
+to a fresh invented one.
+
+`NO BEARING` is deliberately distinct from its two neighbours, because the operator's
+next action differs in each:
+
+| Badge | Means |
+|---|---|
+| `MAG?` | a compass answered and says it is **uncalibrated** — the bearing is suspect |
+| `GYRO` | the filter is ignoring the compass **on purpose** — deliberate, not broken |
+| `NO COMPASS` | no IMU answered **at all** — `mag_cal` is null, not 0 |
+| `NO BEARING` | one answered **earlier in this dive and has now stopped** |
+
+### The leak has two stages, and only one of them is an emergency
+
+One leak flag was answering the wrong question. A film of water in the bilge means *finish
+the pass and come home*; water 2 cm higher means *surface now*. Collapsing those into one
+signal either cries wolf on condensation or says nothing until it is too late.
+
+| Stage | Probe | What you see | What to do |
+|---|---|---|---|
+| `NORMAL` | both dry | nothing | — |
+| `WARN` | the probe at the lowest point of the hull | **amber, and the sub glyph changes SHAPE** | advisory, non-blocking: water is collecting, finish up |
+| `FLOOD` | the probe 2 cm above it | the **red pulsing sub** plus a SURFACE prompt | come up |
+
+FLOOD keeps the pulsing-sub shape it has always had, and keeps it **deliberately distinct
+from a link dropout** — a leak is the sub telling you something, a dropout is the sub
+telling you nothing, and they demand opposite actions. A probe has to read wet for five
+consecutive samples (~0.5 s) before its stage latches, because a launch splash and a droplet
+running down the inside of the hull both touch a probe briefly and real ingress does not
+stop. An alarm nobody believes is one that gets ignored on the day it is right.
+
+A dead probe reads *dry* forever, which is the one failure this design would otherwise hide,
+so the pre-dive readiness check reports a probe whose state is physically impossible — flood
+wet while the lower probe is dry cannot happen, since water reaching the upper probe passed
+the lower one.
+
+### The battery is 2S, and 24 V was somebody else's vehicle
+
+The pack is **8.4 V full, 7.4 V nominal**. The old `24.8 V` reading and the `20.0 V` sag
+floor were placeholders from before the pack existed, and a threshold that describes a
+different vehicle does not fail loudly — it reads "full" forever.
+
+| Band | Volts | Colour |
+|---|---|---|
+| dive on | ≥ 7.0 | green |
+| head back | < 7.0 | amber — finish the pass |
+| surface | < 6.6 | red, with a SURFACE prompt |
+| hard floor | 6.0 | 3.0 V/cell. Below this the cells are damaged, not merely flat |
+
+The **number is always shown** and the colour comes **only** from these bands — one colour,
+one meaning, same rule as the depth ramp. Nothing in software enforces the floor: safing a
+sub in the middle of a canal trades a damaged pack for an unrecoverable vehicle, so the
+operator is told early and the operator decides.
+
+### An estimate never dresses as a measurement
+
+There is a paddlewheel on the hull now, so **SPEED** can be a real number — and when it
+cannot, it says so instead of quietly becoming one.
+
+| `speed_src` | Where the number came from | How it reads |
+|---|---|---|
+| `paddle` / `kf-paddle` | the water-speed sensor | a measurement |
+| `lut` / `kf-lut` | the throttle→speed model | visibly styled as an **estimate** |
+
+The wheel cannot sense direction — the sign comes from the throttle — and it stalls below
+about 0.1 m/s, so no pulses is reported as *unknown*, never as `0.0 m/s`. "Slower than I can
+see" and "stopped" are different claims and only the throttle can tell them apart.
+
+Which is also what makes **SNAGGED** possible, and it is its own warning with its own shape
+and words rather than a generic error: sustained thrust with no measured speed means
+something is holding the sub. That is the *"the map marches forward while the sub is pinned
+on a shopping trolley"* case — the whole reason the wheel is fitted — and navigation
+confidence drops with it.
+
+### GYRO ONLY means deliberate, not broken
+
+Heading comes from the IMU's fused yaw, which the thrusters' own magnetic field pollutes.
+Two states are surfaced for it, and they are not the same thing:
+
+- **Heading suspect** — the magnetometer calibration is below 2. Flagged everywhere heading
+  is shown, HUD and map alike, consistent with the existing confidence degradation.
+- **`GYRO ONLY`** — the heading filter is **ignoring the compass on purpose** and coasting on
+  the gyro, because the calibration is low or the thrusters are running hard enough to lie.
+  The operator has to be able to tell that apart from a broken compass; one is the filter
+  working and the other is the filter failing, and they look identical if nobody says which.
+
+### The syringe admits when it doesn't know
+
+Ballast is a stepper driving a plunger with **no position sensor**: the level is a step
+count, and a step count means nothing until it has been zeroed against the empty end stop.
+So from power-on until the first homing, the syringe shows an **explicit unknown** — not
+0 %, not 50 %, per the cannot-tell rule — together with the prompt to home it. A gauge
+sitting confidently at half is worse than one admitting it does not know, because only one
+of them prompts the action that fixes it.
+
+**Drag up to fill is unchanged**, and so is 0..1 of the stroke; it is now backed by step
+truth rather than a simulated tank. If the plunger reaches the full end stop at a count that
+disagrees with the calibrated span, steps were skipped — the level is now wrong by an unknown
+amount, so `needs re-home` is surfaced rather than swallowed.
+
+Every one of these readings still carries the mock/real distinction. A simulated number is
+always badged as one.
+
 ## Layout
 
 ```
@@ -240,9 +385,15 @@ client/
 ## Tests
 
 ```bash
-python client/tests/run.py          # 249 checks, ~95 s, exit 0 only if all pass
+python client/tests/run.py          # 12 suites, 295 checks, ~114 s, exit 0 only if all pass
 python client/tests/run.py tether   # one suite
 ```
+
+Measured on the ROG Ally, 2026-08-07: `295/295 checks passed in 114s across 12 suites`.
+That figure is re-measured by running it, never adjusted by eye — the numbers previously
+printed here (`286`, and `249` in `tests/README.md`) were each carried forward from an
+older tree, and a count that disagrees with what scrolls past teaches the reader to stop
+believing the rest of the page.
 
 Browser checks against the **real dashboard** — `run.py` serves `client/`, injects one
 suite as an extra `<script>`, and runs it in headless Chrome. Nothing is stubbed or

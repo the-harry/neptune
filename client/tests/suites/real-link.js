@@ -4,23 +4,38 @@
    most important to see (dead thruster, snagged tether, sub against a wall), because
    commanded throttle keeps drawing forward progress either way.
    Also guards the input vector, which is the operator's OWN feedback and must answer
-   the stick in every mode, on the keyboard and gamepad paths alike. */
+   the stick in every mode, on the keyboard and gamepad paths alike.
+   And the pack's colour, for the same reason: a band is a claim made in a colour that
+   the operator acts on without reading the number, so it has to come from the VEHICLE's
+   2S voltage and from nothing else. */
 (function(){
   const R=[]; const errs=[];
   window.addEventListener('error', e=>errs.push(String(e.message)));
   const ok=(name,pass,detail)=>R.push({name, pass:!!pass, detail:String(detail)});
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
-  function tel(mock, heading){
+  // A HEALTHY 2S PACK. 8.4 V is a full charge, 7.0 V is the amber line and 6.6 V the red
+  // one, so 8.1 V is a vehicle with plenty in it — no check below is incidentally flying
+  // an alarm. The 24.5 V this used to send belonged to a pack that was never built, and
+  // on the real bands it reads FULL forever, which is the worst kind of wrong: it looks
+  // like a threshold somebody checked.
+  const PACK_OK = 8.1;
+  function tel(mock, heading, volts){
     return {type:'telemetry', mock:mock, heading:heading, depth:1.2, pressure:14.7,
-            ballast_level:0.4, ballast_target:0.4, battery_v:24.5, left:0, right:0,
+            // ballast_homed says out loud what a bare 0.4 only implied: the syringe HAS
+            // been driven onto its empty stop, so 40% is a reading rather than the count
+            // an unhomed stepper happens to hold. Leaving it out left the level's meaning
+            // resting on a client-side default, and a default is the one thing a
+            // cannot-tell rule must never be tested through.
+            ballast_level:0.4, ballast_homed:true, ballast_target:0.4,
+            battery_v:(volts==null ? PACK_OK : volts), left:0, right:0,
             armed:false, magnet:false, light_green:false, light_white:false, leak:false};
   }
   let feed=null;
-  function startFeed(mock, heading){
+  function startFeed(mock, heading, volts){
     stopFeed();
-    onTelemetry(tel(mock, heading));
-    feed=setInterval(()=>onTelemetry(tel(mock, heading)), 100);
+    onTelemetry(tel(mock, heading, volts));
+    feed=setInterval(()=>onTelemetry(tel(mock, heading, volts)), 100);
   }
   function stopFeed(){ if(feed){ clearInterval(feed); feed=null; } }
   const keys=(...k)=>{ state.keys.clear(); k.forEach(c=>state.keys.add(c)); };
@@ -171,6 +186,62 @@
 
     pad.axes=[0,0,0,0]; state.gamepadIndex=null; navigator.getGamepads=()=>[];
     await sleep(200);
+
+    // ================= THE PACK, ON ITS OWN 2S BANDS =================
+    // WHAT THIS GUARDS: the colour of the pack voltage, which until §5 nothing tested at
+    // all. It matters here because this suite's whole subject is what a REAL link is
+    // allowed to claim — and a battery band is a claim, made in a colour, that the
+    // operator flies on without reading the number. Three ways it goes wrong: the
+    // thresholds sit on the 24 V scale of a pack that was never built and read FULL for
+    // the entire dive; the boundary lands in the pessimistic band and cries wolf; or the
+    // red chip latches and stays on after the pack recovers, which teaches the operator
+    // to ignore the one alert that means "come up now".
+    const battClass=()=>$('battery-v').className;
+    const battText =()=>$('battery-v').textContent;
+    const alerts   =()=>$('alerts').textContent.replace(/\u00a0/g,' ').trim();
+    const battChip =()=>[...$('alerts').querySelectorAll('.alert')].find(e=>/BATTERY/.test(e.textContent))||null;
+    const atVolts  =async v=>{ startFeed(true, 284, v); await sleep(300); };
+    const B=CONFIG.battery;
+
+    await atVolts(PACK_OK);
+    ok('a healthy 2S pack is green, and shows the number beside the colour',
+       /\bbatt-ok\b/.test(battClass()) && battText()===PACK_OK.toFixed(1)+'V' && !/BATTERY/.test(alerts()),
+       PACK_OK+' V -> class="'+battClass()+'" text="'+battText()+'" alerts="'+(alerts()||'none')+'"');
+
+    await atVolts(B.warnV);
+    ok('the amber line itself still counts as healthy', /\bbatt-ok\b/.test(battClass()),
+       B.warnV.toFixed(1)+' V (CONFIG.battery.warnV) -> class="'+battClass()+
+       '" — "below 7.0" means 7.0 itself has not crossed');
+
+    await atVolts(6.9);
+    ok('under 7.0 V the pack goes amber, and only amber',
+       /\bbatt-warn\b/.test(battClass()) && !/BATTERY/.test(alerts()),
+       '6.9 V -> class="'+battClass()+'" alerts="'+(alerts()||'none')+'" — plan the way home, do not surface yet');
+
+    await atVolts(B.critV);
+    ok('the red line itself is still only amber', /\bbatt-warn\b/.test(battClass()),
+       B.critV.toFixed(1)+' V (CONFIG.battery.critV) -> class="'+battClass()+
+       '" — the red band starts BELOW it, so this is still a "plan the way home"');
+
+    await atVolts(6.5);
+    ok('under 6.6 V the pack goes red', /\bbatt-crit\b/.test(battClass()),
+       '6.5 V -> class="'+battClass()+'"');
+    ok('...and red SAYS what to do, carrying the voltage with it',
+       /BATTERY 6\.5V · SURFACE/.test(alerts()) && /surface now/i.test((battChip()||{}).title||''),
+       'chip="'+alerts()+'"  title="'+(((battChip()||{}).title)||'no chip').slice(0,90)+'..."');
+
+    await atVolts(PACK_OK);
+    ok('and the alert follows the pack back up instead of latching',
+       /\bbatt-ok\b/.test(battClass()) && !/BATTERY/.test(alerts()),
+       PACK_OK+' V -> class="'+battClass()+'" alerts="'+(alerts()||'none')+'" — a chip that stays lit is a chip nobody reads');
+
+    ok('a pack voltage that is not arriving earns NO colour, not a green one',
+       batteryBand(null).key==='none' && batteryBand(null).color===null,
+       'batteryBand(null) -> '+JSON.stringify(batteryBand(null)));
+    ok('a leftover 24 V reading would band as a FULL pack, not as an error',
+       batteryBand(24.8).key==='ok',
+       'batteryBand(24.8).key='+batteryBand(24.8).key+' — nothing rescales it, so a fixture '+
+       'left on that scale silently tests a battery that cannot go flat');
 
     // ================= NOTHING ELSE BROKEN =================
     ok('no script errors', errs.length===0, errs.join(' | ')||'none');

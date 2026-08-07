@@ -60,6 +60,59 @@ class Settings:
     psi_per_meter: float = field(default_factory=lambda: _f("NEPTUNE_PSI_PER_M", 1.42))
     leak_warn_at: str = field(default_factory=lambda: _s("NEPTUNE_LEAK_WARN", "WARN"))
 
+    # --- battery: 2S Li-ion (8.4 V full, 7.4 V nominal) ----------------------
+    # THE OLD 24 V SCALE IS OBSOLETE. It was a placeholder from before the pack
+    # existed; anything still comparing against 20-25 V is describing a different
+    # vehicle and will read "full" forever on this one.
+    #
+    # Bands — one colour, one meaning, and the colour comes ONLY from here:
+    #   >= battery_warn_v (7.0)   green   — dive on
+    #   <  battery_warn_v (7.0)   amber   — finish the pass and head back
+    #   <  battery_crit_v (6.6)   red     — SURFACE prompt
+    #      battery_floor_v (6.0)  the documented hard floor (3.0 V/cell). Below it
+    #                             Li-ion cells are damaged, not merely flat. Nothing
+    #                             in software enforces it — it is the number the
+    #                             operator must never reach, which is why it is
+    #                             written down instead of left to folklore.
+    battery_full_v: float = field(default_factory=lambda: _f("NEPTUNE_BATT_FULL", 8.4))
+    battery_warn_v: float = field(default_factory=lambda: _f("NEPTUNE_BATT_WARN", 7.0))
+    battery_crit_v: float = field(default_factory=lambda: _f("NEPTUNE_BATT_CRIT", 6.6))
+    battery_floor_v: float = field(default_factory=lambda: _f("NEPTUNE_BATT_FLOOR", 6.0))
+
+    # --- hardware tunables (RealHardware; mirrored in docs/hardware.md) -------
+    # Ballast is an open-loop NEMA 17 through an A4988: there is no position
+    # sensor, so level = steps / span. The span is MEASURED once during the
+    # calibration run (home, drive to the FULL switch, record the count) and
+    # lives here rather than in code, because a wrong span silently rescales the
+    # entire syringe UI without anything looking broken.
+    ballast_span_steps: int = field(default_factory=lambda: _i("NEPTUNE_BALLAST_SPAN_STEPS", 4000))
+    # Bounded step rate. Faster is tempting and loses steps under load, and a lost
+    # step on an open-loop axis is not a glitch — it is the reported level quietly
+    # drifting away from where the plunger actually is.
+    ballast_step_rate: float = field(default_factory=lambda: _f("NEPTUNE_BALLAST_STEP_RATE", 400.0))
+    # If the FULL limit switch closes more than this fraction of the span away
+    # from the expected count, steps were skipped (or the span is stale): flag
+    # needs-rehome instead of continuing to publish a level derived from a
+    # counter we now know is wrong.
+    ballast_span_tolerance: float = field(default_factory=lambda: _f("NEPTUNE_BALLAST_SPAN_TOL", 0.05))
+    # Thrusters own the Pi's two hardware PWM channels (GPIO12/13). ~2 kHz is
+    # above audible whine for a brushed motor and well inside what the H-bridges
+    # switch cleanly.
+    thruster_pwm_hz: float = field(default_factory=lambda: _f("NEPTUNE_THRUSTER_PWM_HZ", 2000.0))
+    # Lights run SOFTWARE PWM — GPIO12/18 share hardware channel 0 and GPIO13/19
+    # share channel 1, so there are only two hardware channels and the thrusters
+    # need both. ~200 Hz is flicker-free for LEDs and cheap enough in software.
+    light_pwm_hz: float = field(default_factory=lambda: _f("NEPTUNE_LIGHT_PWM_HZ", 200.0))
+    # Below this magnitude the H-bridge gets duty 0 instead of a trickle: a tiny
+    # commanded value cannot turn a prop but does make the bridge sing, and a
+    # whining idle sounds exactly like a fault to whoever is holding the tether.
+    thruster_deadband: float = field(default_factory=lambda: _f("NEPTUNE_THRUSTER_DEADBAND", 0.05))
+    # A leak probe must read wet for this many consecutive 10 Hz samples (~0.5 s)
+    # before its state latches. Condensation, a splash on launch, and a droplet
+    # running down the hull all touch a probe briefly; a real ingress does not
+    # stop. Debouncing is what keeps the FLOOD alarm worth believing.
+    leak_debounce_samples: int = field(default_factory=lambda: _i("NEPTUNE_LEAK_DEBOUNCE", 5))
+
     # --- camera (MJPEG) ---
     cam_width: int = field(default_factory=lambda: _i("NEPTUNE_CAM_W", 1280))
     cam_height: int = field(default_factory=lambda: _i("NEPTUNE_CAM_H", 720))

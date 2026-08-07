@@ -22,6 +22,10 @@ const MAP = {
   track:[], x:0, y:0, hdg:0, depth:0, scale:0.6, headingUp:true,
   expanded:false, hasArea:false, hasOrigin:false, origin:null, activeArea:null,
   navWs:null, lastNavAt:0, lastTick:0, _navBits:-1,   // _navBits: last NO-NAV label state
+  // What the estimator says about its own output (§5), straight off the nav frame.
+  // Held here as well as in `state` so the map can qualify what it draws without
+  // asking the control link, which is a different socket that fails separately.
+  confidence:1, snagged:false, gyroOnly:false, magCal:null, rangeM:0, payoutM:0, _hdgFlag:'?',
   me:null,                                   // {lat,lon,acc,t} — the handheld, live (§2)
   viewLat:null, viewLon:null, follow:true,   // geographic view centre (§3); follow = track the sub
   centreline:null,                           // [[lon,lat],…] waterway overlay (§3.5)
@@ -498,6 +502,34 @@ function updateEmptyState(){
   }
 }
 
+/* HOW MUCH THE MAP'S HEADING IS WORTH (§5.6).
+
+   The collapsed radar is HEADING-UP: the whole picture rotates on the bearing, so a
+   suspect compass does not just mistake one number, it turns the entire map under
+   the operator. That has to be visible ON the map — reading it off the top bar
+   requires knowing the two are the same number, which is exactly the kind of
+   knowledge nobody has while driving.
+
+   Same vocabulary as the HUD (core.js HEADING_FLAGS), on purpose: MAG? in one place
+   and "compass?" in the other would read as two different faults. The badge sits
+   ABOVE the NO NAV one so the two never collide when both are up, and the North
+   indicator — the map's own drawing of the heading — is marked with it. */
+function updateHeadingFlag(){
+  const f = (typeof headingFlag==='function') ? headingFlag() : '';
+  if(f === MAP._hdgFlag) return;                 // 10 Hz tick: only touch the DOM on a change
+  MAP._hdgFlag = f;
+  const d = (typeof HEADING_FLAGS!=='undefined') ? HEADING_FLAGS[f] : null;
+  const el = $('hdg-warning');
+  if(el){
+    el.textContent = d ? d.label : '';
+    el.classList.toggle('on', !!d);
+    el.classList.toggle('gyro', f==='gyro' || f==='gyro-mag');
+    if(d) el.title = d.title;
+  }
+  const north = $('radar-north');
+  if(north) north.setAttribute('class', d ? ('flag-'+(f==='gyro' ? 'gyro' : 'mag')) : '');
+}
+
 /* ---- MapLibre + PMTiles (§3) — only when vendored ---- */
 function tryInitMapLibre(){
   if(typeof window.maplibregl === 'undefined'){ LOG.state('MapLibre not vendored — canvas fallback'); return; }
@@ -542,6 +574,26 @@ function connectNavWs(){
   ws.onopen=()=>{ _navBackoff=0; };
   ws.onmessage=(ev)=>{ let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
     if(m.type==='nav'){ MAP.x=m.x_m; MAP.y=m.y_m; MAP.hdg=m.heading_deg; MAP.depth=m.depth_m;
+      // THE ESTIMATOR'S ACCOUNT OF ITSELF TRAVELS WITH THE POSITION.
+      //
+      // This frame used to carry four numbers, which meant the map could draw a
+      // track without ever saying how much that track was worth. The estimator
+      // knows: which speed source it used, whether it is coasting on the gyro
+      // because the compass is untrustworthy right now, whether the thrust it is
+      // integrating is actually moving the hull. Those belong on screen beside the
+      // line they produced, not in a log nobody reads mid-dive.
+      //
+      // They land in the SAME state slots telemetry writes, because they are the
+      // same facts about the same vehicle: whichever stream is more recent wins,
+      // and the readouts gate on a live hull either way (viewFromState).
+      if(typeof m.speed_ms==='number') state.speedMs=m.speed_ms;
+      if(typeof m.speed_src==='string') state.speedSrc=m.speed_src;
+      if(typeof m.snagged==='boolean'){ state.snagged=m.snagged; MAP.snagged=m.snagged; }
+      if(typeof m.gyro_only==='boolean'){ state.gyroOnly=m.gyro_only; MAP.gyroOnly=m.gyro_only; }
+      if(typeof m.mag_cal==='number'){ state.magCal=m.mag_cal; MAP.magCal=m.mag_cal; }
+      if(typeof m.confidence==='number') MAP.confidence=m.confidence;
+      if(typeof m.range_m==='number') MAP.rangeM=m.range_m;
+      if(typeof m.payout_m==='number') MAP.payoutM=m.payout_m;   // §5.5 an UPPER bound on range, never a position
       MAP.lastNavAt=performance.now(); state.navOkAt=Date.now(); pushTrack(m.x_m,m.y_m,m.depth_m); }
   };
   ws.onclose=()=>{ MAP.navWs=null; scheduleNavWs(); };
@@ -753,6 +805,7 @@ function mapTick(){
   const navBits = (vehicleLinked()?1:0) | ((now-MAP.lastNavAt<1500)?2:0) | (vehicleHasSensors()?4:0)
                 | (MAP.expanded?8:0) | (MAP.blind?16:0);   // wording depends on how much room there is
   if(navBits!==MAP._navBits){ MAP._navBits=navBits; updateEmptyState(); }
+  updateHeadingFlag();          // self-guarded: touches the DOM only when the flag changes
   // view centre (§3): follow the sub when collapsed/following; free pan otherwise
   if(MAP.hasOrigin && (MAP.follow || MAP.viewLat==null)){
     const g=toLatLon(MAP.x,MAP.y,MAP.origin.lat,MAP.origin.lon); MAP.viewLat=g.lat; MAP.viewLon=g.lon;

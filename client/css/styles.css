@@ -262,6 +262,39 @@ aside.px-3{padding-left:6px;padding-right:6px}
 
 .is-stale{opacity:.45;color:var(--outline)!important}
 
+/* ---- THE ALERT STACK (§5) -------------------------------------------------
+   Flooding, a critical pack, a snag, water collecting, a dead leak probe, a syringe
+   that has lost its count. Anchored under the top bar on the RAIL side, because the
+   sentence that ends "SURFACE NOW" should end with the eye on the SURFACE button.
+
+   Every chip is a GLYPH plus WORDS. Neither is decoration: the glyph is what survives
+   being read at a glance in sunlight, the words are what survives being read by
+   somebody who has never seen this console before. Colour is the third signal, never
+   the first.
+
+   pointer-events:none throughout — an alert must never sit between a finger and a
+   control. Nothing here is dismissible either: these clear when the vehicle says the
+   condition has cleared, and a dismiss button is just an invitation to silence the
+   one message that mattered. */
+.alerts{position:fixed;top:76px;right:100px;z-index:62;display:none;
+  flex-direction:column;align-items:flex-end;gap:6px;pointer-events:none;max-width:min(46vw,420px)}
+.alerts.on{display:flex}
+.alert{display:flex;align-items:center;gap:7px;padding:5px 10px;border-radius:.5rem;
+  font-family:var(--font-sans);font-size:11px;font-weight:800;letter-spacing:.08em;
+  white-space:nowrap;background:rgba(12,1,24,.92);border:1px solid currentColor}
+.alert-ic{display:inline-flex;width:15px;height:15px;flex:0 0 auto}
+.alert-ic svg{width:100%;height:100%}
+.alert.warn{color:var(--hazard)}
+/* CRIT is the only thing on this stack that moves, on the same 1.1 s rhythm as the
+   flooding screen edge so the two read as one event rather than two.
+   The GLOW pulses, not the opacity: fading the chip made the most urgent line on the
+   screen the faintest one half of the time, and an alarm you have to wait for the
+   bright half of is a worse alarm than a still one. */
+.alert.crit{color:var(--error);animation:alertpulse 1.1s ease-in-out infinite}
+@keyframes alertpulse{
+  0%,100%{box-shadow:0 0 6px rgba(255,92,122,.20)}
+  50%    {box-shadow:0 0 22px rgba(255,92,122,.55)}}
+
 /* ---- CONFIG / input remapper modal ---- */
 #mapper-modal{position:fixed;inset:0;z-index:85;display:none;align-items:center;justify-content:center;
   background:color-mix(in srgb,var(--surface-dim) 80%,transparent);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
@@ -365,10 +398,44 @@ body:not(.map-expanded) #radar.empty .radar-empty{display:flex}
   color:var(--error);background:rgba(12,1,24,.88);border:1px solid var(--error)}
 .nav-warning.on{display:block}
 body.map-expanded .nav-warning{bottom:auto;top:14px;font-size:12px;padding:4px 12px;letter-spacing:.14em}
+/* HEADING TRUST on the map (§5.6). The collapsed radar is heading-up, so an untrusted
+   compass turns the entire picture and not just a number — that has to be said on the
+   map itself. Parked one row ABOVE the NO NAV badge (and below it in the expanded
+   view) so the two can both be up without ever landing on each other.
+   AMBER = the compass is not calibrated: broken. PRIMARY = the filter is ignoring it
+   on purpose and coasting on the gyro: deliberate. Two situations, two reactions, so
+   never the same colour — and the label says which either way. */
+.hdg-warning{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);display:none;z-index:5;
+  padding:2px 8px;border-radius:9px;white-space:nowrap;pointer-events:none;
+  font-family:var(--font-sans);font-size:9px;font-weight:800;letter-spacing:.10em;
+  color:var(--hazard);background:rgba(12,1,24,.88);border:1px solid var(--hazard)}
+.hdg-warning.on{display:block}
+.hdg-warning.gyro{color:var(--primary);border-color:var(--primary)}
+body.map-expanded .hdg-warning{bottom:auto;top:46px;font-size:12px;padding:4px 12px;letter-spacing:.14em}
 .radar-scale{font-family:var(--font-sans);font-size:11px;font-weight:700;letter-spacing:.06em;
   color:rgba(236,227,255,.72);text-shadow:0 0 6px var(--surface-dim);pointer-events:none}
 .radar-n{fill:var(--secondary);font-family:var(--font-sans);font-size:13px;font-weight:800}
 .radar-n-tick{stroke:var(--secondary);stroke-width:2;stroke-linecap:round}
+/* North is the map's own drawing of the heading, so it wears the heading's trust: amber
+   when the compass is uncalibrated, primary-and-dashed while the filter coasts on the
+   gyro on purpose. Marked as well as badged, never instead of — the badge says the
+   word, the tick says which drawing on screen the word is about. */
+#radar-north.flag-mag .radar-n{fill:var(--hazard)}
+#radar-north.flag-mag .radar-n-tick{stroke:var(--hazard)}
+#radar-north.flag-gyro .radar-n{fill:var(--primary)}
+#radar-north.flag-gyro .radar-n-tick{stroke:var(--primary);stroke-dasharray:2 2}
+/* NO BEARING AT ALL — the compass answered earlier in the dive and has stopped. The
+   collapsed radar is heading-up, so the picture is STILL being rotated, by the last
+   angle that compass ever reported; nothing about a held rotation looks held. So the
+   ring the picture is drawn inside goes broken and amber, and North — which is the
+   map's own drawing of the heading — fades to the ghost it now is. The badge above it
+   says the words; this is what says WHICH drawing the words are about, because a badge
+   on its own is a caption with no picture attached. */
+body.heading-dead #radar-dial .sonar-ring{stroke:var(--hazard);stroke-dasharray:5 6;opacity:.7}
+body.heading-dead #radar-dial .sonar-ring2{stroke:var(--hazard);stroke-dasharray:4 5;opacity:.4}
+body.heading-dead #radar-north{opacity:.4}
+body.heading-dead #radar-north .radar-n{fill:var(--hazard)}
+body.heading-dead #radar-north .radar-n-tick{stroke:var(--hazard);stroke-dasharray:2 2}
 
 /* EXPANDED — the same map goes fullscreen; the dial/scale/readout step aside; video → PiP (§3) */
 @keyframes mapExpandIn{from{opacity:.25;transform:scale(.94)}to{opacity:1;transform:none}}
@@ -669,6 +736,49 @@ body.video-down #video-layer{filter:grayscale(.6) brightness(.7)}
 .m-label{font-family:var(--font-sans);font-size:9px;font-weight:700;letter-spacing:.03em;color:var(--on-surface-variant);text-transform:uppercase;white-space:nowrap}
 .m-val{font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--primary);white-space:nowrap}
 .m-val.rec{color:var(--error);animation:pulse 1s infinite}
+/* A value and its qualifier on ONE line. The qualifier is deliberately not a second
+   row: the top bar is a fixed-height glance instrument, and giving two tiles an extra
+   line pushes every other reading down whenever a sensor has something to admit. */
+.m-line{display:flex;align-items:center;gap:3px;line-height:1}
+/* HEADING TRUST, beside the bearing. Empty and invisible while the compass is fine —
+   a permanently-lit "OK" badge is noise, and noise is what teaches an operator to
+   stop reading the row. */
+.m-flag{display:none;font-family:var(--font-sans);font-size:8px;font-weight:800;letter-spacing:.08em;
+  padding:1px 3px;border-radius:5px;white-space:nowrap}
+.m-flag.on{display:inline-block}
+.m-flag.suspect{color:var(--hazard);border:1px solid var(--hazard)}
+/* Coasting on the gyro is DELIBERATE, so it is not painted in the warning colour.
+   The .gyro rule is second, so on `gyro suspect` (both at once) it wins the border
+   and the label spells out both halves. */
+.m-flag.gyro{color:var(--primary);border:1px solid var(--primary)}
+/* The bearing itself changes too, so the flag is never the only carrier: dotted =
+   suspect (the compass is not calibrated), dashed = the filter is ignoring it on
+   purpose. Underlines, not colour, because this number sits next to five others. */
+.m-val.suspect{color:var(--hazard);text-decoration:underline dotted;text-underline-offset:3px}
+.m-val.gyro{text-decoration:underline dashed;text-underline-offset:3px}
+/* CANNOT-TELL: the sensor behind this number has stopped answering, so there is no
+   number — the tile shows the same question mark the unhomed syringe has always used.
+   WAVY, which is a third underline and not either of the other two, because this is not
+   a bearing that might be wrong (dotted) or one being coasted on deliberately (dashed):
+   it is a reading that does not exist. And emphatically NOT the stale dash — a dash
+   means a dropped frame, which an operator rightly waits out, and a dead depth sensor
+   dressed as a dropped frame is a sub flown on a depth nobody is measuring. */
+.m-val.nosensor{color:var(--hazard);text-decoration:underline wavy;text-underline-offset:3px}
+/* SPEED. A measured reading looks like every other measured reading on this bar. An
+   ESTIMATE is dimmed and italic on top of its tilde and its tag — three separate
+   signals, because this is the one number a snagged sub reports as if all were well. */
+.m-val.est{color:var(--on-surface-variant);font-style:italic}
+.m-val.snag{color:var(--error)}
+.est-tag{display:none;font-family:var(--font-sans);font-size:8px;font-weight:800;letter-spacing:.08em;
+  color:var(--on-surface-variant);border:1px solid var(--outline-variant);border-radius:5px;padding:1px 3px}
+.est-tag.on,.est-tag.none{display:inline-block}
+.est-tag.none{color:var(--outline);border-color:var(--outline)}
+/* PACK BANDS (§5) — 2S Li-ion, and the ONLY thing that may colour this number. The
+   colour itself is set inline from CONFIG.battery so the thresholds live in one file;
+   the batt-ok / batt-warn / batt-crit class is carried so the band is readable from
+   the DOM (and from a test) rather than only from a computed style. Only the critical
+   band gets movement — a pack that is merely low must not compete with a flood. */
+.m-val.batt-crit{animation:pulse 1.4s infinite}
 .m-sep{width:1px;height:28px;background:var(--outline-variant);opacity:.5;flex:0 0 auto;margin:0}
 /* The bar grows rather than overlapping. `h-16` pins it to 64px, which is right for
    the normal single row, but a fixed height plus nowrap tiles has only one way to
@@ -731,6 +841,17 @@ aside > button .material-symbols-outlined{font-size:17px}
   background:linear-gradient(180deg,rgba(236,227,255,.34),rgba(236,227,255,.14)),
              var(--surface-variant);
   border:1px solid rgba(255,255,255,.34);box-shadow:0 1px 0 rgba(0,0,0,.35)}
+/* HOME — shown ONLY while the syringe cannot say where it is (never homed, or it
+   skipped steps and lost the count). Hidden the rest of the time so it costs the rail
+   nothing: the sliders above it are flex:1 and every permanent button steals height
+   from the two controls that are actually flown. render.js owns the body class. */
+.syr-home{display:none;width:100%;margin-top:2px;padding:3px 0;border-radius:.25rem;
+  align-items:center;justify-content:center;
+  font-family:var(--font-sans);font-size:10px;font-weight:800;letter-spacing:.10em;
+  color:var(--hazard);border:1px solid var(--hazard);
+  background:color-mix(in srgb,var(--hazard) 14%,transparent)}
+body.ballast-home-needed .syr-home{display:flex}
+.syr-home:active{background:color-mix(in srgb,var(--hazard) 28%,transparent)}
 
 /* ---- LOGS overlay -------------------------------------------------------
    Centred and deliberately NOT full screen: the operator reads the log while a

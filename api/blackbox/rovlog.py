@@ -4,10 +4,12 @@ Two independent logs of the same events (Pi + client) let you locate a fault tha
 neither pins down alone. This tool aligns them on a common timebase (using the
 logged clock offsets, never by rewriting timestamps) and reports where they diverge.
 
-    rovlog merge    nav.jsonl client.jsonl     one time-aligned stream
-    rovlog diverge  <session>                  the payoff: what the two logs disagree on
-    rovlog timeline <session> --around T --window S   side-by-side text around an incident
-    rovlog bundle   <session>                  incident zip
+    rovlog merge     nav.jsonl client.jsonl    one time-aligned stream
+    rovlog diverge   <session>                 the payoff: what the two logs disagree on
+    rovlog telemetry <session>                 what the VEHICLE did: leak stages, ballast
+                                               truth, speed source, snags, battery bands
+    rovlog timeline  <session> --around T --window S   side-by-side text around an incident
+    rovlog bundle    <session>                 incident zip
 
 Run: python -m blackbox.rovlog <cmd> ...   (or via the installed console entry)
 """
@@ -279,7 +281,322 @@ def _clock_anomalies(off: Offset):
             "drift_ms_per_s": drift, "jumps": jumps, "sync_gaps_ms": sync_gaps}
 
 
+# ---- telemetry replay (§5) -------------------------------------------------
+# Every field the control loop journals. Listed here so the report can say which
+# ones a log does NOT contain: a session recorded by an older build is missing
+# them entirely, and "0 snag events" out of a log that never knew what a snag was
+# is a lie of exactly the kind this tool exists to catch.
+TLM_FIELDS = (
+    "armed", "depth", "heading", "left", "right", "pressure",
+    "ballast_level", "ballast_target", "ballast_homed", "ballast_needs_rehome",
+    "leak", "leak_state", "leak_probe_fault",
+    "battery_v", "battery_band", "current_a",
+    "speed_ms", "speed_src", "snagged", "gyro_only", "mag_cal",
+    "magnet", "light_green", "light_white", "signal",
+    # WHICH CHIP STOPPED, and WHETHER NAVIGATION WAS ANSWERING. Both were being
+    # journalled and neither was listed, so a report could not distinguish "no
+    # sensor ever faulted" from "this recorder had no idea a sensor could fault" —
+    # and that is the precise confusion the missing-field list exists to prevent.
+    # It matters more here than anywhere else on the list: a dive where the compass
+    # died and a dive where the compass was fine look identical in every other
+    # column, because the whole point of the null is that no number is left behind.
+    "sensor_faults",
+    "nav_loop", "nav_answering", "nav_used", "nav_reads_vehicle", "nav_faults",
+)
+
+
+def _tlm_rows(nav: list[dict]) -> list[tuple[float, float, dict]]:
+    """Journalled telemetry as (t, dt_it_stood_for, fields), in time order.
+
+    The recorder writes on state CHANGE and on a slow heartbeat, so records are
+    deliberately irregular. Anything phrased as "% of the dive" must therefore weight
+    each record by how long it stood, not count lines — otherwise one bad second that
+    produced twenty change records outvotes ten calm minutes of heartbeats, and the
+    report says the sub was snagged for most of the dive when it was snagged for 2 s.
+
+    THE FINAL RECORD IS NOT WORTH 0 ms. Each row is weighted by the gap to the NEXT one,
+    and the last row has no next — so the obvious code gives it zero, and every state the
+    dive ENDED in then contributes 0% of every percentage in this report. A dive that
+    ended flooded, snagged and unhomed reads back as clean. That is exactly backwards:
+    the last record is the one the report is opened to find out about. So the tail stands
+    for the MEDIAN inter-record gap of this same log — the median rather than the mean
+    because a heartbeat stream punctuated by change bursts has outliers by construction,
+    and a real gap from this log rather than a constant because the recorder's cadence is
+    a per-session thing. It is a slightly-wrong duration in place of a catastrophically
+    wrong one: the percentages can be a fraction out, but they can no longer hide the
+    ending.
+
+    A log holding a SINGLE record has no gap to copy, and none is invented here. The
+    weights are then all zero, `total` is zero and every share comes back empty — which
+    reads as cannot-tell, not as a quiet dive.
+    """
+    recs = [e for e in nav if e.get("e") in ("tlm", "tlm_state") and isinstance(e.get("d"), dict)]
+    recs.sort(key=lambda e: e.get("t", 0.0))
+    ts = [float(e.get("t", 0.0)) for e in recs]
+    gaps = [max(0.0, ts[i + 1] - ts[i]) for i in range(len(ts) - 1)]
+    tail = statistics.median(gaps) if gaps else 0.0
+    return [(ts[i], gaps[i] if i < len(gaps) else tail, e["d"]) for i, e in enumerate(recs)]
+
+
+def _key(v) -> str:
+    """JSON dict keys must be strings, and None must stay distinguishable from the
+    string 'None' — an absent speed source is not a source called None."""
+    return "null" if v is None else str(v)
+
+
+def _stats(vals: list[float]) -> dict:
+    if not vals:
+        return {"n": 0, "note": "never reported — treat as not fitted, not as zero"}
+    return {"n": len(vals), "min": round(min(vals), 3), "max": round(max(vals), 3),
+            "mean": round(statistics.fmean(vals), 3)}
+
+
+def _transitions(rows, key: str) -> list[dict]:
+    out, prev = [], "\x00sentinel"
+    for t, _dt, d in rows:
+        cur = d.get(key)
+        if cur != prev:
+            if prev != "\x00sentinel":
+                out.append({"at": round(t, 1), "from": prev, "to": cur})
+            prev = cur
+    return out
+
+
+def _episodes(rows, key: str) -> list[dict]:
+    """Contiguous runs where d[key] is truthy — [{from, to, ms}]."""
+    return _episodes_where(rows, lambda d: bool(d.get(key)))
+
+
+def _episodes_where(rows, pred) -> list[dict]:
+    """Contiguous runs where `pred(record)` holds — [{from, to, ms}].
+
+    Duration matters more than count for these: a snag flag that appeared once for
+    2 s and a snag flag that stayed up for the last four minutes of the dive are
+    completely different stories about how the dive ended.
+
+    Takes a predicate as well as the plain-key form above because the two signals
+    added this round are not single truthy keys. A navigation outage is nav_used
+    being FALSE (and the inverse of a key is not a key), and a chip outage is one
+    name's presence inside a list. Both are episodes in exactly the same sense as a
+    snag, and they are worth the same "…and it was still going when the log
+    stopped" mark at the end.
+    """
+    out, start = [], None
+    for t, dt, d in rows:
+        on = bool(pred(d))
+        if on and start is None:
+            start = t
+        elif not on and start is not None:
+            out.append({"from": round(start, 1), "to": round(t, 1), "ms": round(t - start, 1)})
+            start = None
+    if start is not None and rows:
+        end = rows[-1][0] + rows[-1][1]
+        out.append({"from": round(start, 1), "to": round(end, 1), "ms": round(end - start, 1),
+                    "open_at_end": True})       # still asserted when the log stopped
+    return out
+
+
+def telemetry_report(nav: list[dict]) -> dict:
+    """Replay the recorded vehicle state (§5): what the sub reported, and when it changed."""
+    rows = _tlm_rows(nav)
+    alarms = [{"at": round(e.get("t", 0.0), 1), **(e.get("d") or {})} for e in _by_event(nav, "alarm")]
+    if not rows:
+        return {"note": "no tlm/tlm_state records — this log cannot be replayed",
+                "hint": "telemetry journalling is written by the control loop in api/main.py",
+                "alarms": alarms}
+    total = sum(dt for _, dt, _ in rows)
+    seen: set[str] = set()
+    for _t, _dt, d in rows:
+        seen.update(d.keys())
+
+    def share(key: str) -> dict:
+        """% of elapsed time spent at each value of `key` (time-weighted, see _tlm_rows)."""
+        if total <= 0:
+            return {}
+        acc: dict[str, float] = {}
+        for _t, dt, d in rows:
+            k = _key(d.get(key))
+            acc[k] = acc.get(k, 0.0) + dt
+        return {k: round(100 * v / total, 1)
+                for k, v in sorted(acc.items(), key=lambda kv: -kv[1])}
+
+    def pct_where(pred) -> float | None:
+        if total <= 0:
+            return None
+        return round(100 * sum(dt for _t, dt, d in rows if pred(d)) / total, 1)
+
+    def values(key: str, pred=None) -> list[float]:
+        return [float(d[key]) for _t, _dt, d in rows
+                if isinstance(d.get(key), (int, float)) and not isinstance(d.get(key), bool)
+                and (pred is None or pred(d))]
+
+    homed = next((t for t, _dt, d in rows if d.get("ballast_homed")), None)
+    faults = _transitions(rows, "leak_probe_fault")
+    mags = [d.get("mag_cal") for _t, _dt, d in rows]
+    # Every chip this log ever named as silent, so the per-chip episodes below can
+    # be built without a hard-coded list of part numbers — a hull that grows a
+    # fourth sensor must not need this file edited before its outage is reportable.
+    chips = sorted({c for _t, _dt, d in rows for c in (d.get("sensor_faults") or [])})
+
+    rep: dict = {
+        "records": len(rows),
+        "span_ms": round(rows[-1][0] - rows[0][0], 1),
+        # What the last record was weighted as. It has no successor to measure against, so
+        # it stands for the median inter-record gap (_tlm_rows) — said out loud because it
+        # is why every percentage below is over span_ms + tail_ms, and why an episode still
+        # open at the end can run past the last timestamp. Zero here means a single-record
+        # log: nothing was invented, and the shares come back empty rather than clean.
+        "tail_ms": round(rows[-1][1], 1),
+        "mock": sorted({_key(d.get("mock")) for _t, _dt, d in rows}),
+        "alarms": alarms,
+        # LEAK — the stage, not the bit. Both are logged; if they ever disagree the
+        # bug is upstream of the log and this is where it shows up.
+        "leak": {
+            "time_pct": share("leak_state"),
+            "transitions": _transitions(rows, "leak_state"),
+            "probe_faults": [f for f in faults if f["to"]],
+        },
+        # BALLAST — unknown is a first-class outcome here. Time spent with no idea
+        # where the syringe was is a number worth reading after a dive.
+        "ballast": {
+            "unknown_pct": pct_where(lambda d: d.get("ballast_level") is None),
+            "homed_at_ms": round(homed, 1) if homed is not None else None,
+            "never_homed": homed is None,
+            "needs_rehome_episodes": _episodes(rows, "ballast_needs_rehome"),
+            "level": _stats(values("ballast_level")),
+        },
+        # SPEED — measured and estimated are reported SEPARATELY on purpose. Averaging
+        # a paddlewheel reading together with a LUT guess produces a number with no
+        # meaning, and an estimate never dresses as a measurement (§5).
+        "speed": {
+            "source_pct": share("speed_src"),
+            "measured": _stats(values("speed_ms", lambda d: d.get("speed_src") in ("paddle", "kf-paddle"))),
+            "estimated": _stats(values("speed_ms", lambda d: d.get("speed_src") in ("lut", "kf-lut"))),
+            "no_source_pct": pct_where(lambda d: d.get("speed_src") is None),
+        },
+        "snag": {
+            "events": _episodes(rows, "snagged"),
+            "time_pct": pct_where(lambda d: bool(d.get("snagged"))),
+        },
+        # HEADING TRUST — gyro_only is deliberate coasting, mag_cal < 2 is a suspect
+        # compass. A dive that spent most of its time in either is a dive whose track
+        # should be believed less, and that judgement needs the percentages.
+        "heading_trust": {
+            "gyro_only_pct": pct_where(lambda d: bool(d.get("gyro_only"))),
+            "gyro_only_episodes": _episodes(rows, "gyro_only"),
+            "mag_cal_pct": share("mag_cal"),
+            "mag_suspect_pct": pct_where(lambda d: isinstance(d.get("mag_cal"), int) and d["mag_cal"] < 2),
+            "no_imu_pct": pct_where(lambda d: d.get("mag_cal") is None),
+        },
+        "battery": {
+            "band_pct": share("battery_band"),
+            "volts": _stats(values("battery_v")),
+            "first_warn_ms": next((round(t, 1) for t, _dt, d in rows if d.get("battery_band") == "warn"), None),
+            "first_critical_ms": next((round(t, 1) for t, _dt, d in rows if d.get("battery_band") == "critical"), None),
+            # Time with NO pack voltage at all — band "unknown". Kept apart from
+            # the volts stats above, which simply skip the nulls: a dive whose
+            # INA219 died at minute two has a perfectly healthy mean voltage and a
+            # battery nobody was watching, and only this number says so.
+            "unknown_pct": pct_where(lambda d: d.get("battery_v") is None),
+            "current_a": _stats(values("current_a")),
+        },
+        # WHICH CHIP WENT SILENT, AND FOR HOW LONG. The individual gauges only ever
+        # go null, and a null is the same shape whatever caused it, so without this
+        # a replay of a dive that lost its depth sensor at 4.33 m reads as a dive
+        # that stopped reporting depth. Per chip and as episodes, because the
+        # question after a dive is "when did the MS5837 drop off the bus, and was
+        # it back before the sub was" — not "did anything ever fault".
+        "sensors": {
+            "any_fault_pct": pct_where(lambda d: bool(d.get("sensor_faults"))),
+            "chips_faulted": chips,
+            "outages": {c: _episodes_where(rows, lambda d, c=c: c in (d.get("sensor_faults") or []))
+                        for c in chips},
+        },
+        # NAVIGATION'S OWN STATE, replayed. nav_answering is what navigation
+        # claimed; nav_used is what the frame actually took from it, and they part
+        # company exactly when navigation is answering about something that is not
+        # this hull. An outage here explains, in one line, every nav field in the
+        # log going null at the same instant — which otherwise looks like the dive
+        # simply ending.
+        "navigation": {
+            "loop_pct": share("nav_loop"),
+            "used_pct": pct_where(lambda d: bool(d.get("nav_used"))),
+            "outages": _episodes_where(rows, lambda d: "nav_used" in d and not d["nav_used"]),
+            "loop_transitions": _transitions(rows, "nav_loop"),
+            "not_this_hull_pct": pct_where(lambda d: d.get("nav_reads_vehicle") is False),
+            "tick_faults": max((d["nav_faults"] for _t, _dt, d in rows
+                                if isinstance(d.get("nav_faults"), int)), default=None),
+        },
+        "armed_pct": pct_where(lambda d: bool(d.get("armed"))),
+    }
+    # A PERCENTAGE OF A COLUMN THAT WAS NEVER WRITTEN IS NOT A ZERO. Both blocks
+    # above are built with d.get(), so a log recorded before these keys existed —
+    # or by a process with no navigation in it — produces "0% faulted, 0% used",
+    # which reads as a clean dive with dead navigation and is neither. The shares
+    # are replaced by the reason there are none, in the same spirit as
+    # fields_never_logged below.
+    if "sensor_faults" not in seen:
+        rep["sensors"] = {"note": "this log never carried sensor_faults — treat it as "
+                                  "no information about the chips, not as none faulted"}
+    if "nav_used" not in seen:
+        rep["navigation"] = {"note": "this log never carried nav_* records — navigation was "
+                                     "not running in that process, or the recorder predates "
+                                     "it. Not the same as navigation never answering"}
+    missing = [f for f in TLM_FIELDS if f not in seen]
+    if missing:
+        # Say it out loud rather than reporting confident zeros for signals the log
+        # never carried — an older recorder is a plausible explanation for "no snags"
+        # and the reader must not have to guess which one they are looking at.
+        rep["fields_never_logged"] = missing
+    if all(m is None for m in mags):
+        rep["heading_trust"]["note"] = "mag_cal was null throughout — no IMU answered, distinct from cal 0"
+    return rep
+
+
 # ---- timeline (§6) ---------------------------------------------------------
+def _tlm_brief(d: dict) -> str:
+    """One scannable line for a journalled telemetry record.
+
+    A tlm record carries ~25 fields; dumped whole it turns the incident timeline
+    into a wall of JSON and the operator stops reading it, which defeats the point
+    of having a timeline at all. These are the fields you actually scan for while
+    working out what killed a dive; the full record is in the raw log next to it.
+    """
+    # "?" for every reading that was not taken, so a scan down the column shows
+    # cannot-tell as one recognisable shape rather than as the word None appearing
+    # in six different spellings. It is NOT interchangeable with a number: `depth=?`
+    # is the sensor saying nothing, and it is exactly what the eye must catch.
+    def q(key):
+        v = d.get(key)
+        return "?" if v is None else v
+
+    parts = [
+        "ARMED" if d.get("armed") else "safe",
+        f"depth={q('depth')}",
+        f"hdg={q('heading')}",
+        f"leak={d.get('leak_state')}",
+        f"batt={q('battery_v')}({d.get('battery_band')})",
+        f"ball={q('ballast_level')}",
+        f"spd={q('speed_ms')}/{q('speed_src')}",
+    ]
+    for flag, tag in (("snagged", "SNAGGED"), ("gyro_only", "gyro-only"),
+                      ("ballast_needs_rehome", "REHOME")):
+        if d.get(flag):
+            parts.append(tag)
+    if d.get("leak_probe_fault"):
+        parts.append("probe-fault=" + str(d["leak_probe_fault"]))
+    # The named chips ride on the same line as the blanks they caused, so a reader
+    # scanning an incident does not have to correlate "depth=?" with a separate
+    # record to find out that the MS5837 had stopped answering.
+    if d.get("sensor_faults"):
+        parts.append("DEAD=" + ",".join(str(c) for c in d["sensor_faults"]))
+    if "nav_used" in d and not d["nav_used"]:
+        parts.append("nav-quiet")
+    if d.get("n_changes"):
+        parts.append(f"(+{d['n_changes']} coalesced)")
+    return " ".join(parts)
+
+
 def timeline(nav, client, around: float, window: float) -> list[str]:
     merged = merge(nav, client)
     lo, hi = around - window * 1000, around + window * 1000
@@ -293,7 +610,11 @@ def timeline(nav, client, around: float, window: float) -> list[str]:
         d = r.get("d", "")
         cid = (" [" + r["c_id"][:8] + "]") if r.get("c_id") else ""
         col = f"{r['at']:.1f}"
-        row = f"{col:>14}  {tag}  {r.get('e','?'):<16}{cid} {json.dumps(d, separators=(',',':')) if d else ''}"
+        if r.get("e") in ("tlm", "tlm_state") and isinstance(d, dict):
+            body = _tlm_brief(d)
+        else:
+            body = json.dumps(d, separators=(",", ":")) if d else ""
+        row = f"{col:>14}  {tag}  {r.get('e','?'):<16}{cid} {body}"
         lines.append(row)
     return lines
 
@@ -316,6 +637,11 @@ def main(argv=None) -> int:
     dv = sub.add_parser("diverge", parents=[common], help="report where the two logs disagree")
     dv.add_argument("session")
 
+    tm = sub.add_parser("telemetry", parents=[common],
+                        help="replay recorded vehicle state: leak stages, ballast truth, "
+                             "speed source, snags, heading trust, battery bands")
+    tm.add_argument("session")
+
     tl = sub.add_parser("timeline", parents=[common], help="side-by-side text timeline around an incident")
     tl.add_argument("session"); tl.add_argument("--around", type=float, required=True)
     tl.add_argument("--window", type=float, default=30.0)
@@ -336,6 +662,14 @@ def main(argv=None) -> int:
         print(_fmt(rep))
         return 0
 
+    if args.cmd == "telemetry":
+        # One-sided on purpose: this is what the VEHICLE reported, so it needs the Pi
+        # log only. It answers even when no client ever connected — which is exactly
+        # the session the recorder was changed to keep.
+        nav_p, _cli_p = session_files(args.session, args.log_dir)
+        print(_fmt(telemetry_report(load_jsonl(nav_p))))
+        return 0
+
     if args.cmd == "timeline":
         nav_p, cli_p = session_files(args.session, args.log_dir)
         for line in timeline(load_jsonl(nav_p), load_jsonl(cli_p), args.around, args.window):
@@ -353,6 +687,10 @@ def main(argv=None) -> int:
                 z.write(cli_p, cli_p.name)
             z.writestr("merge.jsonl", "\n".join(json.dumps(r, separators=(",", ":")) for r in merge(nav, cli)))
             z.writestr("diverge.json", _fmt(diverge(nav, cli)))
+            # The vehicle's own story goes in the incident zip too: "the link was
+            # fine and the sub was snagged with a flooding hull" is one answer, and
+            # diverge.json alone can only ever tell you about the link.
+            z.writestr("telemetry.json", _fmt(telemetry_report(nav)))
             # config + dive track, best-effort
             for extra in ("config.py",):
                 cp = Path(__file__).resolve().parent.parent / extra

@@ -1,3 +1,26 @@
+# NEPTUNE api dependencies.
+#
+# HOW TO INSTALL THEM. Not by hand, and not into your system python: the sections below
+# are for different machines, and only one command per machine picks the right ones.
+#
+#   python bootstrap.py --dev     LAPTOP. Builds <repo>/.venv and installs the core and
+#                                 bench sections into it. api/tests/run.py then finds
+#                                 that venv on its own and re-runs itself under it, so
+#                                 there is nothing to activate and nothing to remember.
+#   sudo bash install.sh          PI. Builds /opt/neptune/api/.venv the same way, minus
+#                                 Pillow (the vehicle has a real camera), and points
+#                                 the systemd unit at it.
+#
+# WHY THIS NOTE EXISTS. The bench python has never had fastapi or pydantic in it, and on
+# a clean checkout `python api/tests/run.py` cannot import two of its four suites. Every
+# working session so far answered that by building a throwaway venv by hand and deleting
+# it again, which left the next person facing exactly the same wall and no record of the
+# way past it. The way past it is the one line above.
+#
+# NOTHING BELOW IS INSTALLED BY `python bootstrap.py` ON ITS OWN. That run is read-only
+# by design; it reports which of these are present and prints the command, and you
+# decide. See the API CORE LIBRARIES section of its output.
+
 # --- core (laptop + Pi) ---
 fastapi>=0.110
 uvicorn[standard]>=0.29     # includes the websockets + httptools extras
@@ -12,3 +35,22 @@ Pillow>=10.0
 # --- Pi only (NOT pip-installable — install via apt) ---
 # sudo apt install -y python3-picamera2
 # picamera2 provides the real CSI camera MJPEG feed.
+
+# --- Pi only (pip-installable, but DO NOT install on the bench) ---
+# RealHardware imports every one of these lazily, inside the class, so the bench
+# never needs them: NEPTUNE_HW=auto falls back to MockHardware and the server
+# runs untouched on a laptop with no GPIO. They are listed (and pinned) here
+# rather than installed by default because adafruit-blinka drags in a board
+# detection stack that is meaningless off a Pi, and on Windows it does not build
+# at all — installing it to satisfy a requirements file would break the one
+# machine this code is written on.
+#   sudo apt install -y python3-libgpiod        # gpiozero's pin backend on Pi OS
+#   pip install "gpiozero>=2.0" "smbus2>=0.4" \
+#               "adafruit-blinka>=8.20" "adafruit-circuitpython-bno08x>=1.2.4"
+# gpiozero                       GPIO: H-bridges, A4988 STEP/DIR, limit switches,
+#                                leak probes, paddlewheel + spool interrupts.
+# smbus2                         I2C: MS5837-30BA depth (0x76), INA219 (0x40).
+# adafruit-circuitpython-bno08x  BNO085 (0x4A). Not a register map — the part
+#                                speaks SHTP, a framed report protocol, so this
+#                                is a driver we use rather than one we write.
+# adafruit-blinka                board/busio shim the bno08x driver imports.

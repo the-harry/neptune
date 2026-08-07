@@ -29,7 +29,16 @@ const ACTIONS = {
   light_white_toggle: { label:'White light toggle', kind:'edge', run:()=>toggleLight('white') },
   cam_record_toggle:  { label:'Camera REC toggle',  kind:'edge', run:()=>{ if(typeof camRecordToggle==='function') camRecordToggle(); } },
   cam_capture:        { label:'Camera PICTURE',     kind:'edge', run:()=>{ if(typeof camCapture==='function') camCapture(); } },
-  sim_leak_test:      { label:'Leak test (sim)',    kind:'edge', run:()=>{ state.simLeak=!state.simLeak; LOG.input('sim leak ->', state.simLeak); } },
+  // Cycles the whole two-probe ladder — dry -> water collecting -> flooding -> dry —
+  // because WARN is the stage nobody would ever have seen before the afternoon it
+  // mattered, and an advisory whose look has never been rehearsed is an advisory that
+  // gets read as an alarm. SIM only: it moves nothing on a real vehicle.
+  sim_leak_test:      { label:'Leak test (sim)',    kind:'edge', run:()=>{
+                          const ladder=['NORMAL','WARN','FLOOD'];
+                          const next=ladder[(ladder.indexOf(state.simLeakStage)+1) % ladder.length];
+                          state.simLeakStage=next;
+                          state.simLeak = next!=='NORMAL';     // kept in step for anything still asking the one-bit question
+                          LOG.input('sim leak ->', next); } },
   ballast_fill:       { label:'Ballast FILL (hold)',  kind:'hold' },
   ballast_empty:      { label:'Ballast EMPTY (hold)', kind:'hold' },
   // Dedicated, independent brightness — up/down = WHITE, left/right = GREEN (still toggled by LB/RB)

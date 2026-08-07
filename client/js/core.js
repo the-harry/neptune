@@ -148,11 +148,24 @@ const state = {
   camAp:null,                   // launcher /__wifi: can THIS handheld see the camera's AP
   piProbe:null,                 // /api/healthz: does the sub ANSWER, control link aside
   net:null,                     // launcher /__net: this handheld's own radios and cables
-  // WHEN each measured quantity last actually arrived. Not when telemetry arrived -
-  // a frame with no `depth` field leaves state.depth holding its last value, which on
-  // a sub with no depth sensor is a number from the simulator. These stamps are what
-  // let the readouts colour themselves from a sensor or not at all.
-  depthAt:0, pressureAt:0,
+  // WHEN a NUMBER for each measured quantity last actually arrived. Not when telemetry
+  // arrived - a frame with no `depth` field leaves state.depth holding its last value,
+  // which on a sub with no depth sensor is a number from the simulator. These stamps
+  // are what let the readouts colour themselves from a sensor or not at all.
+  //
+  // READ THE WORD *NUMBER* ABOVE. These used to be stamped on every arriving frame,
+  // which made them a measure of the LINK and not of the sensor - so an MS5837 that
+  // died mid-dive, whose driver hands back its last cached reading forever, kept these
+  // stamps perfectly fresh at 15 Hz while measuring nothing. net.js now stamps them
+  // only when a real number arrives, and the readouts gate on the VALUE first (see
+  // viewFromState): a null depth is cannot-tell no matter how new the frame is.
+  //
+  // batteryAt joined them because the PACK IS A SENSED READING TOO and was the last one
+  // still being treated as a fact of nature. The INA219 measures it, the INA219 can
+  // stop, and until this round a vehicle that dropped `battery_v` left the previous
+  // voltage sitting on the bar wearing its full band colour - the frozen-MS5837 failure
+  // again, on the one gauge whose colour tells the operator to surface.
+  depthAt:0, pressureAt:0, headingAt:0, batteryAt:0,
   source:'keyboard', /* keyboard | gamepad */
   gamepadIndex:null,
   keys:new Set(), padPrev:{},
@@ -169,10 +182,62 @@ const state = {
   levelDirty:{ green:false, white:false },
   magnet:false, armed:true,
   ballastLevel:0, ballastTarget:0,
-  depth:1.28, pressure:14.7, heading:284, batteryV:24.8,
+  // BALLAST TRUTH. The syringe is an open-loop stepper with no position sensor, so
+  // from power-on until it has been driven onto the EMPTY limit switch its position
+  // is not 0 and not 50% - it is genuinely unknown, and any number drawn there is
+  // invented. These start TRUE because the SIMULATOR's tank is a modelled quantity
+  // that really is known; only a real vehicle reporting ballast_level: null (or
+  // ballast_homed: false) can take that away.
+  ballastKnown:true, ballastHomed:true, ballastRehome:false,
+  // These three are numbers here because the SIMULATOR owns them until a hull does.
+  // From a hull any of them may arrive as null, and null means "the chip behind this
+  // has stopped answering" - not zero, not the last one. See net.js.
+  depth:1.28, pressure:14.7, heading:284,
+  // 2S Li-ion: 8.4 V charged, 7.4 V nominal, 6.0 V floor. The old 24.8 V start was
+  // a number from a pack this sub does not have, and it silently made every battery
+  // threshold on the console wrong while looking entirely plausible.
+  batteryV:8.3,
   cpuC:null, ramPct:null, diskGb:null,   // Pi system metrics (from telemetry)
   left:0, right:0,
-  leak:false, simLeak:false, alarmLeak:false,
+  leak:false, simLeak:false,
+  // THE LATCHED ALARM CARRIES ITS STAGE. It used to be a bool, which could only ever
+  // mean FLOOD - so a `leak_warn` frame had nowhere to land and the weaker warning
+  // died with the socket it arrived on. 'NORMAL' | 'WARN' | 'FLOOD', raised by
+  // latchLeakAlarm() and cleared only by the vehicle itself reporting NORMAL.
+  alarmLeakStage:'NORMAL',
+  // THE LEAK LADDER. Two probes 2 cm apart: the lower one wet = WARN (water is
+  // collecting), the upper one wet = FLOOD. simLeakStage is the bench rehearsal of
+  // the same ladder (the "Leak test (sim)" action), because WARN is the stage nobody
+  // would ever see before it mattered.
+  leakState:'NORMAL', simLeakStage:'NORMAL', leakProbeFault:null,
+  // §5 readings that are allowed to say CANNOT-TELL. null is not 0 here: a null
+  // speed means the paddlewheel is stalled, stale or not fitted, and a null mag_cal
+  // means no IMU answered at all - which is a different fault from an IMU answering
+  // "uncalibrated" (0), and the operator has to be able to tell them apart.
+  speedMs:null, speedSrc:null,      // speedSrc: lut | paddle | kf-lut | kf-paddle
+  // SNAG AND GYRO-ONLY ARE TRI-STATE, and that is a change of kind, not of degree.
+  // They are NAVIGATION's answers (api/main.py fill_nav_fields), and navigation can
+  // now say three different things: true = it looked and the sub is pinned, false =
+  // it looked and it is not, null = IT CANNOT TELL - not started, between dives,
+  // sensor bus down, loop dead. The two false answers are the REASSURING ones, so
+  // reading a null as false makes a subsystem's death look like good news.
+  // They start false because the SIMULATOR is genuinely not snagged and has no gyro
+  // to coast on; only a hull can make them null.
+  snagged:false, gyroOnly:false, magCal:null, currentA:null,
+  // WHAT NAVIGATION LAST *DEFINITELY* SAID, kept because a null must not be able to
+  // clear a standing alarm in silence. navAnswered is false until nav commits to a
+  // real true/false, so a hull that never had an estimator stays quiet instead of
+  // wearing a permanent "nav is down" chip; snagStood remembers that the last
+  // committed answer was a SNAG, so if nav goes quiet while the sub is pinned the
+  // alert says the alarm can no longer be confirmed rather than just vanishing.
+  // Both are reset on every fresh link (net.js onopen) - they describe THIS dive.
+  navAnswered:false, snagStood:false,
+  // WHICH CHIPS HAVE STOPPED ANSWERING, by the vehicle's own name for them
+  // ("ms5837", "bno085", "ina219", "i2c"). The hull has always known this and nothing
+  // carried it topside, so a blanked readout could never say WHY it was blank - and a
+  // number that has gone missing with no cause given reads as a console bug, which is
+  // the one reading of it that does not send anybody to check the wiring.
+  sensorFaults:[],
   realTel:null, realTelAt:0,
   mode:'sim', /* sim | real | stale */
   surfaceUntil:0,
@@ -220,6 +285,314 @@ function vehicleLinked(){
    yet RealHardware refuses to start and `auto` falls back to the bench simulator.
    Used to SAY SO on the radar — never to fill the gap in with a guess. */
 function vehicleHasSensors(){ return !!(state.realTel && state.realTel.mock !== true); }
+
+/* Is the vehicle's last word still worth believing?
+
+   Deliberately LOOSER than vehicleLinked(). That one is the 1 s rule that forbids
+   synthesising anything over a live dive. This is the question the cannot-tell
+   readouts ask: "did a real hull tell us this, recently enough to still show it" —
+   and its window is the same one main.js uses before handing back to the simulator,
+   so a reading and the STALE badge that qualifies it always agree. Without it a
+   vehicle that flooded and then dropped off the link would keep the console red
+   forever, and every sim session that followed a real one would inherit the last
+   dive's snag, mag fault and leak. */
+function vehicleRecent(){
+  return !!(state.realTel && (Date.now()-state.realTelAt) < (CONFIG.simFallbackMs || 3000));
+}
+
+/* THE LEAK, IN TWO STAGES (§5).
+
+   Two probes: one on the floor of the hull, one 2 cm above it. Wet-low is WARN —
+   condensation, a weeping gland, a splash down the tether — and the answer is to
+   finish up and come home. Wet-high is FLOOD, and the answer is to surface now.
+   Collapsing them into one boolean threw away the only distinction the operator
+   can act differently on.
+
+   WHY THERE IS A LATCH AT ALL: the flood that sinks the sub is also what shorts the
+   tether, so the last thing this console ever hears about it is the alarm frame. With
+   nothing holding that, telemetry goes stale ~3 s later, the readout falls back to the
+   simulator and repaints the green "both probes dry" drop - a positive health claim
+   about a hull that is filling with water. So an alarm LATCHES, and only the vehicle
+   saying NORMAL again can retire it (net.js).
+
+   The latch carries a STAGE, because the vehicle now raises two different alarms
+   (api/rov.py leak_alarm_edges -> `leak_warn` / `leak_flood`) and they ask for
+   opposite reactions. Only the legacy bare `leak` name carries no stage, and THAT one
+   is still read as FLOOD: over-warning costs a cancelled dive, under-warning costs the
+   sub. */
+const LEAK_RANK = {NORMAL:0, WARN:1, FLOOD:2};
+/* Wire name -> the stage it latches. `leak` is a pre-two-stage Pi (older vehicle, same
+   console): stageless, so it takes the worse reading. */
+const LEAK_ALARM_STAGE = {leak_flood:'FLOOD', leak_warn:'WARN', leak:'FLOOD'};
+function latchLeakAlarm(stage){
+  // Raise only. A WARN arriving after a FLOOD must not talk the console down off the
+  // flood - the water receding past one probe is not the emergency ending, and the
+  // vehicle is not required to re-announce FLOOD for us to keep showing it.
+  if((LEAK_RANK[stage]||0) > (LEAK_RANK[state.alarmLeakStage]||0)) state.alarmLeakStage=stage;
+}
+function leakStage(){
+  const latched = state.alarmLeakStage || 'NORMAL';
+  const s = vehicleRecent()
+          ? state.leakState
+          : (state.simLeakStage || (state.simLeak ? 'FLOOD' : 'NORMAL'));
+  const live = (s==='FLOOD' || s==='WARN') ? s : 'NORMAL';
+  // The WORSE of the two, never one instead of the other: a latched WARN has to
+  // survive the link dropping, and it must never be able to sit on top of a FLOOD the
+  // vehicle is reporting right now.
+  return (LEAK_RANK[live] >= LEAK_RANK[latched]) ? live : latched;
+}
+
+/* THE PACK, IN BANDS (§5). 2S Li-ion, and the ONLY thing allowed to colour the
+   voltage: one colour, one meaning. A missing voltage returns no colour at all
+   rather than a healthy green - an absent sensor must never read as a good pack. */
+function batteryBand(v){
+  const B = (typeof CONFIG!=='undefined' && CONFIG.battery) || {};
+  if(v==null || !isFinite(v))
+    return {key:'none', color:null,
+            text:'no pack voltage is arriving, so this is NOT tracking the battery'};
+  if(v < (B.critV||6.6))
+    return {key:'crit', color:'var(--error)',
+            text:'CRITICAL - below '+(B.critV||6.6)+' V. Surface now; '+(B.floorV||6.0)+' V damages the cells'};
+  if(v < (B.warnV||7.0))
+    return {key:'warn', color:'var(--hazard)',
+            text:'low - under '+(B.warnV||7.0)+' V. Plan the way home'};
+  return {key:'ok', color:'var(--tertiary)',
+          text:'healthy - '+(B.warnV||7.0)+' V or better ('+(B.fullV||8.4)+' V is a full charge)'};
+}
+
+/* DID A NUMBER ARRIVE RECENTLY for this reading?
+
+   The second half of the cannot-tell test, and deliberately the SECOND half. The first
+   is simply "is the value there", because the vehicle now sends null for a reading
+   whose sensor has stopped. This one catches the older shape of the same failure: a
+   hull that drops the field altogether rather than nulling it, which leaves the last
+   value sitting in `state` looking exactly like a live one.
+
+   It is NOT a test of the link. It asks about a stamp that only a real number writes
+   (net.js), which is the distinction the frozen-MS5837 dive turned on: the frames were
+   arriving at 15 Hz, and they were carrying the same 4.33 m every time. */
+function sensorFresh(at){ return !!at && (Date.now()-at) < (CONFIG.staleTimeoutMs||1000); }
+
+/* WHAT THE VEHICLE CALLS THE CHIP THAT STOPPED, turned into a sentence an operator can
+   act on. Telemetry carries the bare keys api/hardware.py raises internally
+   ("ms5837", "bno085", "ina219", "i2c"); the console owes the person holding it the
+   English, because "ms5837" is a part number and "the depth sensor has stopped
+   answering" is an instruction to go and look at a specific cable.
+
+   Each entry carries BOTH forms because both are needed and neither substitutes for the
+   other: `short` is what fits on an alert chip the operator reads at a glance while
+   driving, `long` is the sentence in the tooltip. Both lead with the JOB and carry the
+   part number second - "depth sensor", never "ms5837" on its own. */
+const SENSOR_CHIPS = {
+  ms5837: { short:'DEPTH SENSOR',   long:'the MS5837 depth/pressure sensor' },
+  bno085: { short:'COMPASS',        long:'the BNO085 compass/IMU' },
+  ina219: { short:'PACK MONITOR',   long:'the INA219 pack monitor (voltage and current)' },
+  i2c:    { short:'I2C BUS',        long:'the whole I2C bus (so every chip on it)' },
+  // NOT A CHIP AT ALL, and it reaches this list anyway: api/hardware.py unions its
+  // latched subsystem faults into sensor_faults(), and "ballast-limits" (both limit
+  // switches reading triggered at once, which is electrically impossible) is one of
+  // them. Left out of this table it fell through to a bare uppercase part-number
+  // rendering of a name that is not even a part.
+  'ballast-limits': { short:'BALLAST SWITCHES',
+                      long:'the syringe’s two limit switches, which are both reading '
+                         + 'triggered at once - wiring, not water' }
+};
+/* WHAT A NAME THIS CONSOLE HAS NEVER HEARD OF STILL MEANS.
+
+   The vehicle owns this vocabulary and may grow it (a second depth sensor, a tilt
+   sensor, a new latched subsystem fault) without the handheld being updated in the
+   same breath - the two are flashed separately and routinely disagree by a version.
+   An unknown name must therefore still arrive as a sentence: the console cannot say
+   what the part DOES, but it can always say what the fault means, which is that the
+   vehicle has stopped believing that part and anything it measured is not on screen.
+   The old fallback was `'the ' + c.toUpperCase()` - "the TSYS01" - which is the exact
+   failure this table exists to prevent, just spelled in capitals. */
+function chipMeans(c){
+  const d = SENSOR_CHIPS[c];
+  if(d) return d;
+  return { short: String(c).replace(/[-_]/g,' ').toUpperCase(),
+           long: 'a part the vehicle calls “' + c + '”, which this console has no plain '
+               + 'name for (it is newer than this handheld - see docs/hardware.md)' };
+}
+/* Which chips stand behind each reading. A dead I2C bus takes everything on it down at
+   once, so it stands behind all of them - naming only the chip would have the console
+   report several unrelated sensor failures for one unplugged connector.
+
+   THE PACK IS ON THIS LIST NOW. It was the one measured reading with no entry, so a
+   dead INA219 blanked nothing and explained nothing: the console showed a confident
+   red "BATTERY 0.0V - SURFACE" invented entirely by the absent sensor, while "ina219"
+   sat in sensor_faults with nowhere on screen to be read. A cannot-tell default that
+   is itself a measurement is not a cannot-tell, and 0.0 V is a measurement - an
+   impossible one, from a vehicle that is plainly powered enough to be transmitting. */
+const SENSOR_BEHIND = { depth:['ms5837','i2c'], pressure:['ms5837','i2c'], heading:['bno085','i2c'],
+                        battery:['ina219','i2c'], current:['ina219','i2c'] };
+function normalizeFaults(v){
+  // Tolerant on the wire, strict in here: a list is the shape, but a single string
+  // ("ms5837") or a joined one must not be silently read as no faults at all.
+  if(v==null) return [];
+  const list = Array.isArray(v) ? v : String(v).split(/[,\s]+/);
+  return list.map(x=>String(x==null?'':x).trim().toLowerCase()).filter(Boolean);
+}
+/* The sentence naming what killed a reading, or '' if the vehicle did not say. Never
+   REQUIRED for the reading to go cannot-tell — a null value is the whole evidence for
+   that. This only supplies the cause, so a vehicle too old to report faults still
+   blanks the number rather than showing a frozen one. */
+function faultChips(kind, faults){
+  const list = faults || state.sensorFaults || [];
+  if(!list.length) return [];
+  return (SENSOR_BEHIND[kind]||[]).filter(c=>list.indexOf(c)>=0);
+}
+function faultCause(kind, faults){
+  return faultChips(kind, faults).map(c=>chipMeans(c).long).join(' and ');
+}
+/* THE VEHICLE HAS ALREADY ADMITTED THIS ONE IS NOT ANSWERING.
+
+   Asked of a reading that arrived as a NUMBER, and the reason it has to be asked is
+   that the number and the fault list are two readings of one verdict which can only
+   ever disagree in one direction: the hull naming a chip while still shipping a value
+   measured by it. That is not hypothetical - it is api/rov.py's battery path today,
+   which sends `battery_v=0.0 if volts is None`, puts "ina219" in sensor_faults in the
+   same frame, and leaves the console to paint an impossible 0.0 V red and shout
+   SURFACE. Any cached-last-good reading behind a dead chip has the same shape.
+
+   So the fault list is allowed to VETO a number, never to invent one. A vehicle too
+   old to report faults sends an empty list and nothing here fires; the null on the
+   reading itself remains the primary and sufficient evidence. */
+function faultedNow(kind, faults){ return faultChips(kind, faults).length > 0; }
+/* Faults the screen has NOT already accounted for by blanking something.
+
+   Every name the vehicle sends has to be readable somewhere, or the fix is half a fix:
+   a blank the operator cannot explain reads as a dashboard bug, and a fault that blanks
+   nothing at all - "ballast-limits", or any name newer than this handheld - is worse
+   still, because it is a vehicle shouting into a console that drops it on the floor.
+   `explained` is the chips already named beside a blanked reading; whatever is left
+   gets a chip of its own rather than being swallowed. */
+function unexplainedFaults(faults, explained){
+  const list = faults || state.sensorFaults || [];
+  return list.filter(c=>explained.indexOf(c) < 0);
+}
+
+/* Is this speed a MEASUREMENT or an ESTIMATE? The paddlewheel-backed sources are
+   the only ones that watched water go past; the LUT ones are the throttle curve
+   talking, which is exactly what a snagged sub also reports. An estimate never
+   dresses as a measurement, so everything downstream keys on this. */
+function speedIsMeasured(src){ return src==='paddle' || src==='kf-paddle'; }
+
+/* HOW MUCH THE HEADING IS WORTH, in one token, used by the HUD and the map so both
+   say the same word.
+
+     ''          nothing to say: the compass is calibrated and in use
+     'mag'       mag_cal < 2 - the magnetometer is not calibrated, so the bearing
+                 is suspect (§5.6). BROKEN.
+     'gyro'      the filter is coasting on the gyro and IGNORING the compass ON
+                 PURPOSE (thrusters running, or the mag is untrusted). DELIBERATE.
+     'gyro-mag'  both - it is coasting, and the compass it would return to is not
+                 trustworthy either.
+     'nomag'     mag_cal is null: NO IMU ANSWERED AT ALL. There is no compass here
+                 to calibrate, ignore or come back to. ABSENT.
+     'dead'      the bearing itself is null: the compass ANSWERED and then STOPPED.
+                 There is no heading at all, not even a bad one. GONE.
+     'nofilter'  gyro_only is null after navigation HAD been answering: the estimator
+                 has gone quiet, so this bearing quietly stopped being the filtered
+                 one and became the raw compass, and the marks that used to qualify
+                 it are gone with it. UNQUALIFIED.
+
+   The deliberate/broken split is the whole point: an operator who reads "the
+   compass is being ignored" as "the compass is dead" turns back from a dive that
+   was working perfectly. Returns '' with no vehicle, because the simulator's
+   heading is a model and a model has no compass to distrust. */
+const HEADING_FLAGS = {
+  mag: { label:'MAG?', cls:'suspect',
+         title:'HEADING SUSPECT - the sub’s compass is not calibrated (mag_cal below 2), '
+             + 'so this bearing and the map’s rotation may be wrong. Swing the sub through '
+             + 'a few figure-eights to calibrate it.' },
+  gyro:{ label:'GYRO', cls:'gyro',
+         title:'GYRO ONLY - the heading filter is ignoring the compass ON PURPOSE, because the '
+             + 'thrusters’ magnetic field is currently stronger than the earth’s. It is '
+             + 'coasting on the spin sensor, which is accurate for a while and then drifts. '
+             + 'This is deliberate, not a fault.' },
+  'gyro-mag':{ label:'GYRO · MAG?', cls:'gyro suspect',
+         title:'GYRO ONLY, AND THE COMPASS IS UNCALIBRATED - the filter is coasting on the spin '
+             + 'sensor on purpose, and the compass it would fall back to is not trustworthy '
+             + 'either (mag_cal below 2). Treat the bearing as approximate.' },
+  // Reuses .suspect (amber), the same paint as MAG?, because both mean the same thing
+  // to the operator's hands - do not steer on this number - and a fourth colour on an
+  // 8px badge teaches nothing. The LABEL is what separates them.
+  nomag:{ label:'NO COMPASS', cls:'suspect',
+         title:'NO COMPASS - no IMU answered at all (mag_cal is null, which the protocol keeps '
+             + 'distinct from a fitted compass reporting "uncalibrated"). Nothing is measuring '
+             + 'which way the sub is pointing, so this bearing and the map’s rotation are not '
+             + 'tracking a sensor. Check the IMU wiring before believing either.' },
+  // THE COMPASS THAT WAS HERE AND STOPPED. Amber like its two neighbours, for the same
+  // stated reason - it means the same thing to the operator's hands - and the LABEL is
+  // what separates it. It does not need a mark of its own on the number, because there
+  // is no number: the bearing is rendered as a question mark (render.js renderSensed),
+  // which is a louder statement than any underline.
+  dead:{ label:'NO BEARING', cls:'suspect',
+         title:'NO BEARING - the compass answered earlier in this dive and has now stopped '
+             + '(the vehicle is sending heading: null). A BNO085 that dies freezes its last '
+             + 'heading AND its calibration score together, so the old console showed that '
+             + 'frozen bearing wearing the "calibrated and in use" mark while the sub turned '
+             + 'underneath it. Nothing is measuring direction: the number is a question mark '
+             + 'and the radar is still drawn on the LAST angle it reported. Do not steer or '
+             + 'navigate on either until the IMU is back.' },
+  // THE ESTIMATOR STOPPED ANSWERING AND THE BEARING CHANGED SOURCE UNDER THE OPERATOR.
+  // With no fresh nav state the vehicle stops stamping the filtered heading and the raw
+  // compass in the frame stands (api/main.py fill_nav_fields) — a different number, out
+  // by whatever magnetic error the thrusters are inducing, arriving with no announcement
+  // at all. Worse, the marks that qualified the old one describe the FILTER, so they go
+  // null with it: GYRO goes out, and a blank badge is this console's way of saying "the
+  // compass is calibrated and the filter is using it", which is now three separate
+  // claims none of which anybody checked. Amber and .suspect like its neighbours,
+  // because it means the same thing to the operator's hands: this is not a bearing to
+  // steer a canal wall by.
+  nofilter:{ label:'RAW COMPASS', cls:'suspect',
+         title:'RAW COMPASS - the navigation estimator has stopped answering, so this is no '
+             + 'longer its filtered heading: it is the compass reading straight off the IMU, '
+             + 'thruster interference and all. Nothing is currently judging how much it is '
+             + 'worth, and nothing is watching for a snag either. Usable to hold a rough '
+             + 'course; not to navigate on.' }
+};
+function headingFlag(){
+  if(!vehicleRecent()) return '';
+  // A NULL BEARING OUTRANKS EVERY OTHER MARK, because the others all qualify a number
+  // and here there is no number to qualify. This is the case two review passes missed:
+  // the compass that worked and then died. Its driver caches, so mag_cal froze at 3
+  // alongside the heading and 'nomag' below could never fire - the frozen bearing
+  // shipped carrying the trust mark that means "calibrated and in use".
+  //
+  // Same two-part test viewFromState() applies to the number itself (value first, stamp
+  // second), so the badge and the bearing can never disagree about whether there IS a
+  // bearing — a flag that said MAG? over a question mark would be describing a number
+  // that is not on screen.
+  if(state.heading == null || !sensorFresh(state.headingAt)) return 'dead';
+  // NO IMU outranks GYRO, and that ordering is the whole fix. On a hull with no IMU the
+  // filter reports gyro_only:true for a trivial reason - it reads mag_cal as 0 and stops
+  // trusting it - so the old code showed GYRO: "deliberate, not a fault, coasting on the
+  // spin sensor". There is no spin sensor either. That badge promised a bearing that
+  // decays gracefully when in fact nothing is measuring heading at all.
+  if(state.magCal == null) return 'nomag';
+  const suspect = (typeof state.magCal === 'number') && state.magCal < 2;
+  // === TRUE, not truthy. gyro_only is tri-state now and `!!null` is false, which is
+  // navigation's REASSURING answer put into its mouth while it is saying nothing at
+  // all. false means "the filter looked and it is using the compass"; null means the
+  // filter is not there to look, which is the 'nofilter' case below.
+  const gyro    = state.gyroOnly === true;
+  if(gyro && suspect) return 'gyro-mag';
+  if(gyro)    return 'gyro';
+  if(suspect) return 'mag';
+  // LAST, and deliberately: a definite complaint about the compass outranks the
+  // estimator's silence, because MAG? is a measured fact with an errand attached
+  // (swing the sub) while this is an absence — and the alert rail says navigation has
+  // gone quiet in words either way, so nothing is lost by yielding here.
+  //
+  // Gated on navAnswered so a hull that simply has no estimator stays clean. On those
+  // vehicles gyro_only has been null since power-on, the bearing has ALWAYS been the
+  // raw compass, and a badge that never goes out is a badge nobody reads. This fires
+  // only on the transition that main.py warns about: nav was answering, and stopped.
+  if(state.gyroOnly == null && state.navAnswered) return 'nofilter';
+  return '';
+}
 
 /* ============================================================================
    HOST RESOLUTION — default same origin; override via ?host=IP:PORT (persisted

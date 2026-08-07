@@ -6,9 +6,13 @@ Ally over an Ethernet tether to a Raspberry Pi on the vehicle.
 **Who this is for.** A single operator, outdoors, on a handheld, often with no internet,
 frequently with one subsystem broken. The vehicle is in water and cannot be paused.
 
-**The governing rule.** The console must never lie. A reading it cannot take shows `--`,
-never a plausible zero. A simulation says it is a simulation. A subsystem that is down
-says so, and says which one.
+**The governing rule.** The console must never lie. A reading it cannot take says
+cannot-tell — never a plausible zero, and never the last number it managed to take. A
+simulation says it is a simulation. A subsystem that is down says so, and says which one.
+
+"Cannot take" includes *the sensor was here and has stopped*, and a cannot-tell that is
+itself a valid reading (`0.0` heading is due north; `0.0` depth is the surface) is not a
+cannot-tell. That is **R7.6**, and it is the rule this system exists to keep.
 
 ---
 
@@ -370,6 +374,62 @@ the map does not plot my sub relative to somewhere else.
    visible without needing a fix or internet.
 7. THE origin SHALL be settable by tapping the map, which works with no internet.
 
+### R6.4 — A measured speed and an estimated one never look alike
+**As an** operator, **I want** to know whether the speed on screen was measured or inferred
+from the throttle, **so that** I do not plan a manoeuvre on a number the vehicle guessed.
+
+**Acceptance criteria**
+1. THE system SHALL carry, with every speed it reports, which source produced it.
+2. WHEN the water-speed sensor is fresh, THEN the speed SHALL be taken from it and SHALL be
+   presented as a measurement.
+3. WHEN the sensor is stale, stalled or not fitted, THEN it SHALL report unknown, SHALL NOT
+   report 0.0 m/s, AND any speed shown SHALL be presented visibly as an estimate.
+4. THE sensor SHALL NOT be asked for direction; the sign SHALL come from the commanded
+   thrust.
+5. WHEN thrust is sustained with no measured speed, THEN the system SHALL raise a distinct
+   SNAGGED warning, SHALL degrade navigation confidence, AND SHALL do so whichever estimator
+   is selected.
+6. A modelled speed SHALL NOT satisfy the snag check, because a model reports the speed the
+   throttle implies.
+
+### R6.5 — Heading survives the thrusters
+**As an** operator, **I want** the heading to stay usable while the motors are running,
+**so that** the track does not bend every time I accelerate.
+
+**Acceptance criteria**
+1. WHEN the magnetometer calibration is below the trusted level, OR thrust is high enough to
+   pollute it, THEN the magnetic heading SHALL NOT be applied.
+2. WHEN the magnetic heading is not applied, THEN the system SHALL say so distinctly, AND
+   that state SHALL read as deliberate rather than as a fault.
+3. THE filtered heading SHALL NEVER step; corrections SHALL be rate-limited, including after
+   a period of distrust.
+4. Heading differences SHALL be wrapped, so the 359°→1° crossing SHALL NOT produce a
+   correction the long way round.
+5. WHEN samples are interrupted beyond the gap threshold, THEN the system SHALL NOT integrate
+   turn rate across the gap.
+6. WHEN calibration is below the trusted level, THEN heading SHALL be flagged suspect
+   everywhere heading is shown.
+
+### R6.6 — The estimator is promoted with data, not taste
+**As a** maintainer, **I want** the choice of estimator decided by replaying real dives,
+**so that** a filter is adopted because it was better and not because it was newer.
+
+**Acceptance criteria**
+1. THE estimator SHALL be selectable by configuration alone, with no code change, AND the
+   dead reckoner SHALL remain the default.
+2. Both estimators SHALL present the same interface and SHALL share the position
+   integration, tether bound, snapping and confidence logic.
+3. THERE SHALL be a command that replays a recorded dive through either or both estimators
+   and reports track divergence, final-position delta, time spent without a trusted compass,
+   time on each speed source, and snag events.
+4. WHEN a dive contains a magnetic disturbance, THEN the filtered estimator SHALL beat the
+   dead reckoner against known ground truth; AND on a clean dive it SHALL NOT be worse beyond
+   a stated tolerance. These SHALL be the acceptance gate for adopting it.
+5. THE system SHALL NOT estimate a current vector, refit position from surface fixes, or run
+   a position-domain filter, WHILE there is insufficient observability and no real dive data
+   to validate against.
+6. Acceleration SHALL NEVER be integrated twice into position.
+
 ---
 
 ## 7. Vehicle and Pi health
@@ -396,6 +456,116 @@ fly on fabricated instruments.
 2. WHEN the system falls back to simulated hardware, THEN telemetry SHALL carry that fact and
    the dashboard SHALL show it.
 3. Logs SHALL distinguish which sensor source is in use from whether the vehicle is simulated.
+
+### R7.3 — Water in the hull is reported in two stages
+**As an** operator, **I want** "water is collecting" and "the hull is flooding" to be
+different signals, **so that** I neither surface for condensation nor keep working through a
+flood.
+
+**Acceptance criteria**
+1. THE system SHALL report a leak in three states: normal, warning and flood.
+2. WHEN the lower probe is wet, THEN the console SHALL give a non-blocking advisory carried by
+   a SHAPE change as well as a colour.
+3. WHEN the upper probe is wet, THEN the console SHALL raise the flood alarm AND prompt to
+   surface, regardless of the lower probe.
+4. THE flood presentation SHALL remain unmistakably different from a link dropout.
+5. A probe SHALL read wet for a debounce period before its stage latches, so a splash or
+   condensation SHALL NOT raise an alarm.
+6. THE two probes SHALL be independent; neither SHALL mask the other's state.
+7. AT arm time THE system SHALL report a probe whose reading is physically impossible, since
+   a dead probe otherwise reads dry forever.
+8. THE existing single leak flag SHALL remain true for EITHER stage, so a consumer that knows
+   only the flag SHALL NOT go silent.
+
+### R7.4 — The battery is read against the pack that is fitted
+**As an** operator, **I want** the voltage bands to describe this vehicle's pack, **so that**
+the gauge is capable of ever reading low.
+
+**Acceptance criteria**
+1. THE thresholds SHALL be those of the 2S pack actually fitted, AND the obsolete 24 V scale
+   SHALL NOT remain anywhere in the system, including mocks, tests and client expectations.
+2. THE console SHALL show the voltage as a number at all times.
+3. Colour SHALL come ONLY from the configured bands, AND that colour SHALL NOT be borrowed by
+   anything else.
+4. WHEN the pack falls below the critical threshold, THEN the console SHALL prompt to surface.
+5. THE documented hard floor SHALL be stated to the operator; software SHALL NOT enforce it,
+   because safing a sub mid-canal trades a damaged pack for an unrecoverable vehicle.
+6. THE thresholds SHALL be configurable without a code change.
+
+### R7.5 — Ballast position is unknown until it is homed
+**As an** operator, **I want** the syringe to admit it does not know where it is, **so that**
+I do not dive on a number derived from a step counter that was never zeroed.
+
+**Acceptance criteria**
+1. BEFORE the first homing, THE system SHALL report the ballast level as unknown, AND SHALL
+   NOT report 0, 50 % or any other plausible value.
+2. THE console SHALL present that unknown explicitly AND SHALL offer the action that resolves
+   it.
+3. WHEN homing completes against the empty end stop, THEN the counter SHALL be zeroed and the
+   level SHALL become known.
+4. Reaching either end stop SHALL stop motion in that direction immediately, including
+   mid-command.
+5. AN end-stop wire that breaks SHALL read as triggered, so a failed switch SHALL stop motion
+   rather than be silently absent.
+6. WHEN the full end stop is reached at a count disagreeing with the configured span beyond
+   the configured tolerance, THEN the system SHALL log it, flag that re-homing is needed, and
+   surface that to the operator rather than continuing to publish a level it knows is wrong.
+7. THE operator-facing behaviour of the syringe control SHALL be unchanged: 0..1 of the
+   calibrated stroke, drag up to fill.
+
+### R7.6 — A sensor that has stopped answering says so, and nothing downstream fills it in
+**As an** operator, **I want** a reading whose sensor has died to go blank rather than
+freeze at its last value, **so that** I never fly the sub on a number nobody is taking.
+
+This is the governing rule stated in full. It took four review rounds, and the design
+rationale — including why three of them missed it — is `.specs/design.md` §24.
+
+**Acceptance criteria**
+
+1. WHEN a sensor is not answering, THEN every reading derived from it SHALL be reported as
+   cannot-tell.
+2. "Not answering" SHALL cover BOTH a sensor that was never wired AND a sensor that
+   answered earlier in this dive and has since stopped. A liveness check that a
+   stopped-mid-dive sensor passes SHALL NOT be considered a liveness check.
+3. A cannot-tell SHALL NOT be represented by a value that is itself a valid reading. In
+   particular, `0.0` heading (due north), `0.0` depth (the surface), atmospheric surface
+   pressure, `mag_cal` 0 ("a compass answered and reports itself uncalibrated"), leak
+   `NORMAL` (a positive claim that the hull is dry) and `snagged` false (a positive claim
+   that the sub is moving freely) SHALL NOT be used to mean "unknown".
+4. THE last value read before a sensor stopped SHALL NOT be published as a current
+   reading, because a frozen reading and a steady one are indistinguishable on screen.
+5. A subsystem that stops answering SHALL NOT cause the console to become quieter: a
+   standing warning SHALL NOT clear itself because the subsystem that raised it has died,
+   AND a state that means "nothing looked" SHALL be distinct from one that means "it
+   looked and says no".
+6. NO stage between the sensor and the screen SHALL substitute a default for a
+   cannot-tell. THIS applies to every layer on that path — hardware abstraction, wire
+   protocol, control state, navigation sensor sampling, telemetry stitching and the
+   client — AND the property SHALL be treated as lost if any single one of them coerces.
+7. ANY change that touches this property SHALL name an owner for every file on that path,
+   AND a file on the path with no owner SHALL be treated as a defect in the change rather
+   than as an omission from the review.
+8. THE vehicle SHALL report WHICH sensor has stopped, using the same designations as the
+   wiring documentation, AND that report SHALL be derived from the same verdict the
+   cannot-tell values are, so the two SHALL NOT be able to contradict each other.
+9. AN empty fault list SHALL NOT be read as a certificate of health; the cannot-tell on
+   each individual reading SHALL remain the authoritative claim.
+10. THE console SHALL distinguish a dead sensor from a momentarily-quiet link by SHAPE and
+    not by colour alone, AND SHALL NOT present the two with the same mark.
+11. THE explanation of a blank reading SHALL name the part to go and check, because a
+    blank with no cause attached reads as a display glitch and a display glitch is
+    something an operator waits out.
+12. WHEN there is no heading, THEN the system SHALL NOT advance the plotted track, SHALL
+    NOT rotate the map onto a substituted bearing, AND SHALL state that there is no
+    bearing. A heading that is absent SHALL be presented distinctly from one that is
+    uncalibrated, one that is being ignored deliberately, and one that was never fitted.
+13. A cannot-tell SHALL NOT be written into the dive log as though it were a measurement.
+14. THE liveness rule SHALL be exercisable on a bench with no hardware and without waiting
+    on a real sensor to die, AND recovery SHALL be exercisable too: a reading that goes
+    blank SHALL return when its sensor answers again.
+15. THERE SHALL be a check that crosses the whole path in one go — a sensor stopped at the
+    hardware end, and what reaches the client asserted at the other — since every layer
+    passing its own tests is what allowed this to ship three times.
 
 ---
 

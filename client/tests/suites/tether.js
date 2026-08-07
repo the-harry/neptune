@@ -10,8 +10,15 @@
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const keys=(...k)=>{ state.keys.clear(); k.forEach(c=>state.keys.add(c)); };
   function tel(mock, heading){
+    // A vehicle with nothing else wrong with it, because every check below is about the
+    // CABLE and a second alarm in the corner of the picture is noise. 8.1 V is a healthy
+    // 2S pack (8.4 V full, amber under 7.0, red under 6.6) — the 24.5 V this used to send
+    // was a pack that was never built, and on the real bands it never stops reading FULL.
+    // ballast_homed says the syringe has been on its empty stop, which is what makes the
+    // 0 mean "empty" rather than "an un-homed stepper's count happens to be zero".
     return {type:'telemetry', mock:mock, heading:heading, depth:0, pressure:14.7,
-            ballast_level:0, ballast_target:0, battery_v:24.5, left:0, right:0, armed:false,
+            ballast_level:0, ballast_homed:true, ballast_target:0, battery_v:8.1,
+            left:0, right:0, armed:false,
             magnet:false, light_green:false, light_white:false, leak:false};
   }
   let feed=null;

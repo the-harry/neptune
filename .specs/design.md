@@ -27,10 +27,12 @@ So the client treats every one of them the same way:
 3. **Say so, in one glance.** Every instrument has exactly one indicator, and the
    indicator changes *shape*, not just colour, so it survives sunlight, a cracked screen
    and an operator who is also driving.
-4. **Never invent its reading.** A missing number is `--`, never `0`. A vehicle that
-   cannot measure its heading does not get a heading drawn for it. This rule has been
-   broken twice in this repo and both times it produced a console that looked healthy
-   while hiding the failure it existed to show.
+4. **Never invent its reading.** A missing number is a cannot-tell, never `0`. A vehicle
+   that cannot measure its heading does not get a heading drawn for it. This rule has
+   been broken repeatedly in this repo and every time it produced a console that looked
+   healthy while hiding the failure it existed to show. **§24 is the full statement of
+   it** — including the two ways it kept getting broken by people who believed they were
+   obeying it.
 5. **Degrade to the next mechanism, automatically.** No retry buttons, no dialogs, no
    asking. The operator has a sub to fly.
 
@@ -693,7 +695,21 @@ shipping client byte for byte plus that tag, so the suites drive the same `MAP`,
 `STATUS`, `CONFIG` and `state` the operator drives. Standard library and an installed
 Chrome — no framework, no dependencies, matching the client's own rule.
 
-Twelve suites, 286 checks, ~110 s, exit 0 only if every one passes.
+Twelve suites, **295 checks, ~114 s**, exit 0 only if every one passes. Measured
+2026-08-07: `295/295 checks passed in 114s across 12 suites`. Re-measure it by running
+it. Four different totals for this one suite have been in circulation at once — 214 in
+`bootstrap.py`, 249 in `client/tests/README.md`, 286 here and in `client/README.md`, 295
+in reality — because each was copied forward from whichever tree the writer had open. A
+count that disagrees with what scrolls past does not just misinform; it teaches the reader
+to stop believing the document.
+
+The api has its own runner of the same shape (`api/tests/run.py`): **four suites, 147
+checks**, ~1 s. Measured 2026-08-07: `147/147 checks passed in 1s across 4 suites`. Its
+count is quoted with the condition attached because it changes with the machine — in a
+python with no `pydantic`, `replay` and `telemetry` never load at all and the run
+reports `100/103 checks passed in 0s across 2 of 4 suites`, verdict **INCOMPLETE**, exit
+**2**. That is deliberate: a suite that failed is a finding, a suite that never loaded is
+an *absence* of findings, and the two must not add up into one reassuring total.
 
 ### The visual layer, and why its tolerance is measured
 
@@ -883,3 +899,471 @@ system: topside needs a browser and the launcher, the vehicle needs `install.sh`
 Deliberately **read-only** unless asked (`--dev` builds the API venv, `--test` runs the
 suites) — a bootstrap that silently installs things is one you cannot run just to find out
 where you stand, which is the main reason to have one.
+
+It also reports the **Pi-only hardware libraries** (`gpiozero`, `smbus2`, the BNO085
+driver) present/absent, and installs none of them. Their absence on the bench is *correct*:
+every hardware import is lazy inside `RealHardware`, and `NEPTUNE_HW=auto` then lands on the
+flagged simulator. On the Pi the same absence is the difference between a real dive and a
+simulated one presented as real, so there — and only there — it counts as missing.
+
+---
+
+## 20. The estimator (`NAV_FILTER`)
+
+Two estimators, one interface (`update(SensorSample) -> NavState`), selected by config
+alone:
+
+| `NAV_FILTER` | Backend | What differs |
+|---|---|---|
+| `dr` *(default)* | the existing `DeadReckoner` | nothing — behaviour untouched |
+| `filtered` | the same dead reckoner | only its **heading and speed inputs** are filtered |
+
+The position integration, the tether clamp, snapping and the confidence logic are the same
+code in both. The filter does not get to move the sub; it gets to decide what heading and
+what speed the sub is moved *with*. That boundary is deliberate: the parts that have been
+exercised in the field stay exactly as they are, and the new maths is confined to two
+scalars whose quality can be measured against a log.
+
+**`dr` stays the default, and the reason is not conservatism.** There are no real dive logs
+yet. A filter tuned against the simulator has been validated against its author's
+assumptions about the water, which is the one thing the simulator cannot know. Promotion is
+therefore a decision made **with data** — `python -m nav.cli replay <log> --filter both`,
+§20.5 — and it is an environment variable, so a bad dive is undone by a restart rather than
+by a revert.
+
+### 20.1 Heading — a complementary filter, never a step
+
+The BNO085's fused yaw is polluted by the thrusters' own magnetic field; the simulator
+models 22° of error at full throttle, and it is modelled because it is real. The gyro is
+immune to magnetism and drifts. So: integrate the gyro short-term, and correct toward the
+magnetic heading **only when the magnetic heading is worth believing**.
+
+Per tick, `dt = s.t - prev_t`:
+
+1. **Predict** — `h ← (h + (gyro_z_dps − b)·dt) mod 360`.
+2. **Trust gate** — trusted ⟺ `mag_cal ≥ 2` **and** `thrust_level < 0.5`, where
+   `thrust_level = max(|left|, |right|)` — the **actual output**, not the command, so a
+   disarmed sub reads as zero thrust and the compass is believed.
+3. **Innovation** — `e = wrap180(mag_heading − h)`.
+4. **Correct, only when trusted** — `alpha = dt/(tau+dt)` with `tau = 2.0 s`, the correction
+   **slew-capped to ±5 °/s · dt**. Even a large accumulated error walks back smoothly. On
+   re-entering trust there is no snap; the same capped blend handles re-convergence.
+5. **Learn the bias** only while trusted and `|e| < 10°`: `b ← clamp(b − k_b·e·dt, ±3 °/s)`,
+   `k_b = 0.01/s`. Learning a bias from a disturbed compass teaches the gyro the
+   disturbance, which it then coasts on.
+   **The minus sign is deliberate — read this before "fixing" it.** The predict step
+   *subtracts* `b`, so `b` must converge on the gyro's own offset. Stationary sub at 100°,
+   gyro reading a steady +2 °/s of pure bias: with `b = 0` the prediction walks `h` to 102
+   while the compass still says 100, so `e = wrap180(100 − 102) = −2`. The bias needed is
+   `+2` and `e` is negative, so the correction has to run *against* `e`. Written the other
+   way round the feedback is positive and `b` diverges to its clamp over about a minute,
+   taking the heading with it.
+6. **Expose `gyro_only = not trusted`**, so the console can say the compass is being ignored
+   *on purpose*.
+
+`h` initialises from the first sample's `heading_deg` **regardless of trust**: a wrong start
+converges, an unset start is NaN poison that spreads through every downstream number.
+
+A `dt > 0.5 s` is a gap, not a long tick: re-seed from the magnetic heading if trusted, else
+hold, and do **not** integrate across it. Integrating a gyro across a stall means the drift
+of the stall is added to the map as travel.
+
+**Every subtraction of two headings goes through `wrap180`.** The 359→1 crossing is the
+classic bug in this whole class of code, it produces a 358° innovation that the slew cap
+then walks the wrong way round the circle for a minute, and there is an explicit unit test
+for it.
+
+### 20.2 Speed — one 1-D Kalman filter, and only one
+
+State `x = [v, b_a]` — water-relative forward speed, and forward-accelerometer bias.
+`P` init `diag(0.25, 0.01)`. Predict integrates `accel_fwd − b_a` once; `Q =
+diag(σ_a²·dt², q_b·dt)` with `σ_a = 0.15 m/s²`, `q_b = 1e-4`.
+
+Exactly **one measurement per tick**, `H = [1, 0]`:
+
+| Condition | `z` | `R` | Why |
+|---|---|---|---|
+| paddlewheel fresh | `sign(throttle) · speed_ms_measured` | `max(0.03, m_per_pulse/window)²` | the wheel is coarse at low pulse counts and the filter must know that |
+| stale **and** `\|throttle\| < 0.1` | `0` | `0.05²` | a stopped, unpowered sub is genuinely stopped — this is what kills accel-bias drift at rest |
+| stale **and** `\|throttle\| ≥ 0.1` | `lut.speed(throttle)` | `(0.3·\|z\| + 0.1)²` | the LUT is a **weak prior**, never a crisp measurement |
+
+`sign(v)` is clamped to follow the throttle (the wheel is directionless) and `|b_a| ≤ 0.5`.
+
+**§2.2 compliance, because this looks like a violation and is not.** Acceleration is
+integrated **once**, into velocity, inside a filter whose velocity is continuously corrected
+by a measurement. Position still integrates velocity exactly once. That is the agreed
+boundary and it is not to be crossed: double-integrated accelerometer position is the
+hundreds-of-metres error this project rejected at the start.
+
+### 20.3 The snag detector runs in both modes
+
+It is a **safety signal**, not an estimator feature, so it is not gated on `NAV_FILTER`:
+
+> `snagged` ⟺ `thrust_level > 0.5` sustained for **> 2 s** while the KF speed — or the
+> *measured* speed in `dr` mode — is below **0.05 m/s**. The LUT does not count, because the
+> LUT would report exactly the speed the throttle implies and cheerfully confirm the sub is
+> moving.
+
+Effect: `NavState.snagged = true` and `confidence = min(confidence, 0.4)`.
+
+This is the *"the map marches forward while the sub is pinned on a shopping trolley"*
+detector, and it is the entire reason there is a paddlewheel on the bill of materials. It is
+also the one place where a sensor's silence is the signal: no pulses at idle means "slower
+than the wheel can see", no pulses at full thrust means something is holding the sub.
+
+### 20.4 What is deliberately NOT built (and why)
+
+Written here **and in code comments**, so a future agent does not helpfully improve it:
+
+- **No position-domain EKF.**
+- **No online current estimation.**
+- **No surface-refix fusion.**
+
+With only heading, speed and payout there is not enough observability to learn a current
+vector — the filter would attribute every modelling error to "current" and produce a
+confident, wrong number, which is the exact failure mode this codebase exists to avoid. And
+there are no real dive logs to validate any of it against. The replay harness is what will
+justify (or kill) that work later, **with data**.
+
+### 20.5 The replay A/B harness
+
+```
+python -m nav.cli replay <divelog> [--filter dr|filtered|both]
+```
+
+Runs the logged `SensorSample`s back through the estimator(s) and reports track divergence
+over time, final-position delta, % of time gyro-only, % of time on each speed source, and
+snag events. `--filter both` prints them side by side.
+
+Two tests are the **acceptance gate for the whole filter**, not a nicety:
+
+1. A sim log **with the mag-disturbance episode** — `filtered` must beat `dr` on track error
+   against the simulator's own ground truth (which is why `sim.py` exposes its true position
+   in the log).
+2. A **clean** log — `filtered` must not be worse than `dr` beyond a small tolerance.
+
+A filter that only wins on the pathological case is a filter you cannot leave switched on.
+
+---
+
+## 21. The leak is two stages, and one of them is advisory
+
+One leak flag answered the wrong question. "There is water in the hull" is not one event: a
+film in the bilge means *finish the pass and come home*, and water 2 cm up means *surface
+now*. Collapsing them either cries wolf on condensation or says nothing until it is too
+late.
+
+| Stage | Probe | Presentation | Operator action |
+|---|---|---|---|
+| `NORMAL` | both dry | — | — |
+| `WARN` | the low probe | amber, and the sub glyph **changes shape** | advisory, non-blocking: finish up |
+| `FLOOD` | the probe 2 cm up | the existing **red pulsing sub** + a SURFACE prompt | come up |
+
+`read_leak()` returns `FLOOD` if the flood probe is wet regardless of the warn probe, else
+`WARN`, else `NORMAL`. The probes are independent inputs; the precedence is in the read, not
+in the wiring. `Telemetry.leak` stays a bool and is true for **either** stage, so nothing
+that already consumes it goes quiet.
+
+Both stages debounce: five consecutive wet samples at 10 Hz (`leak_debounce_samples`).
+Condensation, a launch splash and a droplet running down the hull all touch a probe briefly;
+real ingress does not stop. The debounce is what makes FLOOD worth believing, and an alarm
+nobody believes is an alarm that gets ignored on the day it is right.
+
+FLOOD stays **visually distinct from a link dropout**. That separation already exists — the
+sub shape is kept on purpose so a fault can never read as an absence — and it must survive
+every future change to the status row: a leak is the sub telling you something, a dropout is
+the sub telling you nothing, and the two demand opposite actions.
+
+**The failure this design would otherwise hide.** A dead probe reads dry forever, and dry is
+the answer everyone wants. Nothing in a bare digital input can distinguish *dry* from
+*disconnected*, so two things are done: `leak_probe_fault` reports the combinations that are
+physically impossible (flood wet while warn is dry — water reaching the upper probe passed
+the lower one; both wet on a dry deck), and the pre-dive readiness check surfaces it at arm
+time. The rest is covered by a five-second dip test on the bench, documented in
+`docs/hardware.md` §5.1, because a procedure that is written down is cheaper than a sensor
+that lies.
+
+---
+
+## 22. The battery is 2S, and the 24 V scale is dead
+
+The pack is **2S Li-ion: 8.4 V full, 7.4 V nominal**. The mock's old `24.8` and the client's
+`20.0` floor were placeholders from before the pack existed, and a threshold that describes
+a different vehicle does not fail loudly — it reads "full" forever.
+
+| Band | Volts | Setting | Colour |
+|---|---|---|---|
+| full | 8.4 | `battery_full_v` | top of the scale |
+| dive on | ≥ 7.0 | `battery_warn_v` | green |
+| head back | < 7.0 | `battery_warn_v` | amber |
+| surface | < 6.6 | `battery_crit_v` | red + SURFACE prompt |
+| hard floor | 6.0 | `battery_floor_v` | 3.0 V/cell — the cells are damaged below it, not merely flat |
+
+**Colour comes only from these bands** (§0: one colour, one meaning) and the voltage number
+is always shown beside it, because a band is a judgement and the number is the measurement.
+
+Nothing in software enforces the floor. It is deliberately a documented number rather than a
+cut-off: a sub that safes itself at 6.0 V in the middle of a canal has swapped a damaged
+pack for an unrecoverable vehicle. The operator is told, early and twice, and the operator
+decides.
+
+---
+
+## 23. Ballast is unknown until it is homed
+
+The syringe is driven by a stepper through an A4988 with **no position sensor**. Level is
+`steps / span`, and the step counter means nothing until it has been zeroed against the
+EMPTY limit switch. So from power-on until the first `ballast_home()`, the honest answer is
+that the position is **unknown**.
+
+`get_ballast_level()` returns `float | None`, and `None` is that answer. Returning `0.0`
+would assert *empty*, which is a specific claim about something the vehicle cannot see, and
+the operator would dive on it. `Telemetry.ballast_level` is `Optional[float]` for the same
+reason, and the glyph shows an explicit unknown — **not 0 %, not 50 %** — plus an
+affordance to home. A gauge sitting confidently at half is worse than a gauge admitting it
+does not know: one of them prompts the action that fixes it.
+
+Everything downstream had to learn the same word. `rov.py`'s initial ballast target, its
+`hold` branch and its telemetry rounding, and `nav/sensors.py`'s sample construction, all
+previously assumed a float.
+
+The two limit switches are wired **normally-closed to ground** with internal pull-ups, so a
+cut lead reads as *triggered*: a broken switch fails to a stop rather than to a silent
+absence, and the plunger does not drive itself into the end of the barrel. Either switch
+stops motion in its own direction always, even mid-command.
+
+**A skipped step is not a glitch.** On an open-loop axis it is the reported level quietly
+drifting away from where the plunger actually is. So when the FULL switch closes at a count
+disagreeing with `ballast_span_steps` by more than `ballast_span_tolerance` (5 %), it is
+logged, `ballast_needs_rehome` goes into telemetry, and the console surfaces it. Swallowing
+that event is how a syringe becomes quietly wrong, and a quietly wrong syringe strands a
+sub.
+
+---
+
+## 24. Sensor liveness — the doctrine, and the four rounds it took to get right
+
+This is the most important thing in this document. It took four adversarial review
+rounds, each of which fixed something real and each of which left the next layer intact,
+and it is written out at length because every one of those rounds was staffed by people
+who believed they were already obeying the rule in §0.4.
+
+### 24.1 The rule
+
+> **A signal whose sensor is absent shows CANNOT-TELL, never a plausible number.**
+
+Two clauses do the work, and each was learned by getting it wrong.
+
+**"Absent" includes "was here and stopped."** Everybody reasons about the sensor that was
+never wired. Almost nobody reasons about the sensor that worked for four minutes and then
+stopped, and that is the one that kills you, because it is the one that leaves a *number*
+behind. The MS5837 stops answering at 4.33 m. Every later attempt raises. The cache keeps
+20.85 psi. Sixty seconds of dead-bus ticks change nothing. `rov.py` turns that cache into
+`depth=4.33` in every frame at 15 Hz, the client stamps each arriving frame as fresh, and
+the console paints a confident, fully colour-banded 4.3 m while the sub descends to 8.
+Every check anyone had written asked *"did the chip come up?"* — and the chip **had** come
+up. A liveness test that a dead sensor passes is not a liveness test.
+
+**A cannot-tell default that is itself a measurement is not a cannot-tell.** This is the
+clause that survived three rounds, because it hides inside code that reads as careful.
+The values are all chosen to look inert, and not one of them is:
+
+| The "safe" default | What it actually asserts |
+|---|---|
+| `heading = 0.0` | **due north.** The radar is heading-up, so the whole map swings north and the dead reckoner runs the track north |
+| `depth = 0.0` | **at the surface.** Written into the permanent dive log, where it is indistinguishable from a real surface sample |
+| `pressure = surface_psi` | *the sensor is reading exactly atmospheric* — a specific, checkable claim about a chip that is not answering |
+| `mag_cal = 0` | **"a compass answered, and it says it is uncalibrated."** The strongest thing you can say about a bearing short of trusting it — attached to a chip that is silent |
+| `leak = "NORMAL"` | **a positive safety claim**: *I looked, and the hull is dry* |
+| `snagged = False` | *navigation looked, and the sub is moving freely* |
+
+A zero is not the absence of a number. It is the number zero, and on an instrument that is
+exactly what it looks like. The test to apply is not *"is this default harmless?"* but
+*"if an operator read this off the screen as a measurement, would they act on it?"* — and
+for every row above the answer is yes.
+
+The corollary that catches the subtler case: **a subsystem's death must never look like
+good news.** When navigation goes quiet, leaving `snagged` and `gyro_only` at their
+defaults is not neutral, because their defaults are the two reassuring answers. At the
+exact instant nav died the console got *quieter*: a standing snag warning cleared itself
+and the GYRO badge went out. `False` means "nav looked and says no"; `None` means "nav
+cannot tell".
+
+### 24.2 The chain is only as honest as its weakest link
+
+The signal crosses six files, and it is a *conjunction*: every one of them has to preserve
+the null, and any single one that coerces it destroys the property for the whole system —
+silently, and while every test on either side of it still passes.
+
+```
+api/hardware.py     DeviceHealth decides a chip is not answering; every readback on it
+                    returns None. sensor_faults() names which chip.
+        |
+api/protocol.py     Telemetry fields are Optional; sensor_faults: list[str] rides along.
+        |
+api/rov.py          Builds the frame. Passes the nulls through; does not fill them in.
+        |
+api/nav/sensors.py  Reads the same hardware for the estimator.     <-- THE LINK THAT BROKE
+        |
+api/main.py         fill_nav_fields() stitches nav's answers into the frame.
+        |
+client/js/*         net.js ingests, core.js judges, render.js draws '?' + amber wavy.
+```
+
+**Round three did five of those six and shipped.** `api/nav/sensors.py` had no owner, and
+it coerces every cannot-tell straight back into a plausible number:
+
+```python
+heading = _num(_readback(hw, "read_heading", 0.0), 0.0) % 360.0
+pressure = _num(_readback(hw, "read_pressure", surface_psi), surface_psi)
+mag_cal  = int(_num(_readback(hw, "read_mag_cal", 0), 0.0))
+```
+
+The helper's own docstring says *"Neither case invents a number"* — and the **default it
+is handed** is an invented number. The docstring is true about the helper and false about
+the call. Then `fill_nav_fields()` stamps nav's heading unconditionally over the null
+`rov.py` had correctly sent, and the invention arrives on screen wearing the estimator's
+authority.
+
+Reproduced end to end against the real `NavService`: `rov.py` sent
+`heading=None card=None mag_cal=None faults=['bno085']`, and the frame that reached the
+client read `heading=0.0 card='N'` — **a confident bearing of DUE NORTH sitting beside a
+NO COMPASS badge and a "bno085 not answering" fault, all on one screen.** That is worse
+than the frozen bearing round three set out to fix: a frozen bearing is at least a
+direction the sub once pointed.
+
+Three things follow, and they are design rules, not process notes:
+
+1. **A file in this chain with no owner is a defect in the change, not an oversight in the
+   review.** Round four's brief had to say so out loud, because rounds one to three each
+   assigned the files somebody had thought of.
+2. **The null must be the only thing that can travel.** Anything that accepts a `default=`
+   for a sensor reading is a place the property can be lost. The safe shape is a readback
+   that returns `None` and a caller that must handle it — not a readback with a fallback
+   the caller never sees, because then the coercion is invisible at the call site and the
+   call site is where it has to be noticed.
+3. **Verification has to cross the whole chain.** Every layer had passing tests
+   throughout. What nobody had was one check that puts a dead sensor in at the hardware
+   end and looks at what comes out at the client end, which is the only test that could
+   have caught this.
+
+### 24.3 With no heading there is no track
+
+Heading is not one reading among many, because everything downstream is built on it.
+
+- The radar is **heading-up**. A heading nobody is measuring rotates the entire map.
+- Dead reckoning integrates speed **along** the heading. A placeholder heading does not
+  produce a slightly-wrong track; it produces a confident track in an arbitrary direction,
+  drawn at full length and full apparent precision.
+- The dive log records it. A wrong bearing in a `.jsonl` is permanent, and it is what
+  `calibrate` will later be handed as ground truth.
+
+So the rule is stronger here than elsewhere: **no heading means no track**, not a track on
+a substituted heading. The map holds and says so. The bearing renders `?`, the badge reads
+`NO BEARING`, and the radar stays drawn on the *last angle the compass actually gave* —
+a stale picture the operator can be told about, rather than a fresh lie.
+
+`NO BEARING` is kept distinct from its neighbours because the next action differs in each,
+and collapsing any pair of them sends the operator the wrong way:
+
+| Badge | Means | Why it is not the others |
+|---|---|---|
+| `MAG?` | a compass answered and reports itself uncalibrated | there IS a bearing; it is suspect |
+| `GYRO` | the filter is ignoring the compass **on purpose** | deliberate, not broken — turning back would abandon a working dive |
+| `NO COMPASS` | no IMU answered at all (`mag_cal` null, not 0) | nothing to calibrate, ignore, or come back to |
+| `NO BEARING` | one answered earlier in this dive and has **stopped** | there is no bearing at all, not even a bad one |
+
+### 24.4 How liveness is actually decided (`DeviceHealth`)
+
+One chip, one verdict, **computed rather than probed** — `_answering()` sits on the front
+of every cache read and must never touch I²C, because a blocking bus read on the event
+loop stops telemetry, the watchdog and the camera together. It is one dict lookup, one
+clock read, one compare.
+
+Two ways to fail, because there are two ways a bus dies:
+
+- **Consecutive raises.** One NAK on a canal-side loom is noise and the retry usually
+  takes; blanking a working gauge on it would teach the operator that a blank means
+  nothing. `fail_streak` in a row is not noise.
+- **Silence.** *Nothing has to raise for a device to stop answering.* A conversion state
+  machine that never reaches its collect stage, a sensor thread that took an exception and
+  ended, a driver that returns without writing — none produce an error, and all leave the
+  cache exactly as frozen. So a good read must also have happened **recently**, inside a
+  window sized to how often that device is polled. This is the half a raise-counting
+  design misses, and it is the half the frozen-MS5837 dive turned on.
+
+**Never answered is faulted**, not a gentler state: a device that has not produced one
+good read has nothing behind its cache at all.
+
+`DeviceHealth` is pure and **clock-injected** — `now` is passed in, never read inside — so
+the whole rule runs on a bench in microseconds. Logic reachable only by waiting on a real
+dying sensor is logic nobody tests, which is most of why this took four rounds.
+
+`MockHardware._kill_sensor(name)` / `_revive_sensor(name)` are the fixture that makes the
+failure reachable at all. Killed means the readbacks go to cannot-tell and the name
+appears in `sensor_faults()`, **while the simulation underneath keeps running** — so a
+test can assert that the depth readout neither followed the water down nor sat frozen at
+the last value. Recovery is half the contract and the half that gets skipped: a gauge that
+goes blank and *stays* blank after the connector is reseated is its own fault, and one
+nobody would find until a dive.
+
+### 24.5 The null and the name are one decision read twice
+
+`sensor_faults()` unions the per-chip liveness verdicts with the latched subsystem faults
+(the I²C bus that would not open at all; limit switches reading impossibly). It is
+deliberately **the same verdict the readbacks gate on**, read a second time, so a named
+chip and a blank gauge cannot drift apart and contradict each other on screen.
+
+Blanking depth says *"do not believe 4.3 m"*. It does not say whether the sensor died, the
+bus died, or the vehicle is doing something clever — and a blank gauge with no cause reads
+as a dashboard glitch, which is something an operator waits out while the sub keeps
+descending. Naming the chip turns it into an errand: **DEPTH — MS5837 NOT ANSWERING.**
+
+An **empty** `sensor_faults` is *not* a certificate of health. A backend that cannot track
+liveness reports empty, so the nulls on the individual readings remain the authoritative
+claim and the list only ever supplies the cause. A dead `i2c` stands behind all three
+chips, so one unplugged connector reports one fault rather than three unrelated ones.
+
+### 24.6 Presentation: three shapes, because there are three facts
+
+| On screen | Fact | Operator's next move |
+|---|---|---|
+| `42.7`, tinted by its band | the sensor is reporting | nothing |
+| `--`, dim, the whole bar dashes together | **STALE** — a gap on a still-open socket | nothing; it returns by itself |
+| `?`, amber, **wavy underline** | **CANNOT-TELL** — the chip has stopped answering | waiting will not help; go and look |
+
+A dash reads as a dropped frame. A dead depth sensor dressed as a dropped frame is a sub
+flown on a number nobody is taking, so the two marks differ by construction. `?` is this
+console's existing word for genuinely-not-known — the unhomed syringe has always used it.
+**The last number is never shown**, because a frozen reading and a steady one look
+identical.
+
+Three independent carriers — the mark, the amber, and an alert chip naming the part — so
+none of them has to be the one that gets noticed.
+
+One consequence worth stating because it looks like a bug: **the tint is a statement about
+the sensor, not about the link.** It used to be gated on a stamp `net.js` writes on every
+arriving *frame*, so the MS5837 that died at 4.33 m kept that stamp fresh at 15 Hz and the
+frozen number wore a full, confident depth-band colour all the way down. The tint is the
+loudest thing on the tile, and it was the part that was lying hardest.
+
+### 24.7 Acceptance criteria
+
+Stated here in the requirements' voice; the normative copy is **R7.6**.
+
+1. WHEN a sensor has stopped answering, THEN every reading derived from it SHALL report
+   cannot-tell, AND "stopped answering" SHALL cover both never-wired and
+   wired-then-stopped.
+2. A cannot-tell SHALL NOT be represented by a value that is itself a valid reading —
+   including `0.0` heading, `0.0` depth, atmospheric pressure, `mag_cal` 0, `NORMAL` leak
+   and `False` snag.
+3. NO stage between the sensor and the screen SHALL substitute a default for a
+   cannot-tell, AND every file on that path SHALL have a named owner in any change that
+   touches the property.
+4. THE console SHALL distinguish a dead sensor from a dropped frame by SHAPE, not by
+   colour alone.
+5. THE vehicle SHALL name which chip stopped, AND that name SHALL be derived from the same
+   verdict the nulls are.
+6. WHEN there is no heading, THEN the system SHALL NOT advance the track, SHALL NOT rotate
+   the map onto a substituted bearing, AND SHALL say that there is no bearing.
+7. THE liveness rule SHALL be exercisable on a bench without a real dying sensor.

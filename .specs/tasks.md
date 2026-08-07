@@ -7,6 +7,188 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 
 ---
 
+## Sensor liveness — four rounds
+
+- 🧪 **A sensor that stops answering now says so, and nothing downstream fills it in.**
+  This one took **four adversarial review rounds**. Each round fixed something real, each
+  round's verification found the next layer, and **two of the four introduced a regression
+  while fixing something else**. The rounds are written out below rather than collapsed
+  into a summary, because the way this defect kept surviving is more useful than the fix.
+
+  **The defect.** Every reading on this vehicle is served from a cache that a background
+  sensor thread fills. A cached value is only a measurement while the chip behind it is
+  still answering — and nothing checked. The MS5837 stops answering at 4.33 m; every later
+  attempt raises; the cache keeps 20.85 psi; sixty seconds of dead-bus ticks change
+  nothing. `rov.py` turned that into `depth=4.33` in every frame at 15 Hz, the client
+  stamped each arriving frame as fresh, and the console painted a confident, fully
+  colour-banded 4.3 m while the sub descended to 8. Every check anyone had written asked
+  *"did the chip come up?"* — and the chip **had** come up.
+
+  **Round 1 — the null did not exist.** Both backends returned a literal `0` when they had
+  nothing, so `Telemetry.mag_cal` was `Optional` in name only and the client's `NO COMPASS`
+  flag was unreachable code on every real hull. Made the hardware layer able to say
+  cannot-tell at all.
+  *Regression introduced, and caught in round 2:* adding the `nomag` state to the heading
+  flag table left the hand-written list of "which classes mark the number" unextended, so
+  `NO COMPASS` badged itself and left the bearing looking like every trustworthy number on
+  the bar — **the badge as the only carrier**, which is the one thing the shape-not-colour
+  rule forbids. Caught by a review that asked what the *number* looked like rather than
+  what the badge said. Fixed by deriving that list from the table, so a flag added tomorrow
+  cannot repeat it. In the same pass: `GYRO` was being shown on a hull with **no IMU at
+  all** — the filter reports `gyro_only` for the trivial reason that it reads `mag_cal` as
+  0 and stops trusting it — so a badge meaning "coasting on the spin sensor, deliberate,
+  not a fault" was promising a gracefully-decaying bearing on a vehicle with no spin sensor
+  either. `NO IMU` now outranks `GYRO`.
+
+  **Round 2 — "absent" still meant "never wired".** Everyone had reasoned about the sensor
+  that was never fitted; nobody had reasoned about the sensor that worked for four minutes
+  and then stopped, which is the one that matters because it is the one that leaves a
+  *number* behind. There was also no way to *make* one stop: on the bench every reading is
+  healthy from power-on to shutdown, so the path was unreachable.
+
+  **Round 3 — liveness became a first-class signal.** `DeviceHealth` per chip, faulted on
+  either **consecutive raises** *or* **silence** (nothing has to raise for a device to stop
+  answering — a conversion state machine that never reaches its collect stage, a driver
+  that returns without writing, a sensor thread that ended, all leave the cache frozen and
+  raise nothing). Never-answered is faulted. Pure and clock-injected, so the rule runs on a
+  bench in microseconds. `MockHardware._kill_sensor()` / `_revive_sensor()` make the
+  failure reachable with the simulation still running underneath, so a test can assert the
+  readout neither followed the water down nor sat frozen. `Telemetry` fields went
+  `Optional` and gained `sensor_faults`, naming which chip — the same verdict the nulls are
+  computed from, read twice, so a blank gauge and a named chip cannot contradict each other
+  on screen. The client learned a third shape: `?` in amber with a wavy underline for
+  cannot-tell, kept deliberately distinct from the `--` of a dropped frame.
+  Also in this round, and the same rule applied to two non-chips: leak detection was the
+  **only** reading with no liveness gate at all — the probes were sampled inside the same
+  try-block as the I²C ticks, so one unexpected raise from a bus chip stopped them being
+  sampled entirely while `read_leak()` went on answering `NORMAL` at full rate. `NORMAL` is
+  a positive safety claim, so it now needs a probe that was actually read; a fourth state,
+  `UNKNOWN`, carries the rest. Wet still outranks cannot-tell — a latched `FLOOD` never
+  decays to `UNKNOWN`, because the sampler dying does not un-establish water that has
+  already arrived. And navigation going quiet stopped looking like good news: `snagged` and
+  `gyro_only` default to the two *reassuring* answers, so at the instant nav died the
+  console got **quieter** — a standing snag warning cleared itself and the GYRO badge went
+  out. `False` now means "nav looked and says no", `None` means "nav cannot tell".
+  *Regression introduced, and caught in round 4:* `leak_probe_fault()` was left reading the
+  raw probe pins while `read_leak()` read the debounced latches — two rules on one pair of
+  probes. A launch splash that the 5-sample debouncer correctly threw away still reached
+  the raw read, so the vehicle reported `NORMAL` and *"probe wiring is broken"* **in the
+  same frame** and failed the pre-dive check over one wet droplet. Caught because the two
+  statements contradicted each other on one screen. One droplet cannot be both nothing and
+  a fault; both now answer from the same latched evidence, and the failure the check exists
+  for — a probe that reads wrong *continuously* — survives intact.
+
+  **Round 4 — one unassigned file defeated the other five.** `api/nav/sensors.py` had no
+  owner, and it coerced every cannot-tell straight back into a plausible number:
+  `_readback(hw, "read_heading", 0.0)`, `_readback(hw, "read_pressure", surface_psi)`,
+  `_readback(hw, "read_mag_cal", 0)`. The helper's own docstring says *"Neither case invents
+  a number"* — and the **default it is handed** is an invented number, so the docstring was
+  true about the helper and false about every call. `fill_nav_fields()` in `api/main.py`
+  then stamped nav's heading unconditionally over the null `rov.py` had correctly sent.
+  Reproduced end to end against the real `NavService`: `rov.py` sent
+  `heading=None card=None mag_cal=None faults=['bno085']`, and the frame reaching the client
+  read `heading=0.0 card='N'` — **a confident bearing of DUE NORTH beside a NO COMPASS badge
+  and a "bno085 not answering" fault, all on one screen.** Worse than the frozen bearing
+  round 3 set out to fix: a frozen bearing is at least a direction the sub once pointed. The
+  radar is heading-up, so the whole map swings north and the dead reckoner runs the track
+  north; the `0.0` depth from the same path is written into the permanent dive log.
+
+  **The doctrine this turned out to be about**, now written down in `.specs/design.md` §24
+  and normative as **R7.6**: *a signal whose sensor is absent shows cannot-tell, never a
+  plausible number* — where **"absent" includes "was here and stopped"**, and where **a
+  cannot-tell default that is itself a measurement is not a cannot-tell**. `0.0` heading is
+  due north. `0.0` depth is the surface. `mag_cal` 0 is *"a compass answered, and it says it
+  is uncalibrated"*. Leak `NORMAL` is a positive claim that the hull is dry. `snagged` false
+  is a positive claim that the sub is moving freely. The test is not *"is this default
+  harmless?"* but *"would an operator act on it?"*, and for all five the answer is yes.
+  Two structural lessons, both now design rules: **the chain is only as honest as its
+  weakest link** — six files have to preserve the null and any one that coerces destroys the
+  property for the whole system, silently, while every test on either side still passes; and
+  **a file on that path with no owner is a defect in the change, not an omission from the
+  review**. What nobody had, through all four rounds, was one check that puts a dead sensor
+  in at the hardware end and asserts what comes out at the client end. Every layer passed its
+  own tests the entire time.
+
+  *Verified 2026-08-07 by running, on the ROG Ally.* Both suites green: client
+  **295/295 in 114 s across 12 suites**, api **147/147 in 1 s across 4 suites**; the api
+  runner in a python with no `pydantic` correctly reports `100/103 across 2 of 4 suites`,
+  verdict INCOMPLETE, exit 2, rather than a reassuring total.
+  Against `MockHardware` + the real `RovState`: healthy frame
+  `heading=284.0 card='W' mag_cal=3 depth=3.59 pressure=19.8 batt=8.3 current=0.75 faults=[]`;
+  after `_kill_sensor` on all three chips,
+  `heading=None card=None mag_cal=None depth=None pressure=None batt=None current=None
+  faults=['bno085','ina219','ms5837']`; after `_kill_sensor("leak-probes")`,
+  `leak=True leak_state='UNKNOWN' faults=['leak-probes']`. The vehicle side is honest.
+  **The nav-side link was still being landed while this was written**, and at the time of
+  writing `VehicleSensorSource.read()` with `bno085` and `ms5837` killed still returned
+  `heading_deg=0.0 depth_m=0.0 mag_cal=0 pressure_psi=14.7`. Re-run that one-liner before
+  believing this entry — it is three lines against the real class and it is the only check
+  that crosses the join this round exists to close.
+
+## Closing the hardware loop
+
+- 🧪 **Specify the vehicle that actually gets built, and write it down once.**
+  `docs/hardware.md` is the document taken shopping and to the workbench: the v1 bill of
+  materials with a purpose per line, the full BCM/header pin map with a blank column for the
+  wire colours, the I²C addresses, the wiring notes per subsystem, the build notes, the power
+  tree and every calibration procedure. Everything in it is mirrored from the code that reads
+  it — `api/hardware.py`, `api/config.py`, `api/nav/config.py` — because a hardware document
+  that drifts from the firmware is worse than none: it is believed. v2 (electromagnet,
+  pan/tilt servos, burn-wire drop-weight) is quarantined in its own section so it cannot be
+  bought by accident, and v1 recovery stays *empty the ballast and pull the tether*, which
+  needs no software at all.
+  It also carries the traps that cost a build day each: **GPIO12/18 and GPIO13/19 share the
+  two hardware PWM channels**, so the thrusters take both and the lights run software PWM;
+  GPIO9/10/11 are the SPI pins the encoder and paddlewheel sit on; the paddlewheel must be out
+  of the prop wash (wash spins the wheel and fakes speed, defeating the snag detector) and
+  more than 20 cm from the BNO085 (that failure is silent — `mag_cal` just degrades and the
+  whole track leans).
+
+- 🧪 **Two-stage leak.** One flag answered the wrong question. A film in the bilge means
+  *finish the pass*; water 2 cm up means *surface now*. WARN is amber and changes the sub
+  glyph's SHAPE; FLOOD keeps the red pulsing sub plus a surface prompt and stays
+  unmistakable against a link dropout. Five consecutive wet samples at 10 Hz latch a stage,
+  because condensation and a launch splash both touch a probe briefly and an alarm nobody
+  believes is ignored on the day it is right. A dead probe reads dry forever — so the
+  impossible combinations (flood wet, warn dry) are reported at arm time and the bench dip
+  test is documented, since nothing in a digital input can tell *dry* from *disconnected*.
+
+- 🧪 **The 24 V scale is dead; the pack is 2S.** `MockHardware` was sitting at 24.8 V with a
+  20.0 V sag floor and the client mirrored both, on a vehicle whose pack is 8.4 V full. A
+  threshold describing a different vehicle does not fail loudly — it reads "full" forever.
+  Bands are now config (`NEPTUNE_BATT_WARN/CRIT/FLOOR`): green ≥ 7.0, amber below, red and a
+  surface prompt below 6.6, with 6.0 documented as the hard floor and deliberately **not**
+  enforced — safing a sub mid-canal trades a damaged pack for an unrecoverable vehicle.
+
+- 🧪 **Ballast admits it does not know.** The syringe is open-loop: a stepper, an A4988 and
+  no position sensor, so the step counter means nothing until it is zeroed against the EMPTY
+  end stop. `get_ballast_level()` is now `float | None`, and `None` reaches the glyph as an
+  explicit unknown — not 0 %, not 50 % — with the affordance to home. Both end stops are
+  wired **normally-closed to ground** so a cut lead reads as *triggered* and a broken switch
+  fails to a stop instead of driving the plunger into the end of the barrel. A full-stop
+  count disagreeing with the configured span by > 5 % is a skipped-step event: logged,
+  flagged `needs-rehome`, surfaced — a quietly wrong syringe strands a sub.
+
+- 🧪 **An estimator you can switch, and a harness that decides whether to.** `NAV_FILTER`
+  selects `dr` (the existing dead reckoner, behaviour untouched — and the default) or
+  `filtered`, which changes only the heading and speed *inputs*: a complementary filter that
+  coasts on the gyro whenever the compass is untrustworthy (`mag_cal < 2` or thrust ≥ 0.5,
+  from actual output so a disarmed sub still reads the compass) and never steps, plus a 1-D
+  Kalman on speed that treats the throttle LUT as a weak prior and zero-locks at rest. The
+  snag detector runs in **both** modes because it is a safety signal, not an estimator
+  feature. `dr` stays the default on purpose: there are no real dive logs yet, and a filter
+  tuned against the simulator has been validated against its author's assumptions about the
+  water. `python -m nav.cli replay <log> --filter both` is how that gets decided later, with
+  data — and no EKF, no online current estimation and no surface-refix fusion until it does.
+
+- 🧪 **`bootstrap.py` reports the Pi-only hardware libraries**, present or absent, and
+  installs none of them — absence on the bench is correct, because every hardware import is
+  lazy and `NEPTUNE_HW=auto` then lands on the flagged simulator. Also fixed the stale client
+  check count it had been printing (214 → 286 at the time; **295** as measured 2026-08-07,
+  and that line has now carried four different totals — re-measure it by running the suite,
+  never by adjusting it until it looks right), and `--test` now runs the API suite too when
+  one is present.
+
 ## Navigation follows the vehicle
 
 - ✅ **`16dba9f` — Log the nav sensor source and its simulated-ness separately.**
@@ -368,32 +550,54 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 |---|---|---|
 | ⚠️ | **`DPC_WATCHDOG_VIOLATION` — IDENTIFIED: `amdkmdag.sys` (AMD display driver) overruns its ISR.** `Failure.Bucket: 0x133_ISR_amdkmdag!unknown_function`, driver `32.0.23027.3001`. The dashboard no longer adds sustained compositing load, but the defect itself needs an AMD driver update or rollback | hardware |
 | ⚠️ | **USB tether NIC drops off the bus** (`Present: False`), needs a physical replug; suspect the hub/port/power path | hardware |
-| ⚠️ | **`RealHardware` is a stub** — depth, pressure, heading and pack voltage are simulated; only Pi health is real. `TODO(hardware)` in `api/hardware.py` | firmware |
+| ⚠️ | **The parts are not bought.** The v1 build is specified end-to-end in `docs/hardware.md`, but `RealHardware._gpio_available()` still returns a hardcoded `wired = False`, so `NEPTUNE_HW=auto` lands on the bench simulator and says so. Flipping that flag is the **last** step of the bring-up, after §10's readbacks are proven — not the first | hardware |
+| ⚠️ | **Every calibration constant is still a placeholder** — `NAV_M_PER_PULSE`, `NAV_M_PER_SPOOL_TICK`, `NEPTUNE_BALLAST_SPAN_STEPS`, `NEPTUNE_SURFACE_PSI`, `NAV_IMU_YAW_OFFSET_DEG`. They exist so the code runs on the bench; each has a procedure in `docs/hardware.md` §8 and each needs water | field trial |
+| ⚠️ | **`NAV_FILTER` promotion is undecided** — `dr` remains the default until `nav.cli replay --filter both` says otherwise on a real dive log. There are no real dive logs | field trial |
 | ⚠️ | **No GNSS on the Ally** — Wi-Fi positioning needs internet, so the field workflow is tap-on-map. A USB GNSS on the Pi feeding `/api/origin` is the real answer | hardware |
 | ⚠️ | **Chrome geolocation policy unverified** — kept as belt-and-braces; nothing depends on it | topside |
 | ⚠️ | **Blind nav zoom/dial size are judgement calls** — `radarMetersPerPixel`, `blindSpanM` and the dial size were tuned by measurement, not by driving | field trial |
 | ⚠️ | **Nav track unexercised in the field** — needs an origin set at a real site and a dive | field trial |
+| ⚠️ | **No check crosses the whole liveness chain.** Every layer passes its own tests, which is precisely what let this defect ship three times (see `.specs/design.md` §24). There is no check that kills a sensor at the hardware end and asserts what reaches the client — and **not one of the 295 browser checks exercises the `?` mark, the amber wavy underline, `NO BEARING` or `sensor_faults` at all**. The one test that would have caught all four rounds is still the one that does not exist | api + client tests |
+| ⚠️ | **`leak_state: "UNKNOWN"` is collapsed to `NORMAL` topside.** The vehicle correctly refuses to claim the hull is dry when nothing is sampling the probes (verified: `leak=True leak_state='UNKNOWN' faults=['leak-probes']`), but `leakStage()` in `client/js/core.js` maps anything that is not `FLOOD`/`WARN` to `NORMAL`, so the drop glyph reads *"both probes dry"* on evidence nobody is collecting — the exact failure the fourth state was added to remove, undone one file later. `api/protocol.py`'s comment still lists three states | client |
+| ⚠️ | **A dead INA219 renders as `--V`, not `?`.** Voltage and current both null correctly and `ina219` is named in `sensor_faults`, but the pack readout falls back to the **stale** mark instead of the cannot-tell one and raises no alert chip, so "the link blinked" and "nothing is measuring the pack" look identical on the one gauge that decides whether the dive continues | client |
+| ⚠️ | **`client/tests/README.md` still advertises `~95 s, 249 checks`** — the stalest of the four totals this project has carried, and the one file with the counts in it that nobody was assigned. Same class of miss as the unowned `api/nav/sensors.py`: a document nobody owned quietly contradicted every other document that had been fixed | client docs |
+| ⚠️ | **Visual baselines are unblessed after this round.** 11 of 12 suites report drift above the 0.1% tolerance (0.53%–2.04%, `ballast-syringe` worst) because the client changed and `client/tests/baseline/*.layout.png` did not. Drift only reports unless `--strict-visual`, so the run still exits 0 — which means the picture layer is currently telling nobody anything | client tests |
 
 ---
 
 ## Since the last spec pass — what now exists
 
-- **Tests are real** (`client/tests/`): 12 suites, 286 browser checks against the shipping
-  dashboard, plus a screenshot + drift layer with a measured 0.1% tolerance. Exit 0 only
-  if everything passes. Previously there were none at all.
+- **Tests are real, on both halves.** `client/tests/`: **12 suites, 295 browser checks**
+  against the shipping dashboard, plus a screenshot + drift layer with a measured 0.1%
+  tolerance. `api/tests/`: **4 suites, 147 checks**, standard-library `unittest`, no pytest
+  — a framework that has to be installed on a Pi over a canal-side hotspot is a suite that
+  quietly stops being run. Both measured 2026-08-07 (`295/295 in 114s`, `147/147 in 1s`),
+  both exit 0 only if everything passes. Previously there were none at all.
+  The api runner separates **failed** from **never loaded**: without `pydantic` two of its
+  four suites cannot be imported, and it reports `100/103 across 2 of 4 suites`, verdict
+  INCOMPLETE, exit 2 — a failed check is a finding, a suite that never ran is an absence of
+  findings, and adding them into one total is exactly the reassuring-but-false report this
+  project refuses from its instruments.
 - **Dive logs can be calibrated** (`api/nav/calibrate.py`): the sample carries the control
   channels, and the analyser derives turn rate, depth and speed — refusing to answer where
   the data cannot support it.
 - **A public simulator demo** ships from `client/` on every push (`?sim=1`), with every
   glyph and number carrying a written explanation.
-- **`bootstrap.py`** reports what a machine has and lacks, for both halves of the system.
+- **`bootstrap.py`** reports what a machine has and lacks, for both halves of the system —
+  including the Pi-only hardware libraries, which it never installs.
+- **The vehicle is specified** (`docs/hardware.md`): bill of materials, pin map, I²C
+  addresses, wiring and build notes, power tree and every calibration procedure, all mirrored
+  from the code that reads them. What is missing is the parts, not the plan.
 
 ### Still open — and honest about it
 
-- **`RealHardware` is a stub.** Every readback is a `TODO(hardware)`, so `NEPTUNE_HW=auto`
-  falls back to the bench simulator. Until it is wired, a "real" dive has no IMU, no depth
-  sensor and no encoder — which is why `calibrate` will refuse most numbers, and why the
-  operator dot, not the sub, is the only position the system actually knows.
+- **Nothing has been on a bench yet.** The v1 vehicle is fully specified (`docs/hardware.md`)
+  and the backend is written against it, but not one of those parts has been bought, wired or
+  measured. `_gpio_available()`'s `wired` flag stays `False` until they have been, so
+  `NEPTUNE_HW=auto` falls back to the bench simulator and flags itself — which is the correct
+  behaviour for a vehicle that cannot yet see. Until then a "real" dive has no IMU, no depth
+  sensor and no encoder, which is why `calibrate` refuses most numbers and why the operator
+  dot, not the sub, is the only position the system actually knows.
 - **The motion constants are guesses.** `subMaxSpeedMs`, `headingRatePerS` and the
   ballast→depth curve have never been measured against water. The tooling to fix that now
   exists; the measurement does not.

@@ -42,6 +42,21 @@ const CONFIG = {
   piProbeIdleMs:  10000,     // while it is up: just re-check whether to start again
   piProbeMaxAgeMs:15000,     // older than this is not evidence of anything
 
+  /* ---- BATTERY — 2S Li-ion, and the ONLY source of the pack colour ---------
+     The hull carries a 2-cell lithium pack: 8.4 V charged, 7.4 V nominal, 6.0 V
+     the hard floor below which the cells are damaged. The console used to be
+     written for a 24 V pack that does not exist and never did — every threshold
+     in it (mock voltage, sag floor, the tooltip) was a number from another
+     vehicle, which is worse than no threshold at all: it reads as a checked
+     limit. These four values are the only thing that may colour the readout, so
+     one colour keeps meaning one thing.                                       */
+  battery: {
+    fullV:  8.4,      // freshly charged
+    warnV:  7.0,      // at/above this = green; below = amber
+    critV:  6.6,      // below this = red AND a SURFACE prompt
+    floorV: 6.0       // documented hard floor (the sim sags to here and stops)
+  },
+
   /* ---- MAP / NAVIGATION (dive track + position over a basemap) ----------- */
   map: {
     navWs:          '/ws/nav',   // backend nav telemetry (x/y/heading/depth); client integrates if absent
@@ -245,6 +260,11 @@ const CONFIG = {
     headingRatePerS:40,        // heading change per unit of steer input (deg/sec)
     surfaceDrainMs: 4000,      // after SURFACE, force-drain the tank for this long
     depthLerp:      0.8,       // depth easing toward target (per second, 0..1-ish)
-    batteryDrainVPerS: 0.0004  // cosmetic battery sag over time
+    // Cosmetic battery sag. Halved with the move to 2S: the old 0.0004 V/s was
+    // paced for a 24.8 -> 20.0 V scale (4.8 V of travel). The 2S pack only has
+    // 2.4 V between full and the floor, so the same number drained the whole
+    // bar in half the time and walked a bench session into a false SURFACE
+    // prompt. Same wall-clock pace as before, on the real scale.
+    batteryDrainVPerS: 0.0002
   }
 };

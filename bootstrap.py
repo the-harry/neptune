@@ -3,7 +3,7 @@
 
     python bootstrap.py            # check everything, change nothing
     python bootstrap.py --dev      # also build the API venv (topside development)
-    python bootstrap.py --test     # also run the client test suite
+    python bootstrap.py --test     # also run the test suites (client, and the API's if present)
 
 There are two machines in this system and they need opposite things:
 
@@ -18,6 +18,7 @@ one you cannot run to find out where you stand, which is the main reason to have
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import platform
 import shutil
@@ -26,11 +27,83 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+# The two venvs this repo can have, in the order they are believed: --dev builds ROOT/.venv
+# on a dev box, install.sh builds INSTALL_DIR/api/.venv on the Pi (the one the systemd unit
+# runs uvicorn from). Named here so nothing hardcodes either path twice.
+VENV = ROOT / ".venv"
+PI_VENV = ROOT / "api" / ".venv"
 OK, WARN, BAD = "  ok  ", " note ", " MISS "
+
+# The Pi-only libraries RealHardware imports LAZILY, inside itself: (module to probe,
+# what to install, what stops working without it). They are absent on a dev box by
+# design - this file is developed on a machine with no GPIO - which is why the probe
+# is find_spec and never an import: importing gpiozero off a Pi is slow at best.
+# Keep this list in step with api/requirements.txt and docs/hardware.md §1.3.
+HW_DEPS = (
+    ("gpiozero", "gpiozero",
+     "thrusters, stepper, limit switches, leak probes, pulse counting"),
+    ("smbus2", "smbus2",
+     "I2C bus: MS5837 depth, INA219 pack voltage/current"),
+    ("adafruit_bno08x", "adafruit-circuitpython-bno08x",
+     "BNO085: heading, mag-cal status, gyro rate, linear accel"),
+)
+
+# The api's CORE libraries: the first section of api/requirements.txt, the ones BOTH
+# machines need if they are to run the api at all. Kept apart from HW_DEPS because the
+# two absences mean opposite things, and conflating them is how an afternoon gets lost:
+# a missing gpiozero on the bench is correct and expected, a missing pydantic is a
+# machine that cannot start the server or import half its own test suites.
+CORE_DEPS = (
+    ("fastapi", "the HTTP + WebSocket app in api/main.py"),
+    ("uvicorn", "the ASGI server that app is served by"),
+    ("pydantic", "protocol.py and nav/models.py - the client/server wire contract"),
+    ("httpx", "WOLFANG CGI client, file offload, thumbnails"),
+)
 
 
 def say(mark, what, detail=""):
     print(f"[{mark}] {what}" + (f"   {detail}" if detail else ""))
+
+
+def call(cmd, **kw) -> int:
+    """subprocess.call, with this process's own output flushed out of the way first.
+
+    Both test suites run as children that inherit this stdout. Straight to a terminal
+    that is line-buffered and the order is the order you wrote it in; redirected to a
+    file it is BLOCK-buffered, so every word bootstrap had printed sat in the buffer
+    until exit - and `python bootstrap.py --test > report.txt` produced a file that
+    opened with the client suite's whole run (45 lines, measured by redirecting it on
+    its own) and only reached "NEPTUNE bootstrap" after all of it, with each section
+    heading below the section it introduces. A report whose parts arrive in a
+    different order depending on whether it was piped is not a report, and this is the
+    file people pipe when they are asking someone else for help.
+
+    The line count above is the measured one, and it is written here because the
+    number that used to be in its place was 295 - the client suite's CHECK total,
+    pasted in as though it were a line total. Two different quantities wearing one
+    number is the same class of mistake as the stale counts below.
+    """
+    sys.stdout.flush()
+    return subprocess.call(cmd, **kw)
+
+
+def interpreter_in(venv: Path) -> Path:
+    """Where python lives inside `venv` - Scripts on Windows, bin everywhere else.
+    The path is built even when nothing is there yet, because --dev needs it to create it."""
+    return venv / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
+
+
+def venv_python() -> Path | None:
+    """The interpreter of whichever venv this machine actually has, or None for neither.
+
+    ONE definition on purpose, and it knows about both machines: --dev installs the API
+    deps into ROOT/.venv here, install.sh installs them into api/.venv on the Pi. Anything
+    that runs the API's own code has to use that interpreter, because `sys.executable` is
+    merely whatever python typed `bootstrap.py` - usually the bare system one, with none of
+    those deps - and a suite run under it fails on imports and reports the repo broken on
+    the very machine this run has just finished certifying.
+    """
+    return next((p for p in map(interpreter_in, (VENV, PI_VENV)) if p.exists()), None)
 
 
 def is_pi() -> bool:
@@ -84,6 +157,11 @@ def topside(args) -> int:
 
     launcher = ROOT / "client" / "launch" / "Neptune.bat"
     say(OK if launcher.exists() else BAD, "launcher", str(launcher))
+    # Counted, not merely marked. A missing launcher printed [ MISS ] and then fell
+    # through to "Everything this machine needs is present." at the bottom, because the
+    # line was drawn from a condition nobody added to the tally - a report that
+    # contradicts itself six lines apart is worse than one that never mentioned it.
+    missing += (0 if launcher.exists() else 1)
 
     hostfile = ROOT / "client" / "launch" / "neptune-host.txt"
     if hostfile.exists():
@@ -105,10 +183,20 @@ def topside(args) -> int:
         if not br:
             say(BAD, "tests", "need a browser")
             return missing + 1
-        rc = subprocess.call([sys.executable, str(ROOT / "client" / "tests" / "run.py")])
+        rc = call([sys.executable, str(ROOT / "client" / "tests" / "run.py")])
         missing += (1 if rc else 0)
     else:
-        say(WARN, "tests", "python client/tests/run.py   (214 checks, ~90 s)")
+        # MEASURED on the ROG Ally, re-run 2026-08-07: "295/295 checks passed in 114s
+        # across 12 suites", exit 0. FOUR different totals for this one suite were in
+        # circulation simultaneously - 214 on this very line, 249 in
+        # client/tests/README.md, 286 in client/README.md and .specs/design.md, and 295
+        # in reality - because each was copied forward from whichever tree the writer had
+        # open rather than from a run. A stale number here is worse than none:
+        # someone who reads 286 and watches 295 go by has been told the bench is
+        # running something other than what it is, and then has no reason to believe
+        # anything else this file prints. Re-measure by RUNNING it whenever a suite is
+        # added, never by adjusting it until it feels right.
+        say(WARN, "tests", "python client/tests/run.py   (12 suites, 295 checks, ~114 s)")
     return missing
 
 
@@ -127,30 +215,187 @@ def vehicle(args) -> int:
         return 0
 
     print("\n--- API DEV ENVIRONMENT ---")
-    venv = ROOT / ".venv"
-    py = venv / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
+    venv = VENV
+    py = interpreter_in(venv)
     if not py.exists():
         say(WARN, "creating venv", str(venv))
-        if subprocess.call([sys.executable, "-m", "venv", str(venv)]) != 0:
+        if call([sys.executable, "-m", "venv", str(venv)]) != 0:
             say(BAD, "venv", "could not create it")
             return 1
     req = ROOT / "api" / "requirements.txt"
     say(WARN, "installing", str(req))
-    if subprocess.call([str(py), "-m", "pip", "install", "-q", "-r", str(req)]) != 0:
+    if call([str(py), "-m", "pip", "install", "-q", "-r", str(req)]) != 0:
         say(BAD, "pip", "install failed")
         return 1
     say(OK, "api venv", str(venv))
     print("\n  Run the API against the bench simulator (no hardware needed):")
-    print(f"    cd api && NEPTUNE_HW=mock {py} -m uvicorn main:app --port 8000")
+    # Printed in the shell of the machine it is printed ON. This line used to be
+    # `cd api && NEPTUNE_HW=mock python ...` unconditionally, which is bash - and the
+    # only machine that ever reaches this branch is the Windows dev box, where
+    # PowerShell 5.1 rejects `&&` outright and `VAR=value cmd` is not a thing. A
+    # copyable command that does not run is a worse instruction than no command.
+    if platform.system() == "Windows":
+        print(f"    cd {ROOT / 'api'}")
+        print(f'    $env:NEPTUNE_HW="mock"; & "{py}" -m uvicorn main:app --port 8000')
+    else:
+        print(f"    cd {ROOT / 'api'} && NEPTUNE_HW=mock {py} -m uvicorn main:app --port 8000")
     print("  Then point the client at it:  ?host=127.0.0.1:8000")
     return 0
+
+
+def hardware_deps() -> int:
+    """Report the Pi-only hardware libraries. Never installs one.
+
+    Absent on the bench is CORRECT, not broken: every hardware import in RealHardware is
+    lazy, and with the wiring flag still False `NEPTUNE_HW=auto` lands on the flagged
+    bench simulator regardless of what is installed. On the Pi the same absence is the
+    difference between a real dive and a simulated one presented as real - the exact
+    failure this system is arranged against - so there, and only there, it counts.
+    """
+    print("\n--- VEHICLE HARDWARE LIBRARIES (Pi only) ---")
+    on_pi = is_pi()
+    missing = 0
+    for mod, pkg, what in HW_DEPS:
+        try:
+            found = importlib.util.find_spec(mod) is not None
+        except Exception:  # noqa: BLE001 - a half-installed package reports absent, not raises
+            found = False
+        if found:
+            say(OK, mod, what)
+        elif on_pi:
+            say(BAD, mod, f"pip install {pkg}   ({what})")
+            missing += 1
+        else:
+            say(WARN, mod, f"not needed here - the bench runs NEPTUNE_HW=mock   ({what})")
+    if not on_pi:
+        print("  Nothing above is installed by this check, on purpose. See docs/hardware.md.")
+    return missing
+
+
+def probe_imports(py: Path | None, mods: tuple[str, ...]) -> dict[str, bool]:
+    """Which of `mods` the interpreter that would actually RUN the api can import.
+
+    Deliberately NOT find_spec in this process when a venv exists. bootstrap.py is typed
+    with whatever python is on PATH - usually the bare system one - while the api's deps
+    were installed into the venv. Asking this interpreter would report fastapi missing on
+    a machine where `--dev` installed it thirty seconds earlier, and then print an
+    install command that has already been run, which teaches a newcomer to distrust the
+    one tool whose entire job is telling them where they stand.
+
+    A venv that will not answer reports its modules ABSENT rather than assumed present:
+    this check exists to find out, and "could not find out" is not "fine".
+    """
+    def here(m: str) -> bool:
+        try:
+            return importlib.util.find_spec(m) is not None
+        except Exception:  # noqa: BLE001 - a half-installed package reports absent
+            return False
+
+    if py is None:
+        return {m: here(m) for m in mods}
+    code = ("import importlib.util as u, sys\n"
+            "def ok(m):\n"
+            "    try: return u.find_spec(m) is not None\n"
+            "    except Exception: return False\n"
+            "print(''.join('1' if ok(m) else '0' for m in sys.argv[1:]))\n")
+    try:
+        out = subprocess.run([str(py), "-c", code, *mods],
+                             capture_output=True, text=True, timeout=60)
+        flags = (out.stdout.strip().splitlines() or [""])[-1]
+        if len(flags) == len(mods) and set(flags) <= {"0", "1"}:
+            return {m: f == "1" for m, f in zip(mods, flags)}
+    except Exception:  # noqa: BLE001 - a venv whose python is gone or broken
+        pass
+    return {m: False for m in mods}
+
+
+def core_deps() -> int:
+    """Report the api's core python libraries, and say exactly how to get them.
+
+    This section exists because every agent and every newcomer on this bench hit the
+    same wall - `No module named 'pydantic'` out of api/tests/run.py - and worked around
+    it by hand with a throwaway venv, while `python bootstrap.py` sat there reporting a
+    healthy machine. The file whose job is to say what state your machine is in was
+    silent about the one thing wrong with it.
+
+    Counted as MISSING only on the Pi, where the api IS the job. Topside the api is not
+    needed at all: the client is a browser app with no python in it, and the simulator
+    flies with nothing installed. So off the Pi this is a note with a command attached,
+    not a failure - the same rule, and for the same reason, as hardware_deps().
+    """
+    print("\n--- API CORE LIBRARIES ---")
+    py = venv_python()
+    say(OK if py else WARN, "interpreter", str(py) if py else
+        f"no repo venv - checking {sys.executable}")
+    found = probe_imports(py, tuple(m for m, _ in CORE_DEPS))
+    absent = [m for m, _ in CORE_DEPS if not found[m]]
+    on_pi = is_pi()
+    for mod, what in CORE_DEPS:
+        # The absent ones say "not installed" in the detail, in the same shape as
+        # hardware_deps. Printing only the description left four [ note ] lines that a
+        # reader skims as four things that are fine.
+        say(OK if found[mod] else (BAD if on_pi else WARN), mod,
+            what if found[mod] else f"not installed   ({what})")
+    if not absent:
+        return 0
+    if on_pi:
+        print("\n  The vehicle cannot serve without these. Re-run install.sh; it builds")
+        print(f"  {PI_VENV} from api/requirements.txt.")
+        return len(absent)
+    print("\n  Without these you can still fly the simulator and run the client suite -")
+    print("  neither uses python at all. What you cannot do is start the api or run")
+    print("  its full test suite: api/tests/run.py will report replay and telemetry")
+    print("  as never loaded, which is not a failure of the code.")
+    print("\n  One command fixes it, and nothing else has to be remembered:")
+    print("      python bootstrap.py --dev")
+    # Said here, next to the evidence, because the summary at the bottom of this run
+    # will report a healthy machine and a reader who has just been told what they
+    # cannot do deserves to know which of the two statements to believe.
+    print("\n  None of this is counted as missing below: a topside handheld runs the")
+    print("  client and never the api, so on that machine the absence is correct.")
+    return 0
+
+
+def api_tests(args) -> int:
+    print("\n--- API TESTS ---")
+    suite = ROOT / "api" / "tests" / "run.py"
+    if not suite.exists():
+        say(WARN, "api tests", "no api/tests/run.py in this checkout - nothing to run")
+        return 0
+    if not args.test:
+        # BOTH numbers, and the condition on the second is the load-bearing part.
+        # MEASURED 2026-08-07 with the core deps present: "147/147 checks passed in 1s
+        # across 4 suites", exit 0. MEASURED the same day in a venv with none of them:
+        # "100/103 checks passed in 0s across 2 of 4 suites", verdict INCOMPLETE, exit
+        # 2 - replay and telemetry never load at all and three checks inside filters
+        # skip. So the total is printed WITH the condition attached rather than bare:
+        # a count that silently omitted the suites which never loaded would be the
+        # very lie that runner was rewritten to stop telling, and a bare suite count
+        # with no checks at all told the reader less than this bench actually knows.
+        say(WARN, "api tests", "python api/tests/run.py   "
+                               "(4 suites, 147 checks with the core deps; or pass --test)")
+        return 0
+    # The venv interpreter whenever there is one (see venv_python): fastapi, pydantic and
+    # httpx were installed INTO it, and the suite imports the API's own modules. Running
+    # this under sys.executable is how `--test` came to fail with ModuleNotFoundError
+    # immediately after `--dev` finished installing the very modules it could not find.
+    # api/tests/run.py now hops to the same venv by itself; passing it explicitly keeps
+    # this working if that ever gets a --no-venv in front of it.
+    py = venv_python()
+    if py is None:
+        say(WARN, "interpreter", f"no venv - running under {sys.executable} "
+                                 "(pass --dev to build one if the imports fail)")
+    # cwd=api because the API's imports are rooted there (`from config import settings`),
+    # the same way the README and install.sh run it.
+    rc = call([str(py or sys.executable), str(suite)], cwd=str(ROOT / "api"))
+    return 1 if rc else 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dev", action="store_true", help="build the API virtualenv")
-    ap.add_argument("--test", action="store_true", help="run the client test suite")
+    ap.add_argument("--test", action="store_true", help="run the test suites")
     args = ap.parse_args()
 
     print("NEPTUNE bootstrap")
@@ -160,6 +405,9 @@ def main() -> int:
     missing = check_common()
     missing += topside(args)
     missing += vehicle(args)
+    missing += hardware_deps()
+    missing += core_deps()
+    missing += api_tests(args)
 
     print()
     if missing:
