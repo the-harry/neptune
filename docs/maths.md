@@ -62,10 +62,10 @@ If you fix one, close the row and delete the line here in the same commit.
 
 | What | Where it is explained | Parked as |
 |---|---|---|
-| The payout that bounds the leash is a model on a stock hull, and the journal keeps it under the encoder's own name | [§4](#4-the-tether-clamp--the-leash-is-a-fact), and the footnote in [§14](#14-what-a-number-is-allowed-to-claim) | pre-first-dive batch (2 of 4) — *api* |
+| The payout that bounds the leash is a model on a stock hull, and the journal keeps it under the encoder's own name | [§4](#4-the-tether-clamp--the-leash-is-a-fact), and the footnote in [§15](#15-what-a-number-is-allowed-to-claim) | pre-first-dive batch (2 of 4) — *api* |
 | The drift penalty is nested inside the snap branch | [§5](#5-centreline-snapping--the-magnet-that-is-not-allowed-to-lie), [§12](#12-confidence--the-humility-score) | pre-first-dive batch (1 of 4) — *api* |
 | The calibration tool takes the encoder over the operator's own tape measure | [§8](#8-calibration-forensics--the-tool-that-is-allowed-to-say-no) sets out the three witnesses and the encoder's known bias; the precedence between them is stated only in the parked row | pre-first-dive batch (3 of 4) — *api* |
-| The simulator's true speed table is the estimators' own, so the A/B gate runs in a world where the speed model is exactly right | [§7](#7-the-simulators-dirty-tricks--a-liar-with-a-fixed-seed), [§14](#14-what-a-number-is-allowed-to-claim) | pre-first-dive batch (4 of 4) — *api tests* |
+| The simulator's true speed table is the estimators' own, so the A/B gate runs in a world where the speed model is exactly right | [§7](#7-the-simulators-dirty-tricks--a-liar-with-a-fixed-seed), [§15](#15-what-a-number-is-allowed-to-claim) | pre-first-dive batch (4 of 4) — *api tests* |
 | The snapped position, and the size of the correction, never reach the screen | [§5](#5-centreline-snapping--the-magnet-that-is-not-allowed-to-lie) | *Snapping is invisible on the console* — client, post-hardware audit |
 | Confidence is computed every tick, logged, and drawn nowhere | [§12](#12-confidence--the-humility-score) | *Confidence is never rendered* — client, after real dive logs |
 
@@ -89,7 +89,8 @@ in plain words](#the-symbols-in-plain-words)
 11. [The snag detector — an if-statement with the instincts of a lie detector](#11-the-snag-detector--an-if-statement-with-the-instincts-of-a-lie-detector)
 12. [Confidence — the humility score](#12-confidence--the-humility-score)
 13. [Depth from pressure — the one number nobody has to build](#13-depth-from-pressure--the-one-number-nobody-has-to-build)
-14. [What a number is allowed to claim](#14-what-a-number-is-allowed-to-claim)
+14. [The launch bank — measuring a bank against the water beside it](#14-the-launch-bank--measuring-a-bank-against-the-water-beside-it)
+15. [What a number is allowed to claim](#15-what-a-number-is-allowed-to-claim)
 
 ## The symbols, in plain words
 
@@ -2482,7 +2483,121 @@ RealHardware._pressure_tick(), RealHardware.read_pressure(), DeviceHealth.faulte
 `api/nav/deadreckoning.py — DeadReckoner.update()`
 `api/config.py — Settings.surface_pressure_psi, Settings.psi_per_meter`
 
-## 14. What a number is allowed to claim
+## 14. The launch bank — measuring a bank against the water beside it
+
+You are standing on a towpath with a sub in your arms, looking for somewhere to put it in.
+What you want to know is simple and entirely local: **how far down is the water from here?**
+Half a metre and you can kneel and lower it. Two metres of brick wall and you cannot, not
+with a tethered vehicle and not without dropping it.
+
+The Environment Agency has flown most of England with a laser and published the result: a
+grid of ground heights, one number per metre square, measured from an aircraft. So the height
+of the towpath is known. The height of the water is known. Subtract and you have your answer.
+
+Except that "the height of the water" is where this gets interesting, and it is the whole
+reason this section exists.
+
+A canal is not a river. It does not slope. It is a **staircase of flat sheets**, each one
+dead level for miles, separated by locks that step it down. In Camden the flight drops
+29.0 → 27.6 → 25.2 → 22.6 metres above sea level in about four hundred metres of walking.
+So there is no such thing as "the water level" for a canal. There are only the water levels,
+one per pound, and the one that matters to you is **the one you are standing next to**.
+
+Get this wrong in the obvious way — take one water height for the whole area — and the layer
+does something worse than fail. Above the lock it measures banks against water that is too
+low and calls safe ones dangerous. Below the lock it measures against water that is too high
+and calls dangerous ones safe. It is confidently wrong at both ends and correct only in the
+middle, which is the shape of error that gets somebody hurt: not noise, but a smooth,
+plausible answer that is systematically wrong in a way that depends on where you are.
+
+So the layer finds the sheets first. Water is the flattest thing in the landscape — a canal
+surface varies by centimetres over hundreds of metres, while nothing else does — so the
+elevations along the cut pile up into sharp spikes, one per pound, with the lock steps as
+gaps between them. Find the spikes and you have found the water levels, without anybody
+publishing them. Then every square metre of bank is measured against the sheet it actually
+sits beside.
+
+Two consequences worth stating plainly, because both are counter-intuitive on the ground.
+A bank **higher above sea level** can be the safer one — the probes in the tests are exactly
+this, 0.75 m higher in absolute terms and lower relative to its own pound. And **amber is a
+statement about height and nothing else**. It knows nothing about fences, gates, private
+land, nettles, or whether you can carry a sub to it. It is a geometric fact, not permission.
+
+The last piece is what the layer refuses to draw. **Water is never painted**, at any zoom.
+Not blue, not shaded, nothing — because the survey says nothing about what is under the
+surface, and a tint over water would be read as a claim about depth by an operator glancing
+at a screen in the rain. Ground with no paint has not been surveyed and found safe. It has
+not been looked at.
+
+### The formal bit
+
+*Skippable. The story above is the whole idea; this is how the arithmetic is actually done.*
+
+**Finding the water.** No list of locks appears anywhere in this code, and none is needed.
+Water is detected by flatness: take the elevation gradient at every cell and call a cell flat
+where $|\nabla z| <$ `lidar_flat_gradient` (0.04, i.e. a 4 % slope), then keep the flat cells
+within `lidar_water_sample_m` (8 m) of the centreline. On a 1 m composite the canal surface is
+the flattest thing in the scene by a wide margin — inside one sheet the 10th and 90th
+percentiles agree to the centimetre. A bridge deck is the case this has to get right, and does:
+a deck is cambered, fails the flatness test, and never becomes its own datum.
+
+**The datum field, and the part that actually matters.** Every bank cell is measured against
+the elevation of the **nearest flat-water cell**, found with a Euclidean distance transform
+over the water mask. Not against a pound level, and not against any global figure — against
+the water *beside it*. That single choice is what makes the amber/brown split walk down a lock
+flight correctly with no knowledge that locks exist: cross a lock and the nearest water is the
+next pound down, so the datum steps down with you, automatically.
+
+**The pound levels are for the labels, not the classification.** Histogram the flat-water
+elevations in `lidar_pound_bin_m` (0.2 m) bins and take the prominent, well-separated modes
+via `scipy.signal.find_peaks`, requiring `lidar_pound_separation_m` (0.6 m) between them so
+one pound cannot report as two. The reported level is the **median of the winning bin and its
+immediate neighbours**, not the bin centre — a bin centre quantises every level to the nearest
+10 cm and the phase of that quantisation is an accident of where the histogram happened to
+start. Against the Camden flight the median form reproduces 29.0 / 27.6 / 25.2 / 22.6 to the
+centimetre; bin centres come out half a bin off. `BANK_POUND_MIN_PIXELS` (500) is a guard on
+the whole sample: fewer flat-water cells than that and no levels are reported at all, rather
+than a mode being fitted to a puddle.
+
+**Classifying.** With $h$ the cell's elevation and $w$ the elevation of its nearest water
+cell, the height above local water is $\Delta = h - w$, and
+
+$$
+\text{class} =
+\begin{cases}
+\text{WATER} & \text{inside the channel buffer, \textbf{or} flat and } |\Delta| \le 0.25\ \text{m}\\
+\text{LOW (amber)} & \Delta < \texttt{lidar\_launch\_max\_height\_m}\ (2\ \text{m})\\
+\text{HIGH (brown)} & \text{otherwise}
+\end{cases}
+$$
+
+The water test is a union of two, and the second half is why a wide basin or a winding hole
+does not come out as a two-metre-deep hole in the paint: anything flat, within
+`BANK_WATER_REACH_M` (40 m) of the centreline and level with the local datum to within
+`BANK_WATER_TOLERANCE_M` (0.25 m) is water, whether or not the published centreline happens to
+run through it.
+
+The comparison is strictly `<`, so exactly 2.000 m is brown. That edge is asserted in the
+tests with values chosen to be exact in float32 (1.9375 / 2.0000 / 2.0625), so the check
+measures the comparison and not a rounding error.
+
+**Downsampling without inventing.** At zoom levels where one screen pixel covers many grid
+cells, the naive move is to average — and averaging class codes manufactures amber along
+every water/wall seam, because the mean of WATER (1) and HIGH (3) is LOW (2). A constructed
+sheer-wharf case produces 470 invented amber cells at z15 that way, from a scene containing
+no amber at all. The tiler therefore **counts** rather than averages: each output cell takes
+the majority class of the cells beneath it, so a class can only appear on screen if it exists
+underneath. Verified at 0 invented cells across 1,123,868 aggregated cells. The output cell's
+alpha is set to the *proportion* of its subpixels that carried paint, so the edge of a
+surveyed corridor fades out honestly instead of claiming full coverage.
+
+**Relief.** The shading is a standard hillshade with the light at azimuth 315°, altitude 45°,
+and vertical exaggeration ×3 — a cartographic convention, not a measurement, and it modulates
+brightness only within the band `BANK_HILLSHADE_MIN`–`MAX` (0.72–1.60) so it can never move a
+cell across a class boundary. The relief is there to make a wall look like a wall; it is not
+allowed to change what the colour says.
+
+## 15. What a number is allowed to claim
 
 *This section has no formal bit. It is the one topic in the document with nothing to
 skip.*
