@@ -187,11 +187,33 @@ REC.tickStaleness = function(){
 
 /* ---- upload loop (§5): batched, capped, backing off ---- */
 /* Remaining upload budget in bytes for the current 1 s window. */
+/* THE WINDOW HAS TO SPAN THE UPLOAD PERIOD, or the cap throttles to a fraction of
+   itself and the queue never drains.
+
+   This measured a ONE SECOND window and returned one second's allowance, while
+   _scheduleUpload fires every uploadEveryMs (5 s). By the time each upload ran the
+   window had always rolled clean, so `used` was 0 and the budget was 8 kB — one
+   second's worth, spent once per five seconds. The 64 kbps cap was really 12.8 kbps,
+   under-spent five-fold by its own limiter.
+
+   That is below what the console PRODUCES. The gamepad sampler alone runs at 10 Hz
+   and events are ~250 B, so ~2.5 kB/s goes in against ~1.6 kB/s going out: the ring
+   grows by a few events a second forever, and every event uploaded is older than the
+   last. Measured on the tethered Pi mid-session, `up_lag_ms` had reached 181,368 —
+   the console was shipping gamepad frames three minutes after they happened, which
+   makes the log useless for exactly the thing it exists for, reconstructing what the
+   operator did in the seconds before something went wrong.
+
+   Scaling the allowance by the window length keeps the 64 kbps average EXACTLY as
+   configured — it is the same bytes per second — while letting one upload spend the
+   whole period's worth, which is what the cap always meant. */
 function _bwBudgetLeft(){
-  const now=_mono(), winMs=1000;
+  const winMs = Math.max(1000, CONFIG.recorder.uploadEveryMs|0);
+  const now=_mono();
   REC.bytesWindow=REC.bytesWindow.filter(x=>now-x.t<winMs);
   const used=REC.bytesWindow.reduce((a,b)=>a+b.n,0);
-  return (CONFIG.recorder.uploadCapBps/8) - used;              // bytes/sec = bps/8
+  const capBytes = (CONFIG.recorder.uploadCapBps/8) * (winMs/1000);   // bytes/sec = bps/8
+  return capBytes - used;
 }
 async function _uploadOnce(){
   if(REC.uploading || !REC.enabled) return;
