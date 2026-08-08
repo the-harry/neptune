@@ -599,3 +599,254 @@ no fix exists only on a machine.
 4. THE installer SHALL refuse to start a video plane that cannot work.
 5. Topside one-time machine setup SHALL be a committed script.
 6. Line endings SHALL be enforced per platform: a stray CR breaks both shell and PowerShell.
+
+---
+
+## 10. The chart: hazards, and the depth of the water
+
+The canal's hazards are published and its depth is not. Both arrive on this console as
+claims of very different strength, and the rule of §0 applies to a download exactly as it
+applies to a sensor: **a layer nobody fetched must never be readable as water with nothing
+in it.** The design is `.specs/design.md` §25 (the hazard card) and §26 (depth).
+
+### R10.1 — Absent, corrupt and empty are three different answers
+**As an** operator about to put a sub in the water, **I want** "you never downloaded this",
+"what you downloaded is unusable" and "there is nothing of this kind here" to be three
+different answers, **so that** an empty-looking stretch of map cannot mean any of the other
+two.
+
+This is the safety-critical one in this section. Two of those three mean *nothing is known
+about the hazards here*, and only the third is a survey result. Collapsed into one blank
+map they are indistinguishable, and the failure mode is a pilot driving into a sluice.
+
+**Acceptance criteria**
+1. THE system SHALL carry three distinct states for every hazard layer — **present**,
+   **absent** and **unreadable** — and SHALL NOT collapse any two of them into one, at any
+   stage between the disk and the screen.
+2. WHEN a layer fetched cleanly and matched nothing in the area, THEN a file SHALL still be
+   written with zero features, AND it SHALL be reported as an empty **result** in words that
+   distinguish it from a missing layer.
+3. WHEN a layer's fetch failed part-way, THEN NO file SHALL be written for it, AND the
+   failure SHALL be recorded with its reason. A partial layer SHALL NOT reach the disk.
+4. WHEN a layer file is on the card and cannot be parsed, THEN it SHALL be reported
+   UNREADABLE, SHALL NOT be reported as absent, and SHALL NOT be served as an empty layer.
+   THIS SHALL include a file that is valid JSON and is not a GeoJSON FeatureCollection.
+5. A layer SHALL be reported present only when it has been **read**. Its existence, its size
+   and the fetch's own record of how many features it wrote SHALL NOT be sufficient.
+6. WHERE the file's feature count disagrees with the fetch's recorded count, THEN both
+   numbers SHALL be reported, under their own names, rather than one standing in for the
+   other.
+7. THE pre-dive readiness check SHALL fail for an absent hazard layer AND for an unreadable
+   one, AND WHERE both apply it SHALL report both, with the two remedies stated apart —
+   re-fetch versus delete-then-fetch send the operator to two different places.
+8. THE three states SHALL be distinguishable **on screen at a glance**: a different word for
+   each, carried by shape or style and not by colour alone, and not merely by a sentence
+   that has to be read.
+9. WHEN nothing could be asked at all — no index, no answer, a timeout — THEN NO layer SHALL
+   be reported absent; the console SHALL report **cannot-tell**, because nobody was asked
+   and absence is a claim it has no standing to make.
+10. AN absent layer SHALL NOT display a feature count of zero beside it.
+11. WHEN a layer that was switched off is nonetheless known to be absent from the index,
+    THEN that absence and its reason SHALL be kept. "Not asked" and "not there" SHALL be
+    different words, AND one absence SHALL NOT produce two different sentences depending on
+    whether the operator happened to have the layer switched on.
+12. THE reason for an absence SHALL be the one the vehicle gave, quoted, rather than a
+    generic sentence composed by the console.
+
+### R10.2 — Hazard marks cannot be switched off
+**As an** operator, **I want** locks, weirs, sluices, culverts, tunnels, tunnel portals and
+outfalls always drawn, **so that** no display preference of mine can hide the structures
+that take a sub and a tether somewhere neither comes back from.
+
+**Acceptance criteria**
+1. TIER-1 hazard layers SHALL be drawn whenever their data is on the card, with no operator
+   switch, no persisted preference and no default that could turn one off.
+2. NO control that turns a tier-1 layer off SHALL be rendered, AND the setter SHALL refuse
+   the request when called directly.
+3. THE refusal SHALL be logged rather than silent, so a control that appears to do nothing
+   cannot be read as a layer that was switched off.
+4. WHERE a switch would be, the row SHALL say so in a word (ALWAYS) rather than leave a
+   blank that reads as a control not yet drawn.
+5. Hazard marks SHALL be drawn ON TOP of operations and extras, so a mooring glyph can never
+   sit over a lock.
+6. THE tier SHALL be carried by SHAPE as well as colour.
+7. WHEN the vehicle publishes a layer this console has no entry for AND its name contains a
+   word that always means a hazard, THEN it SHALL be drawn as a hazard AND SHALL state that
+   it was classified by its name rather than by a rule anybody wrote.
+8. WHEN two published layers match the same row, THEN the second SHALL get a row of its own;
+   neither SHALL overwrite the other's data.
+9. WHEN a tier-1 layer is absent or cannot be told about, THEN the MAP itself SHALL say so —
+   not only a panel the operator has to open first.
+
+### R10.3 — The runtime needs no network and no name resolution
+**As an** operator on a towpath with no internet, **I want** every chart and depth answer to
+come off the disk, **so that** nothing on this console can hang on a DNS lookup with a
+vehicle in the water.
+
+**Acceptance criteria**
+1. THE hazard fetch SHALL be a bootstrap-time command, SHALL say so before it does anything,
+   and SHALL NOT be reachable from the piloting path.
+2. THE module that fetches SHALL contain no hostname; every URL SHALL live in configuration
+   and be resolved only at bootstrap.
+3. NO module on the runtime path SHALL resolve a hostname to answer a question about hazard
+   or depth layers. Serving them SHALL require only reading directories and files.
+4. WHERE the runtime imports the downloader at all, it SHALL be for path arithmetic only,
+   AND a build without the downloader SHALL still serve everything else.
+5. WHEN a bootstrap-only input is missing canal-side — a hazard card, a waterway centreline —
+   THEN it SHALL be reported ABSENT with the command that would fix it, and nothing SHALL
+   attempt to fetch it.
+6. EVERY request the console makes for a chart layer SHALL carry a timeout, AND a vehicle
+   that does not answer within it SHALL produce cannot-tell rather than a hung overlay.
+7. WHEN a layer reports cannot-tell, THEN it SHALL be re-asked in the background on a bounded
+   interval and SHALL recover with no operator action — a blank that never clears is its own
+   fault.
+
+### R10.4 — A fetch that retrieved nothing destroys nothing and reports failure
+**As an** operator who has re-run the fetch on a dying hotspot, **I want** the card I already
+had to survive, **so that** a bad afternoon at the Trust or a dropped connection cannot leave
+me with less hazard data than I started with, and cannot tell me it worked.
+
+**Acceptance criteria**
+1. WHEN a fetch writes no layer at all, THEN it SHALL delete no file, AND the card it found
+   SHALL be left exactly as it was.
+2. A fetch SHALL remove a file only when it has written at least one layer AND has accounted
+   for at least the configured fraction of the layers that were on the card when it started.
+3. A file SHALL be removed only for a POSITIVE reason — left out of this run by decision, or
+   no longer offered by the source. A failed fetch SHALL NOT be such a reason.
+4. WHEN a layer could not be refreshed, THEN it SHALL be carried forward with the date it was
+   ACTUALLY fetched, SHALL be reported as not refreshed by this run, AND SHALL be what the
+   console draws.
+5. WHEN a fetch downloaded nothing, or left any layer unrefreshed or unaccounted for, THEN it
+   SHALL report failure and exit non-zero. Finishing SHALL NOT be reported as success.
+6. A layer file with no readable provenance beside it SHALL be kept, SHALL be named as
+   unaccounted for, AND SHALL NOT be listed as a layer — nothing can say what is in it or
+   when it was fetched.
+7. EVERY file this subsystem writes SHALL be written atomically, so a reader only ever sees a
+   whole file, AND any fragment left by a kill SHALL NOT match the patterns anything globs
+   for a layer.
+8. THE index on the card SHALL describe the CARD — carried-over layers included — and not
+   merely what the latest run downloaded.
+9. A fetch SHALL be checked against two independent counts: the source's own count for the
+   same area asked before paging, and the layer's national count, AND a disagreement SHALL be
+   recorded as a warning rather than acted on.
+10. A licence that could not be read SHALL be recorded as null. It SHALL NOT be recorded as
+    permissive, AND a licence naming terms that are not quoted SHALL be recorded as
+    cannot-tell rather than as permission.
+11. THE attribution SHALL travel inside each data file as well as in the provenance.
+
+### R10.5 — A sounding is a lower bound on the bed, never the bed
+**As an** operator reading a depth off the map, **I want** to know it is a floor under the
+water and not the depth of the bed, **so that** I do not fly the sub at a clearance nothing
+measured.
+
+**Acceptance criteria**
+1. THE quantity SHALL be NAMED as a lower bound in the store, on disk and on the wire, AND
+   every cell SHALL additionally carry an explicit bound marker.
+2. EVERY feature SHALL carry the sentence saying what it is, not only the file — a feature
+   picked up and drawn on its own SHALL NOT lose the claim.
+3. Serving code SHALL read the quantity's name out of the store rather than hardcoding it, so
+   a rename cannot go on publishing numbers under a name nothing has checked.
+4. Cells absent from the survey SHALL mean UNSURVEYED, stated in the file itself, AND SHALL
+   NOT be drawn as shallow, as zero or as clear water.
+5. A survey with no cells SHALL still produce a file that says WHY it is empty, AND "nobody
+   has been down here" SHALL be a different sentence from "a dive was flown with a dead
+   sensor".
+6. WITHIN a cell the DEEPEST contact SHALL win. A later, shallower dive SHALL NOT weaken the
+   bound, AND contributions SHALL NOT be averaged.
+7. RE-RUNNING a dive SHALL replace that dive's own contribution, never add to it.
+8. A store SHALL refuse to accumulate a dive binned against a different centreline, a
+   different cell size or a different area, AND SHALL say why in each case.
+9. WHERE a journal recorded no confidence, THE cell SHALL carry null rather than 1.0.
+10. THE datum SHALL be stated as the water surface on the day of each dive, AND each cell
+    SHALL record which dive its deepest sounding came from and when.
+11. Surveyed and nominal depth SHALL be stored, served and drawn as separate layers, AND
+    SHALL NOT be merged or averaged into one figure.
+12. SURVEYED cells SHALL be visually distinguishable from NOMINAL ones by TEXTURE and not by
+    colour alone, AND both SHALL use the console's one depth colour scale so the colour means
+    the same thing everywhere.
+13. Soundings measured during the current session SHALL be counted separately from the saved
+    survey, even where they are drawn identically.
+
+### R10.6 — No evidence of bottom contact means no soundings, and a reason
+**As an** operator, **I want** a dive that never touched the bottom to produce nothing and
+tell me which thing was missing, **so that** I am not handed a plausible depth map built out
+of a sub hovering at neutral buoyancy.
+
+**Acceptance criteria**
+1. A depth sample SHALL count as bottom evidence ONLY where the journal shows the sub
+   descending, then holding depth, WHILE the syringe was still taking on water. A flat depth
+   alone SHALL NOT qualify.
+2. A hold that was not preceded by a recorded descent SHALL NOT qualify, so a sub floating at
+   the surface with the syringe filling SHALL NOT be read as a landing.
+3. WHERE a journal yields no contact, THEN NO cells SHALL be produced AND the refusal SHALL
+   NAME the rung that failed.
+4. THE refusals SHALL be distinct sentences for distinct facts, at minimum: no samples; no
+   depth column; a depth column that never answered; no ballast column; a ballast column that
+   never answered (the syringe was never homed); flat stretches with no fill; too shallow; no
+   descent; too brief.
+5. A null in EITHER the depth or the ballast channel SHALL end a contact run rather than be
+   stepped over, so a stretch nobody watched cannot be read as one continuous hold.
+6. Contact samples discarded for POSITION SHALL be reported as such, AND the refusal SHALL
+   say the depths were real and that the journal cannot say where they were taken.
+7. A sample whose position was HELD because there was no heading SHALL NOT be binned.
+8. A sample further from the channel axis than the estimator's own snapping limit SHALL NOT
+   be binned, AND the count and the worst offset SHALL be reported.
+9. WHERE a sensor answered for part of a dive and then stopped, THE cells it measured SHALL
+   be kept, no cell SHALL be invented for the rest, AND the gap SHALL be reported above the
+   numbers.
+10. A missing waterway centreline SHALL be reported ABSENT with the reason, AND SHALL NOT
+    produce an empty survey.
+11. A cell size outside the supported range SHALL be REFUSED with a reason, never silently
+    clamped.
+12. THE whole rule SHALL be exercisable on a bench with no hardware and no water, from
+    synthetic journals, including its refusals.
+
+### R10.7 — Nominal depth is published guidance and never a survey
+**As an** operator looking at water nobody has sounded, **I want** the published figure drawn
+so it can never be mistaken for a measurement, **so that** I do not read a handbook number as
+something that has been to the bottom.
+
+**Acceptance criteria**
+1. EVERY nominal figure SHALL be labelled NOMINAL on the collection, on every feature, in the
+   human-readable title and in the accessible label, AND SHALL carry explicit flags saying it
+   is not measured and not a survey.
+2. A published guideline draught SHALL be described as a FLOOR on the mid-channel depth and
+   not as the depth, AND the layer SHALL state that it deliberately errs shallow.
+3. EVERY section SHALL state that the figure is mid-channel and that the channel shoals
+   toward both banks.
+4. WHERE the figure came from SHALL be reported — which attribute of which layer, or the
+   hand-typed table — AND the hand-typed rows SHALL say in their own text that they were
+   typed by hand and never downloaded.
+5. WHERE the source records a length as anything other than fully navigable, NO nominal depth
+   SHALL be quoted for it, AND the recorded status SHALL be attached.
+6. A value outside the plausible band SHALL be REFUSED and reported, never clamped, AND an
+   attribute that was present and unreadable SHALL be reported as a finding rather than
+   dropped.
+7. WHERE no guidance exists for a section, THE section SHALL claim no depth at all AND SHALL
+   be drawn as no-claim — neither shallow nor absent.
+8. THE nominal layer SHALL NOT be computed from soundings, and soundings SHALL NOT be
+   averaged into it.
+9. WHERE no waterway geometry is cached for an area, THE layer SHALL be reported ABSENT
+   rather than as an empty collection.
+10. WHERE the geometry is present and corrupt, THE layer SHALL be reported unreadable rather
+    than absent.
+11. WHERE this console draws a band whose width nobody publishes, THE row SHALL say that the
+    width is a drawing convention and the length is the source's own geometry.
+
+### R10.8 — Current is inferred from structures, and never claimed as measured
+**As an** operator, **I want** every statement about moving water on this console to be
+visibly an inference, **so that** I never plan a manoeuvre against a flow figure nobody took.
+
+**Acceptance criteria**
+1. THE system SHALL NOT display, log or transmit a measured flow or current anywhere. The
+   source data publishes none.
+2. EVERY hazard mark SHALL carry, in its own explanation, the statement that the mark says a
+   STRUCTURE is here and never that water is moving through it now.
+3. THAT clause SHALL be appended in ONE place, so a hazard added later cannot be the one that
+   forgets it.
+4. ANY layer that is not a hazard and whose explanation mentions water moving SHALL carry the
+   same clause.
+5. A keep-away ring drawn by this console SHALL be identified as this console's own
+   convention and SHALL NOT be presented as a surveyed danger area.
+6. WHERE a current vector is used in navigation at all, it SHALL be operator-entered, SHALL
+   default to none, AND SHALL NOT be presented as a reading (see also R6.6.5).

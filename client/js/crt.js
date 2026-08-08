@@ -275,9 +275,19 @@ const CRT_NO_FLOW =
   'The Canal & River Trust data carries no flow measurement of any kind, so this mark says a '
 + 'STRUCTURE is here — it never says water is moving through it now. Read it as a place to '
 + 'EXPECT current, never as a reading of one.';
+/* THE STANDOFF IS A SENTENCE NOW, NOT A RING. This clause used to open "The dashed
+   ring is a fixed standoff this console draws around the mark" — and the ring was
+   deleted when it turned out that drawing one around every tier-1 mark put eight
+   overlapping circles across a single screen and buried the centreline under them.
+   The sentence outlived the drawing it described, which is the same defect this file
+   keeps finding elsewhere: an explanation pointing at something that is no longer on
+   the glass. The DISTANCE was always the useful half — a number you can read is worth
+   more than a radius you have to estimate by eye — so it is stated, and the drawing it
+   used to refer to is not. */
 const CRT_RING =
-  'The dashed ring is a fixed standoff this console draws around the mark, chosen by us; it is '
-+ 'not a surveyed danger area and the real one may be larger.';
+  'The keep-away distance above is a fixed standoff this console states, chosen by us; it is '
++ 'not a surveyed danger area and the real one may be larger. Nothing is drawn around the '
++ 'mark to show it — judge it against the scale bar, not against the size of the glyph.';
 /* THE CLAUSE EVERY CHEVRON OWES, kept in one place for the same reason the two above it
    are: it is the half of the mark that says what a rotated glyph does NOT tell you.
    267 features (265 bridges, 2 locks) carry no angle at all, and a chevron pointing at a
@@ -657,7 +667,11 @@ const CRT = {
 function crtWhat(e){
   let s = e.what;
   if(e.tier===1 || e.hazardish || e.flowProxy){
-    if(s.indexOf('standoff this console draws') < 0 && e.standoffM) s += ' ' + CRT_RING;
+    // Match the phrase CRT_RING actually uses. It read 'standoff this console draws'
+    // until the ring was deleted and the clause reworded, at which point the guard
+    // could never fire again — a dedupe check silently testing for a string that no
+    // longer exists anywhere, which is indistinguishable from having no guard at all.
+    if(s.indexOf('standoff this console states') < 0 && e.standoffM) s += ' ' + CRT_RING;
     if(s.indexOf('no flow measurement') < 0) s += ' ' + CRT_NO_FLOW;
   }
   if(e.angleWhat) s += ' ' + e.angleWhat + ' ' + CRT_CHEVRON;

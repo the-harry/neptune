@@ -474,6 +474,8 @@ client/
     ├── recorder.js      # the topside half of the two-sided blackbox
     ├── logview.js       # the live LOGS overlay (CONFIG → LOGS)
     ├── tiles.js         # zero-dep raster XYZ satellite tile engine (Esri), overzoom, screen↔latlon
+    ├── crt.js           # the chart overlay: CRT layer table (tier · mark · standoff · what it
+    │                    #   means for the sub), the three states, and the two depth treatments
     ├── map.js           # radar: camera-primary circular minimap, satellite basemap, track, expand
     ├── navui.js         # origin (device geolocation + tap-to-refine) + navigate-and-select area download
     └── main.js          # RAF frame loop + bootstrap + window.NEPTUNE console API
@@ -835,6 +837,12 @@ The expanded and blind views draw a compact vertical **depth scale**
 the deepest band is a clamp that catches everything below it. It hides with the tracks,
 since it exists only to explain them.
 
+The same twelve bands colour the two **chart depth layers**, so one colour keeps one
+meaning everywhere on this console — see
+[*The chart layers*](#the-chart-layers--what-is-in-this-water-and-what-nobody-looked-for),
+where the key grows two more swatches to say how much the number behind each colour is
+worth.
+
 ### Moving the map
 
 Both full-screen views (expanded and BLIND NAV) can be **dragged with a finger**. Where
@@ -959,6 +967,356 @@ boundary. A basemap failure, a 404, or a draw error leaves the radar **blank but
 instruments — thrust, steering, video — fully live**. The map never captures
 gamepad/keyboard piloting input (handlers are scoped to the canvas; MapLibre, if ever
 vendored, is `keyboard:false`).
+
+## The chart layers — what is in this water, and what nobody looked for
+
+Under the imagery sits the Canal & River Trust's own published asset data: locks, weirs,
+sluices, culverts, tunnel portals, outfalls, and the long tail of operational and
+incidental features. `js/crt.js` draws it and — more to the point — says what each mark
+means **for a 5 kg tethered sub on a reel of cable**, which is never what the layer is
+called. *Weir* is a noun. *"Anything that gets over the sill goes with the water and does
+not come back, and so does the tether"* is the fact you actually need standing on a wet
+towpath, and it is the only version of it that is any use there.
+
+Open it with the **layers** button (the stack-of-sheets glyph) in the map tool column.
+The panel shows in the **expanded map and in blind nav** — blind nav is the *driving*
+view, which is precisely when knowing where the culverts are matters most.
+
+Nothing in this file touches the internet. Every request goes to the Pi over the tether
+carrying its own 4 s timeout (`CRT_API.timeoutMs`), and a Pi that does not answer
+produces a stated unknown rather than a hung overlay. The data got onto the Pi at
+bootstrap; see *[Before you dive in new water](#before-you-dive-in-new-water)* below.
+
+### CRT publish no flow data
+
+**The Trust publish no flow measurement of any kind. Every current claim on this console
+is an inference from where the structures are, and nothing anywhere on it claims a
+measured flow.** The hazard marks are the honest proxy for *expect current here* — a
+place, not a reading. If you take one sentence out of this file, take that one.
+
+It is enforced rather than remembered. Any row that is a hazard, is drawn in the hazard
+colour, or merely *talks about water moving* has the no-flow clause appended to its
+explanation automatically (`crtWhat`), so a hazard added next year cannot be the one that
+forgets to say it. FEEDERS is why the `flowProxy` flag exists at all: it shipped stating a
+current as fact — *"It is a current entering the cut"* — which made it the one
+water-movement claim on the console not marked as an inference. A feeder can be shut. The
+mark is a position out of a structure file either way.
+
+### Three tiers, and tier 1 has no switch
+
+The tier is a **safety decision, not a display preference**.
+
+| Tier | | What is in it | Default |
+|---|---|---|---|
+| **1 HAZARDS** | red octagon | LOCKS · WEIRS · SLUICES · CULVERTS · TUNNEL PORTALS · TUNNELS · OUTFALLS | **always drawn, no switch** |
+| **2 OPERATIONS** | green rounded square | TOWPATH ACCESS · SLIPWAYS · WHARVES · WINDING HOLES · BRIDGES · MOORINGS · SAFETY GATES · STOP PLANK GROOVES · FEEDERS, plus the two DEPTH layers | on, toggleable |
+| **3 EXTRAS** | lilac dot | AQUEDUCTS · WATER POINTS · BOATER FACILITIES · PUMPING STATIONS · BOATYARDS · MILEPOSTS · NOTICES & STOPPAGES · TOWPATH · DOCKS · BOAT LIFTS · EMBANKMENTS · RESERVOIRS · CANAL LINES · PLANNING BUFFER · ANGLING | **off**, and off means *not asked* |
+
+Seven hazards, eleven operations, fifteen extras — thirty-three rows in one table
+(`CRT_LAYERS`), where the entry *is* the layer: its tier, its mark, its standoff, and the
+sentence explaining it. Adding a layer is adding a row; the panel builds itself from it,
+so a layer cannot ship as a bare glyph with nobody's explanation attached.
+
+**Tier 1 cannot be switched off, and that is the whole design.** These are entrainment,
+suction, and nowhere-to-retrieve-a-snagged-ROV-from. A toggle on those is a toggle
+somebody turns off once, on the bench, to see the imagery underneath — and then forgets,
+and then dives. `crtSetOn` *refuses* a tier-1 layer and writes a line to the log saying it
+refused, rather than silently ignoring the call: a control that does nothing and says
+nothing is how somebody concludes the hazard layer was switched off when it never was. In
+the panel the word **`ALWAYS`** sits in a dashed **red** box exactly where the switch would
+be, so the *absence of a control* is itself visible instead of looking like a row that
+failed to render.
+
+Red, and specifically not the console's `--hazard` orange, which it used to share. The chart
+marks went red when the hazard glyphs did, and a panel still labelling them in the same
+orange the console uses for its own alarms made "a lock in the water" and "a download has
+stalled" read as the same class of thing. Tier-1 identity — the `ALWAYS` pill, the HAZARDS
+heading, the key glyph — is `--crt-hazard`, paired with `CRT_C.hazard` in `crt.js` so the
+panel and the map cannot disagree about what a hazard looks like. Fetch and network chrome
+stays orange, because a stalled download is a warning about the console, not about the cut.
+
+Draw order is a safety order — extras, then operations, then hazards on top. A mooring
+glyph must never be able to sit over a lock.
+
+**Shape first, colour second**, the same rule the leak drop and the ROV glyph follow: an
+operator who cannot pick red out of green still has to tell a lock from a slipway. The
+hazard mark is an octagon — the stop-sign shape — filled solid with the letters knocked
+out of it. Operations are hollow rounded squares, extras plain dots. The panel rows draw
+the *same* shapes in SVG, so the key and the map are one vocabulary and not two.
+
+### What each mark means for this vehicle
+
+The marks were not chosen because the Trust publishes them. They were chosen because each
+one names a way to lose this vehicle, and the three tier-1 families are three different
+ways:
+
+- **entrainment and suction** — locks and sluices: water moving faster than a 5 kg sub can
+  swim, and nothing anywhere sized to keep a 30 cm vehicle out;
+- **one-way doors** — weirs and culverts: over the sill or into the pipe and the sub goes
+  with the water and cannot come back, and *the tether goes with it*;
+- **water arriving with no throttle applied** — outfalls, and FEEDERS one tier down;
+- **nowhere to recover from** — tunnels and their portals: no daylight, no line of sight,
+  no bank, and a cable rubbing brickwork the whole way.
+
+| Mark | Layer | What it is for this vehicle |
+|---|---|---|
+| **L** | LOCKS | Tonnes of water in a couple of minutes. The pull at an open paddle is far beyond anything this sub can swim against — it ends up in the chamber, under a gate, or inside the side culverts, and nothing is recovered from those. Keep the sub **and the slack of the tether** outside the ring |
+| **W** | WEIRS | A fixed sill and a drop. A tether over it is being pulled by the whole overspill, not by the sub. Dry and unremarkable most of the year; running hard exactly after the rain that washed in the rubbish you came to lift |
+| **S** | SLUICES | A drain with a suction field in front of it. Whatever goes through is on the far side of a structure you cannot reach |
+| **C** | CULVERTS | The water goes into a buried pipe. A sub that follows the flow in cannot turn round, cannot be seen and cannot be swum out — and **the tether must never follow it**, because a cable jammed inside a pipe you cannot reach is how the sub is lost for good |
+| **T** / **TN** | TUNNEL PORTALS / TUNNELS | The mouth, and the length. Two rows because the Trust publishes two services, both tier 1 — splitting them would draw a keep-away mark at the mouth and an optional dotted line through the thing the mark is warning about. The tunnel gets **no ring**: the hazard is not a point to stay away from, it is the entire line |
+| **OF** | OUTFALLS | Inflow from a drain, stream or spillway. It pushes the sub off course with no throttle applied at all, and it is strongest after heavy rain — which is also when a canal is most worth cleaning |
+| **A** · **SL** | TOWPATH ACCESS · SLIPWAYS | Where you can get the sub *in and out*, and where you could walk to and reach in if it had to be recovered by hand rather than driven home. A slipway is the one edge a heavy sub can be walked in and out of without being lifted over a coping stone by somebody kneeling on wet stone |
+| **WH** | WHARVES | Deep water hard against a built vertical wall, mooring ironwork and chains under the surface, and no shelving bank anywhere to land the sub on |
+| **WD** | WINDING HOLES | The widest open water on most stretches — room to manoeuvre, and also the one place a full-length boat will be swinging its propeller across the whole channel |
+| **B** | BRIDGES | The channel narrows and darkens, and the bed collects whatever went off the parapet — very often exactly what you came to lift. Narrow also means the tether has two walls to find instead of none |
+| **M** | MOORINGS | Chains, ropes, pins and propellers under the surface, and a moored boat can start its engine without warning while the sub is beside it |
+| **SG** · **SP** | SAFETY GATES · STOP PLANK GROOVES | Heavy ironwork in a slot, closing when the water needs it to rather than when you are ready; and narrow sharp-edged grooves exactly the size to trap a tether. A stretch that has been planked off can be drained with no notice reaching you at all |
+| **F** | FEEDERS | The structural reason to *expect* water pushing in sideways, and the sub is the lightest thing in it |
+
+Tier 3 is landmarks, context and the things worth keeping but not worth the clutter —
+except for two, which carry `hazardish` and are therefore **drawn in the hazard colour and
+carry the hazard clauses** the moment you switch them on: **PUMPING STATIONS** (the part
+that matters is the intake, an entrainment hazard of the same family as a sluice, and it
+is not always published as a feature of its own) and **BOAT LIFTS** (treat it as a lock
+several times the size). They sit in EXTRAS because the hazard tier is a fixed list and
+they are not on it — so the honest thing is to keep the list fixed and paint them the
+warning colour, rather than quietly grow the tier.
+
+**Layers this console has never heard of.** The Pi can publish a layer that is not in the
+table. The safe default for an unknown *name* is not "extras, off": if it has `weir`,
+`lock`, `sluice`, `culvert`, `tunnel`, `outfall`, `siphon`, `intake`, `penstock`,
+`spillway` or `paddle` in it, it is drawn as a **hazard** — and its explanation says, in
+its own words, that it was classified **by its name rather than by a rule anybody wrote**.
+An inference marked as an inference, exactly like the flow clause. Anything else is
+adopted into tier 3 and says plainly that nothing on this handheld knows what it means for
+the vehicle, which is why it is off — *not* that it is unimportant.
+
+**The standoff is a sentence, not a ring.** Each tier-1 mark carries a keep-away distance
+(locks 30 m, weirs 35 m, sluices 30 m, culverts 25 m, portals 25 m, outfalls 20 m) and every
+one of those sentences says it is a fixed standoff **this console states, chosen by us** —
+not a surveyed danger area, and the real one may be larger.
+
+A dashed ring used to be drawn at that radius, and it is gone. Around every tier-1 mark it
+put eight overlapping circles across one screen and buried the centreline underneath; a ring
+drawn around everything stops meaning anything, the same way an alarm that fires on a healthy
+console does. Hazards are simply RED now, which survives clutter, and the distance lives in
+the words where it can be read as a number instead of estimated from a radius — judge it
+against the scale bar.
+
+### Nominal versus surveyed depth
+
+Both depth layers use the **same twelve OKLCH bands** as the dive track and the ballast
+tank, so a colour means one thing everywhere on this console. **Only the texture says how
+much the number behind the colour is worth** — which is the same measured-versus-estimated
+distinction the SPEED readout already draws with its tilde and `EST` tag; this is that
+idiom applied to the map.
+
+| | Drawn as | The claim |
+|---|---|---|
+| **DEPTH — NOMINAL** (`DN`) | washed out (28 %), **hatched**, with a dashed thread down the middle | the *published design depth* — what the channel is **supposed** to be |
+| **DEPTH — SURVEYED** (`DS`) | **solid** (62 %) and **outlined** in white | cells this sub has actually been through |
+
+**Nominal is a claim, and it is drawn as one.** The figure comes from the Trust's
+published guideline draught for the class of waterway (`api/nav/nominal.py`), never from
+an instrument. Read the band the way it is drawn: its **length** is the waterway section's
+own published geometry and the figure applies along all of it, but its **width** is a
+drawing convention of ours — nobody publishes how wide the cut is, so 7 m is us saying
+"about the width of a canal" so the claim is visible over the water it is about. The
+shallow edges are in no number here. A section the Trust records as not fully navigable is
+painted **grey**, not shallow and not absent: the guideline is withheld rather than a
+confident metre of water invented over it.
+
+The hatch is not decoration and it is deliberately loud. A first pass drew it at a quarter
+of this strength and it simply vanished over satellite imagery, at which point the nominal
+cells looked exactly like surveyed ones with the outline turned off — which is precisely
+the published-versus-measured confusion the texture exists to prevent.
+
+**A surveyed cell is a lower bound, not the bed.** Nothing aboard measures the depth of
+the bed — there is no echosounder and no altimeter. What the Pi stores is the deepest the
+*sub* got in that cell while the journal showed it arriving on something solid, and every
+error in that has the same sign: the pressure port sits above the keel, it may have landed
+on silt or weed or a sunken trolley, and canal levels move with rainfall and lock use so
+the surface it was measured from is the surface of *that day*. **The bed is at least this
+deep and may be deeper.** A lower bound is the shape of answer that is safe to be wrong in
+— it under-promises clearance. The map starts nominal everywhere and turns solid where the
+sub has been.
+
+**Anywhere not drawn is UNSURVEYED**, which is neither shallow nor zero. It is the same
+doctrine as the layer states below, one level down: an uncoloured cell means nobody has
+been there, not that there is nothing there.
+
+**`+N` on the surveyed row is this session.** Cells the sub drives through now are binned
+by the console (3 m bins in the local frame, deepest sample wins) and drawn with the
+surveyed treatment immediately, before any dive log has been written. They are **counted
+apart** in the pill and in the sentence, because folding them into one number would claim
+the Pi holds a survey it has never been sent — and would put the row in the position of
+reporting the saved survey ABSENT while measured cells are visibly painted on the map.
+
+> Be aware of what the live `+N` cells actually are. The Pi's saved survey only accepts a
+> sample as a sounding when the journal shows **bottom contact** — the sub stopped
+> descending while the syringe was still taking on water — because `api/nav/soundings.py`
+> deliberately refuses to bin every sample: technically every depth reading is a lower
+> bound on the bed under it, and binning them all produces a full, plausible,
+> technically-true map that reads as *"the canal is 1.2 m here"* when it is 2.5 m. The
+> console's live cells have no such test — they are every track point deeper than 5 cm —
+> so they are **valid but much looser** bounds than the saved ones beside them, drawn in
+> the same ink. Read a run of fresh cells as *"there was at least this much water under the
+> hull"*, not as *"the bed is here"*.
+
+Both treatments have a **key**, drawn under the depth ramp in the expanded and blind views
+whenever either depth layer is on: two swatches labelled `NOMINAL` and `SURVEYED`. The
+ramp says how deep; the swatches say how much the number behind the colour is worth.
+
+### ABSENT, CORRUPT and EMPTY — three answers, one of them safe
+
+*"You never downloaded this"*, *"what you downloaded is unusable"* and *"there are no
+hazards here"* are three different claims and they must never collapse into one. On a map
+they look identical: a stretch of water with no marks on it. This is the safety-critical
+distinction in the whole feature.
+
+Every row carries a state pill — the glance-level answer — and no two states share a
+colour. The whole sentence behind each one is the row's `title` and `aria-label`, rewritten
+live as the state changes, so it is available on hover and to a screen reader; the pill is
+what has to survive being read while driving.
+
+| Pill | Colour | What happened | What to do |
+|---|---|---|---|
+| `SHOWN · 12` | green | the Pi has the file and there are 12 features in this area | — |
+| `NONE MAPPED` | dim | the Pi **has** this layer and there is nothing of this kind inside the downloaded area. **A real answer** | nothing — this is a survey result, not a gap |
+| `ABSENT` | red | the Pi looked and the file is not on the disk. **An empty map here means NO DATA, not NONE** | fetch it, with a network, before you dive |
+| `CANNOT TELL` | amber | nobody could be asked at all | replug, restart, or wait — it retries itself |
+| `NOT ASKED` | dim lilac | the layer is switched off, so the console has never requested it. **Not a claim** | switch it on and it will say which of the above applies |
+| `NO AREA` | dim lilac | no map area is active, so there is nothing to ask about | activate or download an area |
+
+`ABSENT` deliberately shows **no count**. `ABSENT · 0` would be the same lie with a number
+on it.
+
+**The index is the gate, and this is why the vocabulary works.** A per-layer `404` means
+"that file is not on the disk" — but it *also* happens on a Pi with no chart service at
+all, and those are not the same claim. So the console asks the index first
+(`GET /api/areas/{area}/crt`), and **the index answering is what earns it the right to
+report per-layer absence**. No index, no claim: every row reads CANNOT TELL, which is the
+truth about a console that has not been able to ask anybody anything. Equally, `off` never
+becomes `absent`: a layer nobody asked about cannot be reported missing.
+
+**CORRUPT is the Pi's third state**, and the client shows it by *quoting the Pi rather than
+paraphrasing it*. A file that is present and will not parse is neither an empty canal nor a
+missing download, and the remedies are opposite — re-fetch versus *delete the file, then
+re-fetch*. The server never serves such a file as an empty layer (`api/nav/service.py`
+`_read_layer`); it reports it separately, and the row's explanation carries the Pi's own
+words: *"the file is on this card and could not be parsed … delete the file and re-run the
+fetch while there is still internet"*.
+
+**Its pill reads `ABSENT`** — the console has one red pill where the Pi has two different
+kinds of missing — so on a red row, read the sentence as well: the pill tells you data is
+missing, the Pi's sentence tells you which errand fixes it, and re-running a fetch that
+already ran will be refused by the very card that broke it. The same applies to a layer the
+fetch skipped part-way: the Pi wrote **no file at all** rather than a truncated one, because
+a truncated hazard layer is indistinguishable from an empty canal, and the row quotes that
+reason too.
+
+**And the map says it, not only the panel.** A doctrine about what an empty-looking map
+means cannot be delivered by a panel somebody has to open first. A badge sits on the map
+itself, over the radar, with tier 1 getting its own louder wording:
+
+| Badge | When |
+|---|---|
+| **`HAZARD LAYERS ABSENT (n)`** — red | one or more tier-1 layers are missing from this Pi |
+| **`HAZARD LAYERS · CANNOT TELL`** — red | *every* missing tier-1 layer is a cannot-tell: nothing has been ruled in or out |
+| `n CHART LAYERS MISSING` — dim | the hazards are loaded; some operational or extra layers are not held at all. MISSING, not switched off: with nothing hidden any more, "not shown" would read as a display choice |
+
+The collapsed circle has no room for those words, so it shortens them to **`NO HAZARD
+DATA`** and `CHART GAPS` and keeps the colour. The panel is where the row-by-row answer is,
+and the badge's own explanation ends with the sentence the whole feature exists for: **do
+not read the absence of a mark as clear water.**
+
+This is also why there is exactly **one** weir row. There used to be two — `weirs` and an
+`overflow_weirs` beside it — and the second was backed by nothing, because the Trust
+publishes one weir service. A tier-1 row with no file behind it can only ever report
+ABSENT, so a complete, correctly-downloaded card lit `HAZARD LAYERS ABSENT (1)` — the
+loudest alarm on this map — on every single dive. An alarm that fires on a healthy vehicle
+is an alarm that gets ignored, and the one it teaches you to ignore is the one that means
+you are missing hazard data for this water. The relief-weir wording folded into the
+remaining row; the names a relief weir could arrive under stay as aliases.
+
+**One file, one row**, for the same reason. The Trust publishes near-duplicate services —
+five of them are called Sluices, and they answer 886, 892, 893 and 937 features for what
+is supposedly the same national layer. If two of the Pi's files bound to one row, the second would
+overwrite the first's data and the first would vanish from a console that had already told
+the operator it was SHOWN. A row that is already spoken for sends the newcomer to its own
+adopted row, named `… (2ND FILE)`, where it is visible and says what it is.
+
+### The licence, and where the credit is discharged
+
+The Open Government Licence v3.0 asks for one thing: the words, wherever the data is
+shown. They are discharged in **two** places, and both are deliberate:
+
+- the **panel footer** — selectable and screen-readable, next to the layers themselves;
+- the **map's attribution strip**, beside the `Imagery © Esri` line, drawn only when a CRT
+  mark is actually on screen (the same rule the imagery credit follows). A credit painted
+  into a canvas is legible to a human and to nothing else, which is why the panel copy
+  exists as well.
+
+> **The card is not uniformly OGL, and the console does not pretend it is.** On the real
+> fetched card in `data/crt/gas-street/`, 13 of the 26 layers carry OGL v3; the rest carry
+> the Trust's own data licence, an INSPIRE licence, or — for `moorings-all` and
+> `towpath-access-points-2022` — **"Internal use only"**. `api/nav/crt.py` refuses to write
+> "OGL v3" over something that says otherwise: each file carries the licence **as
+> published**, and a licence it cannot read as permissive is recorded as *cannot-tell*, not
+> as permission. The client honours that — `crtNoteCredit` appends any credit line that
+> differs from the standard one to the panel footer, so a layer under different terms
+> credits its own source instead of being quietly filed under somebody else's licence.
+> Note that only the standard OGL line is painted on the **map** strip; the differing lines
+> appear in the panel. If you redistribute anything out of that directory, read
+> `provenance.json` — its `warnings` array names every layer whose terms were not quoted in
+> the item metadata.
+
+### Toggles, and before you dive in new water
+
+**The choice is remembered on this handheld** — `STORE.set('crt.layers', …)`, IndexedDB,
+keyed by layer id. A layer that reopens itself on every launch is a layer the operator
+switches off on every launch and then stops trusting to stay switched off. Tier 1 is not in
+that object at all, because it is not a preference.
+
+Switching a layer **on** is the first time the console has ever asked for it, so it fetches
+straight away and re-renders when the answer lands — "off" must never be allowed to look
+like "absent", and a row left saying `ASKING…` forever would be a fourth state nobody
+chose: the one that means this console has stopped telling you.
+
+The layers are **per-area**, like the tiles. When the active area changes, the adopted
+rows, the wire bindings and the borrowed credit lines are all thrown away — carrying them
+over would leave the last canal's layer list on screen over this one's water, which is the
+same class of error as leaving its hazards drawn.
+
+**`REFRESH` asks the Pi again**, which is worth pressing after the tether has been
+replugged or the Pi restarted. You should not usually need it: a `CANNOT TELL` is a
+question, not a verdict, so any layer in that state is quietly re-asked every 30 s in the
+background — bounded, never while a fetch is in flight, and never a poll.
+
+#### Before you dive in new water
+
+**Bootstrap needs the internet; the runtime never does, and has no hostnames in it.** The
+chart card is per-area and fetched **once, on the Pi, while you still have a network**:
+
+```bash
+python -m nav.cli crt-fetch <area>       # needs internet — run it before you go
+python -m nav.cli crt-fetch --list       # what the Trust currently publishes
+```
+
+So, for water you have not dived before:
+
+1. download the area (**＋ AREA** → **SAVE OFFLINE**) — hazards belong to an area, and the
+   fetch takes its bbox from it;
+2. run `crt-fetch` for that area **while there is still a network**;
+3. activate the area on the console and **open the LAYERS panel before you get in the
+   van** — every tier-1 row should read `SHOWN` or `NONE MAPPED`. Anything red or amber is
+   an errand you cannot do on the towpath;
+4. check that no chart badge is showing on the map. `HAZARD LAYERS ABSENT` read for the
+   first time at the put-in is too late.
+
+Sluices, weirs, stop-plank grooves and outfalls are invisible from the surface. There is no
+canal-side network to fix this from.
 
 ## Reduced GPU rendering (default ON)
 

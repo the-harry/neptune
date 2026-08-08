@@ -770,12 +770,18 @@
        noFlow.length===0,
        noFlow.length ? ('silent about flow: '+noFlow.map(e=>e.id).join(', '))
                      : hazardRows.length+' hazard rows carry the no-flow clause');
+    // THE STANDOFF IS A SENTENCE NOW, NOT A RING. The dashed circle was deleted — around
+    // every tier-1 mark it buried the centreline under overlapping rings — so the phrase
+    // moved from "standoff this console draws" to "...states". The CHECK is unchanged and
+    // deliberately just as strict: every layer carrying a keep-away distance must still say
+    // out loud that the number is ours and not a surveyed danger area. Only the drawing it
+    // used to refer to has gone.
     const ringed = hazardRows.filter(e=>e.standoffM);
-    const noRing = ringed.filter(e=>!/standoff this console draws/i.test((row(e.id)||{}).title||''));
-    ok('...and that the keep-away ring is ours, not a surveyed danger area',
+    const noRing = ringed.filter(e=>!/standoff this console states/i.test((row(e.id)||{}).title||''));
+    ok('...and that the keep-away distance is ours, not a surveyed danger area',
        noRing.length===0,
-       noRing.length ? ('silent about the ring: '+noRing.map(e=>e.id).join(', '))
-                     : ringed.length+' ringed layers say whose ring it is');
+       noRing.length ? ('silent about the standoff: '+noRing.map(e=>e.id).join(', '))
+                     : ringed.length+' layers with a standoff say whose number it is');
 
     // A LAYER THE CONSOLE HAD NEVER HEARD OF. It was tiered off its NAME, which is a
     // guess, and a guess presented as a rule is the same defect as an estimate

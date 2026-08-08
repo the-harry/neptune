@@ -1379,3 +1379,596 @@ Stated here in the requirements' voice; the normative copy is **R7.6**.
 6. WHEN there is no heading, THEN the system SHALL NOT advance the track, SHALL NOT rotate
    the map onto a substituted bearing, AND SHALL say that there is no bearing.
 7. THE liveness rule SHALL be exercisable on a bench without a real dying sensor.
+
+---
+
+## 25. The hazard card (`api/nav/crt.py`, `service.py`, `client/js/crt.js`)
+
+A canal is full of things that will stop this vehicle and are invisible from the surface:
+sluice intakes that pull, stop-plank grooves that eat a tether, culvert mouths, weirs,
+safety gates, outfalls. The Canal & River Trust publish every one of them as open data.
+The console drew none of them, so **an unfetched card and a clear channel were the same
+picture** — which is §24's rule with the sensor swapped for a download, and it fails the
+same way: the map looks healthy and is hiding the thing it exists to show.
+
+### 25.1 Two phases, and which half is allowed a hostname
+
+Same split as `areas.py` and `satellite.py`. `crt.py` is the **only** module in this
+subsystem that opens a socket, it runs at bootstrap, and it is **never imported by the
+runtime path**. There is no hostname anywhere in it: every URL lives in `nav/config.py`,
+is reached exactly once by `python -m nav.cli crt-fetch <area>`, and is never resolved
+canal-side — where a DNS lookup does not fail so much as *hang*, and a hung overlay on a
+handheld is a driving view that has stopped updating.
+
+`nominal.py` and `soundings.py` open nothing at all. `service.py` reaches into `crt.py`
+for exactly three pure functions — `safe_area_name`, `area_dir`, `provenance_path` — and
+imports it lazily, so a build without the downloader still serves everything else rather
+than failing to start. The runtime answer to *"is the hazard layer here"* is therefore a
+`stat()` and a parse, and it is instant whether the answer is yes or no.
+
+**The operational consequence is the whole point: new water means a new fetch, at home,
+before you go.** There is no internet at the canal, so a card that was not downloaded is a
+card that cannot be downloaded, and the console with no card draws an empty map. That is
+why it is a go/no-go item in `NavService.readiness()` and not a nicety.
+
+### 25.2 What lands on disk
+
+```
+data/crt/<area>/<layer>.geojson      clipped FeatureCollection, attribution inside it
+data/crt/<area>/<layer>.prov.json    that one file's provenance, beside that one file
+data/crt/<area>/provenance.json      the index: every layer on the CARD, every skip,
+                                     every warning
+```
+
+The layer key is built from the **service** name, not the layer's display name —
+`Sluices` is the display name of five different services on this org — plus the ArcGIS
+layer id, giving `sluices-0`, `canals-by-km-length-1`, `pumping-station-points-3`.
+
+All three files go through `_write_atomic`: write beside, `os.replace`. `write_text()`
+truncates the target and *then* writes into it, so a fetch killed at the bank left a
+truncated GeoJSON where a whole one had been — and a fragment has a name and a size, which
+was all the index and the readiness gate ever looked at. The temporary lives in the same
+directory (a cross-filesystem rename is a copy, and a copy is not atomic) and its suffix
+goes on the **end** of the full name, so `sluices-0.geojson.part` matches neither
+`*.geojson` nor `*.prov.json` and nothing globbing that directory — here or in
+`nominal.py` — can pick a fragment up as a layer.
+
+**The index describes the CARD, not the run.** A layer this run could not refresh is
+listed with the date it was *actually* fetched, carried forward out of its own
+`.prov.json`. An index that listed only what this run downloaded would tell the console
+the operator has nothing while two dozen good layers sit beside it.
+
+### 25.3 The traps, in one paragraph each
+
+These are measured against the live services, and the reason to write them down is that
+somebody will re-run this against a changed API. **The full detail, with the request
+shapes, belongs in `api/nav/README.md`; this is the index to it.**
+
+- **The layer id is not 0.** Every ArcGIS example ends in `/0/query`. The Canals services
+  are layer 1 and `Pumping_Station_(Points)` is layer 3. The service is *asked* for its
+  layers and the ids it answers with are the ids that get queried.
+- **A service error arrives as HTTP 200.** A bad layer id or a throttled key returns
+  `{"error": {...}}` with a 200 status, and `json.loads` is perfectly happy with it. A
+  caller that checked only the status code pages that error body forever, finds zero
+  features in it each time, and writes an empty layer that reads as *surveyed, nothing
+  here*. `_get_json` raises on an `error` key.
+- **`outSR=4326` going out, `inSR=4326` going in.** Storage CRS is a genuine mix: on the
+  card in `data/crt/gas-street/` it is 13 layers in EPSG:3857 and 13 in EPSG:27700.
+  Without `outSR` the coordinates come back as eastings and land in a GeoJSON file as
+  though they were degrees — 435000 is a valid number and a longitude in the Pacific.
+  Without `inSR` the *area box* is read in the layer's storage CRS and a Birmingham bbox
+  selects nothing, which arrives as an empty layer: the false reassurance, by arithmetic.
+- **The Hub item's `extent` is junk.** Fourteen of the twenty Hub datasets report a
+  world-spanning `[-160,-80,160,80]`, which passes any bbox-overlap test ever written and
+  tells you a Birmingham layer covers Peru. It is ignored on purpose.
+- **The Hub is a window, not the catalogue.** It publishes ~20 datasets out of 204
+  services on the org, and sluices, safety gates, stop-plank grooves and outfalls — the
+  four that most directly stop a small ROV — are all outside it. Those seven are
+  hardcoded in `crt_extra_services`, which is also the floor of discovery: with the Hub
+  unreachable the run still knows what to ask for.
+- **The near-duplicates diverge.** Five separate Sluices services answer 886, 892, 893 and
+  937; the 937 one is `Sluices_View_Public`, not the Hub-curated view. Picking one because
+  its name is shorter is how a survey acquires 44 sluices it will never be told about.
+
+### 25.4 Two independent counts, because truncation is this API's signature failure
+
+Before paging, the server is asked `returnCountOnly` for the **same** bbox. After paging,
+what landed is compared with it, and the verdict is written into the record as
+`count_check: agrees | disagrees | unavailable`. Separately, each layer's **national**
+count is compared with `_EXPECTED_FEATURES` — numbers measured against the live services,
+not copied from anywhere — so a service quietly swapped for one of its own legacy
+near-duplicates shows up as *drift* rather than as a shorter list nobody counted.
+
+Drift is **recorded and never acted on**. The Trust adds real culverts too, and this module
+has no business deciding which of the two happened.
+
+Paging stops on a **short page**, because these services cap at their own
+`maxRecordCount` regardless of what was asked for and do not reliably send
+`exceededTransferLimit`. `_MAX_PAGES = 400` is a guard on nothing: the largest layer is
+7691 features, so reaching it means the server has stopped honouring `resultOffset` and is
+serving page 1 forever — which is a failure, not a long download, and it is treated as one.
+
+### 25.5 Clipping keeps features whole
+
+The file holds every feature that **touches** the area, uncut, and both the collection and
+the provenance record `clip_rule = "intersects"`. Cutting at the boundary would grow an
+edge nobody surveyed — on the planning-buffer layer that new edge reads as the edge of the
+buffer — and the canal centrelines are the snapping target for `snap.py`, so a centreline
+truncated at the area edge stops snapping exactly where a tether-limited ROV spends its
+time, since the area is drawn around the launch point and the far end of the cable is near
+its boundary.
+
+The clip is re-run locally even though the server was asked for the same envelope, because
+the server's answer is not in our coordinate system. Measured on `Canals_By_KM_Length`
+(stored EPSG:27700) with an envelope of `[-2.6,52.0,-1.0,53.2]`: 1218 features returned,
+15 of them wholly east of longitude -1.0, the furthest at -0.977 — about 1.5 km outside. A
+lat/lon rectangle is not a rectangle in 27700, and the area bbox has to mean the box the
+tile pyramid was cut from, not the server's transformed approximation of it.
+
+The FeatureCollection's own `bbox` member is the bbox **of its features** (RFC 7946 §5),
+and the area it was cut for is a separate, honestly-named `clip`. Writing the area box into
+the member would be a small lie with a specific victim: a whole canal navigation, kept for
+touching this area, extends far past it, and a consumer trusting the member would think it
+had the whole route in a 2 km box. An empty collection gets **no** `bbox` member rather
+than a zero-size one at `[0,0]` — a box off the coast of Ghana is not a better answer than
+no box.
+
+### 25.6 Empty, absent, corrupt — three answers, and only one is safe
+
+This is the doctrine of §24 applied to a download, and it is the part of this subsystem
+that exists for safety rather than for tidiness.
+
+| The fact | What is on disk | What is served | What the operator sees |
+|---|---|---|---|
+| Fetched cleanly, nothing of this kind in this area | a file with **zero features** | `FeatureCollection`, `status: present` | **NONE MAPPED** |
+| Fetch died part-way | **no file at all** | `AbsentLayer` + the skip reason | **ABSENT** |
+| File is there and will not parse | a fragment | `UnreadableLayer` | see §25.9 |
+| Nobody could be asked | — | — | **CANNOT TELL** |
+
+A layer that fetched cleanly and matched nothing **still gets a file**. That is a survey
+result — *no tunnels here* — and it is worth writing. A layer whose fetch failed part-way
+gets **no file**, because a truncated page is a well-formed FeatureCollection with the
+exact shape of *no hazards here* and nothing downstream can ever tell the two apart again;
+the partial result is dropped and the failure is recorded instead.
+
+**Presence is decided by READING, not by `stat()`.** `service._read_layer` used to call a
+layer present because the file had a size, and a `stat()` cannot tell 400 kB of GeoJSON
+from 400 kB *of* a GeoJSON. A card pulled mid-write went green at the pre-dive gate, the
+index published `status: present` with a feature count copied out of the fetch's own
+provenance — a number describing a file nobody had opened — and the console drew clear
+water over a culvert mouth. The parse is now cached against each file's `(mtime_ns, size)`,
+so steady state is one `stat()` per layer per request and the parse is paid again only when
+the file changes, which is exactly when the answer could have changed. The **verdict** is
+cached, not the document: holding two dozen decoded FeatureCollections would park the whole
+fetch in RSS for the session, on a board with a gigabyte of it, to answer a yes/no question.
+
+A file that parses and is **not** a FeatureCollection is unreadable too — a saved service
+error body is the common case, and it parses perfectly and contains no features, which is
+the empty-canal lie arriving by the one route a JSON parse cannot catch.
+
+`unreadable` is deliberately kept **out of** the `failed` list rather than folded into it.
+Both are go/no-go and both are quoted to the operator, but the sentences are opposite:
+*absent* is "you never downloaded this — go and get it", and that sentence over a corrupt
+file sends somebody to re-run a fetch that already ran and will be refused by the very card
+that broke it. *Unreadable* is "what you downloaded is not usable — delete it and re-fetch
+while there is still internet."
+
+### 25.7 What entitles a run to delete anything
+
+The sweep exists so that a layer withdrawn by the Trust, or dropped by flipping
+`NAV_CRT_RESTRICTED` to `skip`, does not sit on the card being served as current with
+nothing in the new index describing it.
+
+It used to build its keep-set purely from what the current run fetched. **A run in which
+nothing downloaded therefore deleted every layer file on the card and returned `ok: true`,
+exit 0.** That is not a corner case: it is a bootstrap started after the hotspot has
+already dropped — the exact condition this module exists to get ahead of — and it destroyed
+a complete offline hazard card, for the water a sub was about to go into, while telling the
+operator it had worked.
+
+So a sweep is a **refresh**, and it may only take away what it has put back. Two gates:
+
+1. The run must have **written at least one layer**. A fetch that retrieved nothing has
+   replaced nothing.
+2. It must have **accounted for** — written, or left out by decision — at least
+   `_SWEEP_FLOOR = 0.75` of the layers that were on the card when it started. That fraction
+   is the only thing that separates *"the Trust no longer publishes this"* from *"we could
+   not ask"*, and a half-connected run produces the second while looking exactly like the
+   first. Three quarters: one dead service in twenty-six is a bad afternoon at the Trust,
+   twenty dead is a bad network, and only the second must freeze the card.
+
+Even then, a file is removed only for a **positive** reason: this run's configuration left
+that layer out on purpose, or discovery — which gate 2 says actually ran — no longer lists
+it. *"The fetch failed"* is not such a reason. Last month's sluices are worth incomparably
+more than no sluices; they are kept, dated with the fetch that really produced them, and
+the console draws them and says how old they are.
+
+A layer file with **no readable provenance beside it** is kept and named as *unaccounted*
+— never deleted, and never listed as a layer either, because nothing can say what is in it
+or when it was fetched. Inventing an entry for it would be this module doing precisely what
+it refuses to let a truncated ArcGIS page do.
+
+**Success is not "the command finished."** It is: something was downloaded, and every layer
+that was on this card at the start is either refreshed or gone by decision. Anything else
+returns `ok: false` with the reason spelled out, and both `crt._main` and `nav/cli.py` exit
+1 — because the moment to learn that the card is thinner than you think is while there is
+still internet to fix it.
+
+*Verified by running (2026-08-08, repo card copied into a temp `NAV_CRT_DIR`, `_http_get`
+patched to fail the way a dropped hotspot does): 53 files in, 53 files out, 0 removed, all
+26 layers carried forward with their own fetch dates, `ok: false`, and the error text
+naming what the console will actually draw. `refresh` recorded `on_card_at_start: 26`,
+`written: 0`, `sweep_floor_layers: 20`, `swept: false`.*
+
+### 25.8 The licence is read, never assumed
+
+Three answers, kept apart: **yes** (OGL), **no** ("Internal use only"), and **cannot-tell**
+— a licence that names real terms which are not quoted in the item metadata. Only the first
+two are conclusions; the third is the honesty doctrine applied to a legal document, and
+collapsing it into a polite hedge is how an unread licence gets published.
+
+The FeatureServer root's `copyrightText` is an **attribution**, not terms; reading it as a
+licence is how every one of these ends up labelled OGL by wishful thinking. So the terms
+are fetched from the ArcGIS *item*, and a lookup that fails leaves the licence `null`.
+
+The attribution goes **inside** each FeatureCollection as well as into the provenance,
+because a bare collection copied out of that directory has lost it otherwise, and
+attribution is the one obligation OGL v3 puts on us. `client/js/crt.js` shows whatever
+credit line the file itself carries rather than assuming the standard OGL line covers
+everything it was handed.
+
+*The card is not uniformly OGL, and the code is right not to assume it is.* On
+`data/crt/gas-street/`: 13 layers OGL, 9 "Canal & River Trust data licence", 2 INSPIRE —
+all eleven of those `redistributable: null`, cannot-tell — and 2 that read "Internal use
+only" (`towpath-access-points-2022-0`, `moorings-all-0`), fetched under the default
+`NAV_CRT_RESTRICTED=flag` as this operator's own safety copy and marked
+`redistributable: false` in every record. `NAV_CRT_RESTRICTED=skip` leaves the tree clean
+enough to publish.
+
+### 25.9 Three tiers, and the tier is a safety decision
+
+`client/js/crt.js` carries one table — 33 rows, **7 tier-1 / 11 tier-2 / 15 tier-3** — and
+the row *is* the layer: its tier, its mark, its keep-away radius, and a sentence saying
+what it means **for this vehicle** rather than what it is called. "Weir" is a noun;
+*"anything that gets over the sill goes with the water and does not come back, and so does
+the tether"* is the fact an operator needs on a wet towpath. Adding a layer is adding a row
+there, and there is no second place to remember.
+
+| Tier | Rule | Why |
+|---|---|---|
+| 1 HAZARDS | always drawn, **no switch** | there is no operator preference that makes it right to hide a lock, a weir, a sluice, a culvert, a tunnel or an outfall |
+| 2 OPERATIONS | on by default, toggleable | where you get in, get out, turn round, and what is moored in the way |
+| 3 EXTRAS | off by default | worth keeping, not worth the clutter — and *off* means **NOT ASKED**, which is not a claim |
+
+Tier 1 has no toggle rendered, `crtIsOn` short-circuits to true, and `crtSetOn` refuses and
+**logs the refusal** — a control that does nothing and says nothing is how somebody
+concludes the hazard layer was switched off when it never was. Draw order is a safety
+order: extras, operations, hazards on top, so a mooring glyph can never sit over a lock.
+Shape carries the tier before colour does (octagon / rounded square / dot), for the same
+reason the leak drop does.
+
+**A layer the table has never heard of** is adopted rather than dropped, and if its name
+contains a hazard word (`weir|lock|sluice|culvert|tunnel|outfall|siphon|intake|penstock|
+spillway|paddle`) it is drawn as a hazard — with a sentence saying it was classified **by
+its name** and not by a rule anybody wrote. An inference, marked as an inference. **One
+file, one row**: a second wire layer matching an already-claimed row gets its own adopted
+row instead of overwriting the first, because the Trust does publish near-duplicates and
+the loser would vanish from a console that had already reported it SHOWN.
+
+**Absence is said on the map, not only in a panel.** The `crt-absent` badge reads
+`HAZARD LAYERS ABSENT (n)` — or `HAZARD LAYERS · CANNOT TELL` when nothing could be asked —
+because a panel the operator has to open first cannot deliver a doctrine about what an
+empty-looking map means.
+
+One row's history is worth keeping. There were two weir rows, `weirs` and
+`overflow_weirs`, and the second was backed by nothing: the org publishes one weir service.
+A tier-1 row with no file behind it can only ever report ABSENT, so a **complete,
+correctly-downloaded card** lit the loudest alarm on the map on every single dive. An alarm
+that fires on a healthy vehicle is an alarm that gets ignored, and the one it teaches you to
+ignore is the one that means you are missing hazard data. One weir row now; the relief-weir
+names survive as aliases.
+
+### 25.10 No flow is ever shown
+
+CRT publish **no flow measurement of any kind**. Every current claim on this console is
+therefore an inference from where the structures are, and every hazard mark says so in its
+own words — the clause is appended in **one place** (`crtWhat`), not typed into seven rows,
+because a clause that has to be remembered seven times will be missing from the eighth. The
+`flowProxy` flag exists for the row that is *not* a hazard and still talks about water
+moving: FEEDERS shipped stating a current as fact, over a dataset that publishes none.
+
+The standoff distance is labelled as **this console's** convention, chosen by us, and not a
+surveyed danger area — the real one may be larger. It is stated in the layer's own words; the
+dashed ring that used to carry it has been deleted, because one drawn around every tier-1 mark
+buried the centreline under overlapping circles.
+
+---
+
+## 26. Depth: two inks that are never mixed (`nominal.py`, `soundings.py`)
+
+There is no canal bathymetry to download. i-Boating's UK layer is proprietary UKHO-derived
+coastal data with no canal soundings and a licence forbidding reuse, the Environment
+Agency's multibeam is estuarine, EA LIDAR cannot see through water, and the Trust's own
+hydrographic surveys are internal. So a depth drawn over this water either comes from
+somewhere honest or is not drawn at all, and there turn out to be exactly two honest
+sources, worth very different amounts:
+
+| | **NOMINAL** (`nominal.py`) | **SURVEYED** (`soundings.py`) |
+|---|---|---|
+| What it is | the authority's published **guideline draught** for a class of waterway | the deepest this hull got while the journal showed it **resting on something solid** |
+| Who measured it | nobody | this vehicle's MS5837 |
+| Direction of error | too shallow, on purpose | too shallow, unavoidably |
+| Drawn | washed out, **hatched**, along the whole section | **solid, outlined** |
+| Stored | computed on demand, never cached | `data/soundings/<area>.json` |
+
+They are stored apart, served apart (`/api/areas/{a}/depth/nominal` and `…/depth/surveyed`)
+and drawn apart. The measured one wins on screen, but it wins as a **different layer, with
+its own name on it** — an estimate must never dress as a measurement, and a measurement must
+not be diluted by an estimate averaged into it. `data/soundings/` is explicitly *not* a
+candidate input to `nominal.py`.
+
+### 26.1 A guideline draught is a floor on the depth, not the depth
+
+"Maximum draught 3 ft 6 in" means the authority believes a boat drawing 1.07 m can pass, so
+the bed is **deeper** than 1.07 m by a margin nobody publishes. Reporting the draught as
+the depth understates the water — and that is the direction this file deliberately errs in,
+because the vehicle's hazard is hitting the bottom: a nominal that is too shallow makes an
+operator cautious, and one that is too deep makes them confident. The understatement is
+stated in `basis` on every feature rather than silently baked in, so nobody later
+"corrects" it by adding an invented clearance.
+
+**And it shoals.** Every figure is mid-channel. A narrow canal is a shallow trapezoid: the
+mid-channel depth holds for a few metres and then the bed climbs to the bank, where there is
+often less than half of it plus whatever has been thrown in. `shoals_to_banks` is true on
+every section and the sentence goes into the title, because a depth drawn as a flat wash
+over a water polygon looks exactly like a claim that the edge is as deep as the middle.
+
+The word NOMINAL is stamped in **five places** — the collection, every feature, `title`,
+`aria_label`, and `basis` — plus three deliberately redundant booleans (`nominal: true`,
+`measured: false`, `is_survey: false`). The layer travels through a renderer this file
+cannot see; a label that exists in one place is a label one refactor away from being
+dropped, and all three booleans being wrong at once takes intent.
+
+Four rules keep the figure honest:
+
+- **The gauge outranks the class.** `waterway=canal` says a canal; the Trust's own
+  `sapwidth` = Narrow/Broad says *which* guideline applies, and it is the Trust saying it.
+  Which attribute chose the row is reported (`class_source_field`), and where the figure
+  itself came from is reported separately (`depth_source`, `depth_source_field`) — "1.07
+  from the layer's `max_draught`" and "1.07 from a table in a Python file" are worth very
+  different amounts to the person deciding whether to dive, and a bare 1.07 cannot tell them
+  apart. The hand-typed table says in every row that it was hand-typed.
+- **Not-navigable withdraws the guidance entirely.** `sapnavstatus` reads "Fully Navigable"
+  on a working pound. Anything else — drained, closed, partly navigable — comes out with
+  **no** nominal depth and the status attached, because a confident metre of water drawn
+  over a pound that may have none is this layer's worst available failure.
+- **An implausible value is refused, never clamped.** Outside 0.1–40 m it is a unit error or
+  a corrupt attribute; 3.5 read as metres instead of feet triples the water. A clamp turns a
+  wrong number into a plausible one, which is the failure this project is named after. The
+  refusal is kept and reported (`refused_attributes`), because a `max_draught` column
+  arriving unparsed is a downloader bug that would otherwise present as the whole area
+  quietly falling back to the table.
+- **A river gets nothing.** CRT publish river draughts per navigation and per reach, not per
+  class, so there is no class-level figure to quote and the section comes out with a null
+  and the reason attached rather than an average nobody published.
+
+**Computed, never cached to a file.** The inputs are two files on the same disk and the
+arithmetic is a table lookup per section, so the only thing a cached copy could add is the
+chance of being stale — a nominal layer still describing the centreline that was on the card
+three area-downloads ago, with nothing on it to say so. `service.py` memoises it against a
+**signature of the files it is computed from**, not a timer, for the same reason: a timer
+has to choose between rebuilding work nobody asked for and serving a depth layer that
+describes the card as it was ten minutes ago.
+
+Absent stays absent: no waterway geometry at all returns `None`, which the endpoint turns
+into an `AbsentLayer`, never an empty FeatureCollection. *"No water mapped here"* and *"no
+depth guidance here"* are different claims and neither of them is *"the canal is not
+there."*
+
+### 26.2 What counts as bottom evidence
+
+The MS5837 measures the depth of the **sub**. Nothing aboard measures the depth of the
+**bed** — there is no echosounder and no altimeter. So a depth sample is evidence about the
+bed only where there is evidence the sub was *on* it.
+
+The sub's only vertical control is a syringe: filling it makes the sub heavier, and heavier
+means it sinks. So the signature is
+
+> the sub was **descending**, then **stopped** descending, while the syringe was **still
+> taking on water**.
+
+Something that is not buoyancy is holding it up, and the only thing down there is the bed.
+The awkward twin — reaching neutral buoyancy and hovering — is exactly what the *still
+filling* clause excludes, because a hovering sub handed more ballast has to go down.
+
+In practice a run must clear five rungs: depth flat within 0.05 m (the same band
+`calibrate.py` calls settled, on purpose, so the two tools cannot disagree about whether a
+hold was a hold), for at least 3 s **and** at least 8 samples (so an unexpectedly slow log
+rate cannot turn two readings into a "steady" stretch), with at least 0.10 of the calibrated
+stroke going *in* during the hold, deeper than 0.30 m, and preceded by a descent of at least
+0.30 m within the last 20 s. That last one is what separates the bed from the surface: a sub
+bobbing at the surface with the syringe filling is a textbook contact — depth flat, ballast
+climbing — while the hull is in the air.
+
+**`MIN_FILL_RISE = 0.10` is a placeholder, like every other pre-hardware constant here.**
+Nobody has watched a real hull land yet. If the first dives report equilibrium holds as
+touchdowns, raise it; if genuine landings are missed because the fill finished before the
+sub arrived, the fix is the **procedure** — arrive with the fill still running — not a lower
+threshold, because lowering it trades away the one thing this file exists to protect.
+
+**Rejected, so nobody re-adds them:** depth simply flat (that is the settled hold
+`calibrate.py` fits the ballast curve to — equilibrium, at any depth); ballast at full with
+depth flat (*stopped sinking* and *landed* are different claims); `snagged` (high thrust
+with no measured speed means pinned on *something*, and a lock gate or a bridge pier at
+mid-water pins just as well as the bed does — the depth then belongs to the obstruction); a
+static pitch/roll offset (real when a hull settles on a slope, but the trim swings with the
+ballast anyway, so it cannot carry the claim on its own); accel spikes (a bump is a bump; a
+wall is also a bump).
+
+A null in **either** channel ends a run rather than being stepped over. This is a claim
+about a whole stretch of time, and a hole with the ends closed up would read as one
+continuous hold on the bed while the sub was, for all this file knows, halfway to the
+surface.
+
+Contact detection is deliberately **not** gated on `armed`, unlike `calibrate.py`'s
+segments: a sounding is a pressure reading taken while the hull is on the bed and the
+thrusters have nothing to do with it. Gating on armed would throw away exactly the quiet
+minutes when the sub is sitting still on the bottom doing the work it is for.
+
+### 26.3 Why every cell is a lower bound
+
+Three errors, and they all have the same sign:
+
+- the pressure port sits **above the keel**, so a landed sub reads short of the bed by its
+  own draft;
+- it may have landed on silt, weed, a sunken trolley or a fallen branch, all of which stop
+  it above the hard bottom;
+- canal levels move with rainfall and lock use, so the surface it is measured from is the
+  surface of **that day**. There is no vertical datum here, and two dives a month apart can
+  disagree by a hand's width.
+
+The bed is **at least** this deep and may be deeper. A lower bound is the shape of answer
+that is safe to be wrong in — it under-promises clearance. Dressed as a measurement it would
+do the opposite. So the quantity is *named* `lower_bound_m` in the store and on disk, every
+cell also carries `bound: "lower"`, every feature carries a `what` sentence spelling it out
+(a file-level note does not travel with a feature that gets picked up and drawn on its own),
+and `service.py` reads the quantity's name **out of the store** rather than hardcoding it —
+that rename has already happened once, and a serving file that went on publishing numbers
+under a name nothing had checked would be worse than the break.
+
+**The temptation this refuses.** Every depth sample is technically a lower bound on the bed
+beneath it: if the sub was at 1.2 m and floating free, the bed there is at least 1.2 m.
+Binning all of them would produce a full, plausible, technically-true map that would be read
+as *"the canal is 1.2 m here"* when it is 2.5 m. A bound is only worth recording when it is
+**tight**, and contact with the bottom is the only thing aboard that makes it tight.
+
+Cells absent from the file are **UNSURVEYED**, and the file says so in its own header:
+absent is not shallow and it is not zero. A survey with no cells at all still writes a file
+that says *why* it is empty — *"nothing has been surveyed here"* and *"this water has been
+surveyed and there is nothing in it"* are the same empty list with opposite meanings, and
+only the second is safe to draw as clear water.
+
+### 26.4 Why the bins are longitudinal
+
+Position error here runs to metres and in places exceeds the canal's half-width, so an
+(x, y) raster would draw cross-channel structure the navigation cannot support — false
+precision, and the prettier it looks the more it lies. A canal is a 1-D object: samples are
+projected onto the CRT centreline with `nav/snap.py` (the one point-to-polyline projection
+in this codebase; `soundings.py` picks the nearest of several disjoint lines and does not
+write a second projection) and binned by **distance along** the channel. Cross-track
+information is thrown away rather than invented, and the cross-track distance survives as
+provenance (`offset_m_max`).
+
+Cells are 5–10 m, default 8 — a little over four sub-lengths and comfortably wider than the
+along-track error of a short dive. A value outside that range is **refused, not clamped**: a
+1 m cell would imply a longitudinal precision the dead reckoner does not have, and a 100 m
+cell would average two pounds and a lock together, and either would still look like a
+perfectly good map.
+
+Two things are deliberately excluded at binning time. A sample whose position was **HELD**
+because the compass died (`no_heading`) is dropped — `divelog.py` writes that flag precisely
+so a run of identical coordinates cannot be read as a sub sitting still, and a sounding filed
+at a held position is filed wherever the compass died. A sample more than
+`snap_max_dist_m` (25 m, the estimator's own snapping limit, so the two agree about what
+"on this waterway" means) from the centreline is dropped too: that is a marina arm, a lock
+chamber or a drifted track, and binning it longitudinally would file a real sounding under
+the wrong stretch of canal. Both are counted and reported.
+
+The **lines are kept separate**, unlike `service.py`'s flattened centreline. Flattening is
+right for *"how far am I from the water"* and wrong here: the join between two disjoint ways
+becomes a phantom segment, and distance-along measured through it is a distance nothing
+travelled.
+
+The operator's post-hoc drag of a track is applied here, because `divelog.py` keeps raw
+x/y in the `.jsonl` and applies the translate+rotate only when writing the `.geojson`.
+Ignoring it would put every sounding from that dive at the offset the operator had already
+corrected — and the whole reason they dragged it is that they knew where it really was.
+
+### 26.5 How dives accumulate
+
+Each cell keeps a **per-dive** breakdown, and everything above it is derived fresh on every
+merge. That is what makes re-running a dive **idempotent** rather than double-counting it: a
+tool that double-counts turns *"how many samples back this cell"* — the provenance a reader
+weighs the number by — into a count of how many times somebody ran the command.
+
+Within a cell the **deepest** contact wins, not the mean. For a lower bound that is the most
+the cell knows: averaging a 1.4 m touchdown with a 0.6 m touchdown on the same trolley
+produces 1.0 m, a number nothing measured and a bound weaker than one already in hand. A
+later, shallower dive therefore cannot pull the bound back up; it is recorded, it adds
+samples and provenance, and the bound stays.
+
+A store refuses to accumulate three things, all silent if unchecked: a different **area**, a
+different **cell size**, and a different **centreline fingerprint**. Cell 47 means "376–384 m
+along line 0 **of this geometry**"; re-download the area, get the ways back in a different
+order, and cell 47 is somewhere else entirely while every old sounding still claims it. The
+fingerprint is rounded to 1e-7° (~1 cm) so a re-serialised copy of the same geometry still
+matches.
+
+Confidence that was never recorded stays **null**, never 1.0. "Perfectly trusted" is the
+strongest claim in the system and the last thing an unrecorded fix is.
+
+### 26.6 The refusal names the rung
+
+A tool that always produces an answer is worse than no tool. `_why_no_contact` walks a
+ladder and each rung sends the operator to a **different** job — fit the part, home the
+syringe, fly the dive differently — so collapsing them into "no soundings found" sends them
+to the wrong one, which is the same class of harm as inventing a number.
+
+- no samples at all → the journal is empty or was truncated before the first
+- no `depth_m` column → this journal predates depth logging; the MS5837 may have been fine
+- `depth_m` present and null throughout → the pressure sensor never answered once
+- no `ballast` column → the raw control channels were not logged; the depths are real and
+  are not lost, but nothing in the file can tell a landing from neutral buoyancy
+- `ballast` present and null throughout → **the stepper was never homed**, so the syringe
+  had no position to report all dive. *Run `ballast_home()` before the next dive.*
+- flat runs but none with a fill → arrive on the bed with the fill still running
+- ...and the rest: too shallow, no descent into them, too brief
+
+Contact samples that were found and then **discarded for position** get their own refusal,
+which says the depths were real and that this journal cannot say where they were taken. A
+dive whose sensor died halfway keeps the landing it measured, invents no second one, and
+reports the column as `partial` above the numbers — a survey that quietly covers half the
+canal it appears to cover is a substituted zero in a better suit.
+
+*Verified by running (2026-08-08): `python -m nav.soundings --selftest` — 21 checks,
+including two landings recovered at the right cells and depths from a synthetic bed the
+maths was not told, a deeper dive combining, a shallower one not weakening the bound,
+re-running replacing rather than double-counting, and eight distinct refusals. `python
+api/tests/run.py` — 306/306 across 8 suites in 6 s, `crt` 24/24 and `soundings` 22/22.*
+
+### 26.7 What the renderer had to be taught
+
+The claim survives the trip only if the drawing does too, and four separate bugs here all
+had the same shape: a layer reporting SHOWN while painting something other than what it
+described.
+
+- **`properties.cell` is an index, not a length.** Reading it as a length drew cell 0 as a
+  point and cell 1 one metre across on a survey binned in tens. `_crtCellM` uses `cell_m`,
+  then `to_m - from_m`, then the collection's own bin width.
+- **`cell_m` had two names on one document.** The collection published `cell_length_m` while
+  the features carried `cell_m`; the client found nothing and fell back to a hardcoded 5 m,
+  so a survey binned in tens drew at half size and the sounded water looked like water
+  somebody had not coloured in. Both names now ride on the collection, assigned from the
+  same local.
+- **A nominal section is not a cell.** `nominal.py` passes the waterway section geometry
+  straight through — hundreds of metres to a couple of kilometres of cut each — and an early
+  renderer handed it to the *cell* path: 6.3 km of canal came out as nine 5 m squares, 0.7%
+  of the channel, under a row that said the layer was drawn everywhere. Line sections are
+  stroked along their own geometry now.
+- **The hatch tiled to nothing.** One diagonal crosses a repeat tile at exactly one corner
+  pixel, so the pattern rendered empty and the nominal cells looked identical to the
+  surveyed ones — losing the *published versus measured* distinction the texture exists to
+  carry. Three diagonals, at -s, 0 and +s.
+- **`_crtDepthOf` read only `depth_m`.** Both producers name the field after what it
+  *means*, so every cell fell through to the no-depth grey and the twelve-colour scale
+  switched itself off with nothing anywhere saying the numbers had been dropped.
+
+The band drawn along a nominal section is honest about which half of it is a fact: its
+**length** is the section's own published geometry, its **width** is a drawing convention of
+this console's (7 m, about a narrow cut) because nobody publishes how wide the channel is.
+Same family as the standoff ring, and the row says so in its own words.
+
+This session's own soundings are binned live and drawn with the **same** surveyed treatment
+— same quantity, same sensor — but counted **apart** in the panel row, because no dive log
+has been written for them yet and a row that added them into one number would claim the Pi
+holds a survey it has never been sent.

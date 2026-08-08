@@ -47,6 +47,10 @@ GET  /api/nav/dive/current            live dive as GeoJSON
 POST /api/nav/dive/current/adjust     translate+rotate the track (output only; raw untouched)
 GET  /api/nav/dives                   list saved dives
 GET  /api/areas · POST · DELETE · /{name}/activate    offline areas (§6.4)
+GET  /api/areas/{name}/crt            overlay index — every layer, INCLUDING the ones that are not here
+GET  /api/areas/{name}/crt/{layer}    one hazard layer, or an `AbsentLayer` document saying why not
+GET  /api/areas/{name}/depth/nominal  published guideline draughts — NOMINAL, never a survey
+GET  /api/areas/{name}/depth/surveyed the sub's own soundings — LOWER BOUNDS on bed depth
 GET  /api/readiness                   the §9 "go isolated" checklist
 WS   /ws/nav                          NavState @ broadcast_hz + area-extract progress
 ```
@@ -58,6 +62,10 @@ python -m nav.cli sim          # run the simulator through DR, print accuracy, w
 python -m nav.cli speed-cal --distance 20 --pairs 0.25:36,0.5:19,0.75:13,1.0:10 --id hullA
 python -m nav.cli mag-cal      # guide in-water magnetometer calibration (poll cal status)
 python -m nav.cli readiness
+python -m nav.cli crt-fetch --list                  # BOOTSTRAP: what the Trust publishes today
+python -m nav.cli crt-fetch gas-street              # BOOTSTRAP: download that area's hazard layers
+python -m nav.cli soundings <dive>.jsonl --area gas-street [--dry-run]
+python -m nav.cli soundings --selftest              # the touchdown maths and every refusal
 ```
 
 ## Tested (no water needed)
