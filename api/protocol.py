@@ -59,6 +59,12 @@ COMMAND_NAMES = frozenset({
     "arm", "disarm", "stop", "surface", "magnet", "ballast_home",
     "light_green", "light_white", "light_green_level", "light_white_level",
     "dropweight",
+    # RE-ARM THE LEAK DETECTOR. A command and not an endpoint, so it goes through
+    # the same recv/validate/apply/ack lifecycle everything else does and lands in
+    # the blackbox with a c_id — dismissing the vehicle's strongest claim is
+    # exactly the kind of thing that has to be findable in the log afterwards.
+    # The hardware layer refuses it outright while a probe is wet.
+    "leak_reset",
 })
 
 
@@ -281,6 +287,14 @@ class Telemetry(BaseModel):
     # one failure the two-probe design would otherwise hide completely, so it is
     # reported rather than trusted.
     leak_probe_fault: Optional[str] = None
+    # HOW MANY TIMES THE LEAK DETECTOR HAS BEEN RE-ARMED BY HAND this run. 0 for
+    # the whole of a normal dive. Non-zero says the NORMAL on screen is a
+    # reassurance an operator RESTORED after a latch, not one that was never in
+    # doubt — the same reading arrived at two different ways, and the console is
+    # entitled to say which. Never used to suppress or soften an alarm: a re-arm
+    # is refused outright while a probe is wet, so this can only ever describe
+    # history, never the present.
+    leak_rearms: int = 0
     # WHICH parts are not answering, in the vehicle's own vocabulary — ["ms5837"],
     # ["bno085", "ina219"], the same names as docs/hardware.md and the wiring
     # diagram, so the console names the part a human will go and unplug. Mostly

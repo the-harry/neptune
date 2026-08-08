@@ -305,6 +305,49 @@ function renderLeak(stage){
   // The edge pulse is the FLOOD siren and nothing else. Firing it on a WARN would
   // make the advisory unignorable, and an unignorable advisory gets ignored.
   if(pulse) pulse.classList.toggle('on', st==='FLOOD');
+  renderLeakRearm(icon, st);
+}
+
+/* THE DROP BECOMES A BUTTON ONLY WHEN THERE IS SOMETHING TO CLEAR.
+
+   On NORMAL it is not focusable, not clickable and carries no hint: an affordance
+   that is always there is one an operator can hit by accident on a healthy hull,
+   and this is the control that clears the console's loudest claim.
+
+   It is safe to offer on FLOOD as well as WARN, and deliberately is, because the
+   VEHICLE decides — it refuses while a probe is wet and says why. Hiding the
+   button during a flood would mean an operator who has pumped out, dried the
+   bilge and genuinely fixed it still cannot re-arm without a restart, which is
+   the situation this whole change exists to end. Pressing it on a live flood
+   costs one refusal and one sentence explaining that water is still present. */
+function renderLeakRearm(icon, st){
+  if(!icon) return;
+  const armable = (st!=='NORMAL');
+  // A DATA ATTRIBUTE AND NOT A CLASS, on purpose. renderLeak sets
+  // icon.className = 'leak-<stage>' outright, and the sensor-loss suite asserts on
+  // that exact string to prove a standing FLOOD is never talked down to
+  // cannot-tell. Adding a second class here made that assertion read
+  // "leak-flood can-rearm" and fail — a real check, failing for a cosmetic reason.
+  // The affordance is orthogonal to the stage, so it is stored orthogonally and the
+  // className contract stays exactly what that suite is guarding.
+  if(armable) icon.dataset.rearm = '1'; else delete icon.dataset.rearm;
+  if(armable){
+    icon.setAttribute('role','button');
+    icon.setAttribute('tabindex','0');
+  } else {
+    icon.removeAttribute('role');
+    icon.removeAttribute('tabindex');
+  }
+  if(!icon._rearmBound){
+    icon._rearmBound = true;
+    const go = (e)=>{
+      if(!icon.dataset.rearm) return;
+      e.preventDefault(); e.stopPropagation();
+      if(typeof resetLeak==='function') resetLeak();
+    };
+    icon.addEventListener('click', go);
+    icon.addEventListener('keydown', (e)=>{ if(e.key==='Enter'||e.key===' ') go(e); });
+  }
 }
 
 /* One compass point of the input dial. `v` is that direction's share of its axis:

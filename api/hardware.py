@@ -542,6 +542,30 @@ class HardwareBase(ABC):
     # confident claims about a chip that was not on the board, and every one of
     # them was the reassuring claim rather than the alarming one. Cannot-tell now
     # has its own value, None, which no real reading can collide with.
+    def reset_leak_latches(self) -> dict:
+        """Re-arm the leak detector: a human has opened the hull and looked.
+
+        LATCHING IS ONE-WAY, AND IT HAS TO STAY THAT WAY — a probe drying out is
+        not evidence the hull is sound. But one-way with NO way back meant the
+        only thing that cleared a latch was restarting the service, which on the
+        water is SSH-ing into a submarine. So the way back exists, and it is
+        explicit, logged, and counted rather than quiet.
+
+        THE ONE RULE THAT MAKES THIS SAFE: it clears the MEMORY of water, never
+        water that is there NOW. A backend that can still see a wet probe must
+        refuse, because at that point the operator is not re-arming a detector,
+        they are dismissing a live reading. Everything else about the leak path
+        is built so an alarm cannot be talked down; this must not be the hole in
+        it. See RealHardware.reset_leak_latches for the enforcement.
+
+        Returns a dict the control plane can hand straight back as an ack:
+        {"ok": bool, "cleared": [str], "why": str}. The default is a refusal
+        because a backend with no latches has nothing to re-arm, and saying so is
+        a real answer.
+        """
+        return {"ok": False, "cleared": [],
+                "why": "this hardware backend has no leak latches to clear"}
+
     def read_gyro_z_dps(self) -> float | None:
         # IMU yaw rate, deg/s, + = clockwise (compass convention). None = no gyro
         # answering. 0.0 is reserved for its real meaning, "measured, and it is
@@ -749,6 +773,7 @@ class MockHardware(HardwareBase):
         self._probe_flood_wet = False
         self._probe_warn_boot = False
         self._probe_flood_boot = False
+        self._leak_rearms = 0
         # --- paddlewheel ------------------------------------------------------
         self._paddle = PaddleWheel(nav_settings.m_per_pulse,
                                    nav_settings.paddle_window_s,
@@ -919,6 +944,31 @@ class MockHardware(HardwareBase):
         # exercises this here is testing the code the vehicle uses.
         return leak_probe_fault_from(self._probe_warn_wet, self._probe_flood_wet,
                                      self._probe_warn_boot, self._probe_flood_boot)
+
+    def reset_leak_latches(self) -> dict:
+        # SAME REFUSAL AS THE VEHICLE, and it has to be here rather than only on
+        # RealHardware: this is the rule a bench can actually exercise, and a
+        # guard that only exists on hardware no laptop can construct is a guard
+        # no test will ever run. The mock has raw probe bits where the Pi has
+        # debouncers, so "wet right now" is read off those.
+        wet_now = [n for n, w in (("warn", self._probe_warn_wet),
+                                  ("flood", self._probe_flood_wet)) if w]
+        if wet_now:
+            log.warning("leak re-arm REFUSED (mock): %s probe(s) wet", "+".join(wet_now))
+            return {"ok": False, "cleared": [], "wet_now": wet_now,
+                    "why": (f"the {' and '.join(wet_now)} probe is WET RIGHT NOW. This clears "
+                            f"the memory of water, never water that is present")}
+        cleared = [n for n, b in (("warn-wet-at-boot", self._probe_warn_boot),
+                                  ("flood-wet-at-boot", self._probe_flood_boot)) if b]
+        self._probe_warn_boot = False
+        self._probe_flood_boot = False
+        self._leak_rearms += 1
+        log.warning("leak detector RE-ARMED by operator (mock; cleared: %s; re-arm #%d)",
+                    ", ".join(cleared) or "nothing was latched", self._leak_rearms)
+        return {"ok": True, "cleared": cleared, "rearms": self._leak_rearms,
+                "why": ("both probes read dry and the detector is re-armed"
+                        if cleared else
+                        "nothing was latched; both probes read dry and remain armed")}
 
     def read_voltage(self) -> float | None:
         if "ina219" in self._dead:
@@ -1325,57 +1375,133 @@ class RealHardware(HardwareBase):
         self._fault_logged: dict[str, float] = {}
         self._stop = threading.Event()
 
+        # --- ONE GROUP AT A TIME, AND A GROUP THAT IS NOT THERE IS NAMED -----
+        #
+        # This block used to be one straight run of constructors, so the FIRST pin
+        # that would not come up took the whole backend down with it and
+        # NEPTUNE_HW=auto fell all the way back to the bench simulator. On a
+        # finished vehicle that is defensible. On a vehicle being BUILT it is not:
+        # it means the only way to test the first sensor soldered is to have
+        # soldered all of them, and the failure it produces — a silent demotion to
+        # mock — is the one shape this file exists to prevent, because a simulator
+        # answers every question smoothly and truthfully answers none of them.
+        #
+        # So each group is brought up on its own. A group that raises leaves its
+        # devices as None, latches a fault under its own name, and the methods
+        # that would drive it refuse rather than crash. is_mock stays False,
+        # because the vehicle IS real — it is a real vehicle with three sensors
+        # fitted, and sensor_faults() says which three.
+        #
+        # THE ONE PLACE THIS IS NOT ALLOWED TO DEGRADE QUIETLY IS THE THRUSTERS.
+        # Everything else that is missing costs a reading; a missing thruster
+        # group costs control of a vehicle in water. set_armed() refuses to arm
+        # without it — see there.
+        self._have: dict[str, bool] = {}
+
+        def _group(name: str, build, what: str) -> None:
+            """Bring up one group; on failure name it and carry on."""
+            try:
+                build()
+                self._have[name] = True
+            except Exception as exc:  # noqa: BLE001 — the whole point is not to raise
+                self._have[name] = False
+                self._fault(name, "%s did not come up (%s) — %s", name, exc, what)
+
         # --- outputs first, and safe before anything else runs ---------------
         # Order matters on a cold boot: the H-bridge inputs float until they are
         # driven, and a floating IN pin with the motor rail already up is a prop
         # that spins the moment the Pi powers on.
-        self._l_en = PWMOutputDevice(self.PIN_THRUST_L_EN, frequency=settings.thruster_pwm_hz)
-        self._l_in1 = DigitalOutputDevice(self.PIN_THRUST_L_IN1, initial_value=False)
-        self._l_in2 = DigitalOutputDevice(self.PIN_THRUST_L_IN2, initial_value=False)
-        self._r_en = PWMOutputDevice(self.PIN_THRUST_R_EN, frequency=settings.thruster_pwm_hz)
-        self._r_in1 = DigitalOutputDevice(self.PIN_THRUST_R_IN1, initial_value=False)
-        self._r_in2 = DigitalOutputDevice(self.PIN_THRUST_R_IN2, initial_value=False)
-        self.set_thrusters(0.0, 0.0)
+        self._l_en = self._l_in1 = self._l_in2 = None
+        self._r_en = self._r_in1 = self._r_in2 = None
+
+        def _build_thrusters() -> None:
+            self._l_en = PWMOutputDevice(self.PIN_THRUST_L_EN,
+                                         frequency=settings.thruster_pwm_hz)
+            self._l_in1 = DigitalOutputDevice(self.PIN_THRUST_L_IN1, initial_value=False)
+            self._l_in2 = DigitalOutputDevice(self.PIN_THRUST_L_IN2, initial_value=False)
+            self._r_en = PWMOutputDevice(self.PIN_THRUST_R_EN,
+                                         frequency=settings.thruster_pwm_hz)
+            self._r_in1 = DigitalOutputDevice(self.PIN_THRUST_R_IN1, initial_value=False)
+            self._r_in2 = DigitalOutputDevice(self.PIN_THRUST_R_IN2, initial_value=False)
+            # Set BEFORE the zeroing call below, because set_thrusters() now checks
+            # it and would otherwise decline to do the one thing that must happen
+            # on every boot.
+            self._have["thrusters"] = True
+            self.set_thrusters(0.0, 0.0)
+
+        _group("thrusters", _build_thrusters,
+               "the sub CANNOT BE ARMED and will not answer the sticks")
 
         # Software PWM (see the channel-sharing note above). gpiozero's default
         # pin factory drives PWMOutputDevice in software on every pin anyway;
         # GPIO12/13 are still the right pins for the thrusters because they are
         # the only two that CAN be promoted to hardware PWM later (pigpio pin
         # factory or a dtoverlay) without moving any wires.
-        self._light_dev = {
-            "white": PWMOutputDevice(self.PIN_LIGHT_WHITE, frequency=settings.light_pwm_hz),
-            "green": PWMOutputDevice(self.PIN_LIGHT_GREEN, frequency=settings.light_pwm_hz),
-        }
+        self._light_dev: dict[str, object] = {}
+
+        def _build_lights() -> None:
+            self._light_dev = {
+                "white": PWMOutputDevice(self.PIN_LIGHT_WHITE,
+                                         frequency=settings.light_pwm_hz),
+                "green": PWMOutputDevice(self.PIN_LIGHT_GREEN,
+                                         frequency=settings.light_pwm_hz),
+            }
+
+        _group("lights", _build_lights, "both lamp channels are dead on this vehicle")
 
         # --- ballast axis ----------------------------------------------------
+        # The axis bookkeeping is plain Python and is built whatever the pins do,
+        # so the readbacks have something coherent to answer with.
         self._axis = BallastAxis(settings.ballast_span_steps, settings.ballast_span_tolerance)
         self._ballast_cmd: BallastDir = "hold"
         self._homing = False
-        self._step_pin = DigitalOutputDevice(self.PIN_BALLAST_STEP, initial_value=False)
-        self._dir_pin = DigitalOutputDevice(self.PIN_BALLAST_DIR, initial_value=False)
-        # active_high=False makes .on() drive the pin LOW, so `.on()` reads as
-        # "driver enabled" instead of the double negative the A4988 datasheet
-        # leaves you with.
-        self._en_pin = DigitalOutputDevice(self.PIN_BALLAST_EN, active_high=False,
-                                           initial_value=False)
-        self._limit_empty = DigitalInputDevice(self.PIN_LIMIT_EMPTY, pull_up=True)
-        self._limit_full = DigitalInputDevice(self.PIN_LIMIT_FULL, pull_up=True)
+        self._step_pin = self._dir_pin = self._en_pin = None
+        self._limit_empty = self._limit_full = None
+
+        def _build_ballast() -> None:
+            self._step_pin = DigitalOutputDevice(self.PIN_BALLAST_STEP, initial_value=False)
+            self._dir_pin = DigitalOutputDevice(self.PIN_BALLAST_DIR, initial_value=False)
+            # active_high=False makes .on() drive the pin LOW, so `.on()` reads as
+            # "driver enabled" instead of the double negative the A4988 datasheet
+            # leaves you with.
+            self._en_pin = DigitalOutputDevice(self.PIN_BALLAST_EN, active_high=False,
+                                               initial_value=False)
+            self._limit_empty = DigitalInputDevice(self.PIN_LIMIT_EMPTY, pull_up=True)
+            self._limit_full = DigitalInputDevice(self.PIN_LIMIT_FULL, pull_up=True)
+
+        _group("ballast", _build_ballast,
+               "the syringe cannot be driven and depth must be flown on thrust alone")
 
         # --- leak probes ------------------------------------------------------
-        self._leak_warn_in = DigitalInputDevice(self.PIN_LEAK_WARN, pull_up=True)
-        self._leak_flood_in = DigitalInputDevice(self.PIN_LEAK_FLOOD, pull_up=True)
+        # The debouncers exist either way: read_leak() consults them, and a
+        # debouncer that has never been sampled reports the not-certified-dry
+        # answer, which is the correct one for probes that are not there.
+        self._leak_warn_in = self._leak_flood_in = None
         self._warn_debounce = LeakDebouncer(settings.leak_debounce_samples)
         self._flood_debounce = LeakDebouncer(settings.leak_debounce_samples)
-        # The hull is sealed dry and then powered up, so a probe already reading
-        # wet right now is shorted — or the sub is genuinely flooded before it has
-        # been launched. Either way it is a fault, and it is captured HERE because
-        # a second later it is indistinguishable from a leak that just started.
-        self._warn_wet_at_boot = self._is_wet(self._leak_warn_in)
-        self._flood_wet_at_boot = self._is_wet(self._leak_flood_in)
-        if self._warn_wet_at_boot or self._flood_wet_at_boot:
-            log.error("leak probe(s) already WET at power-on (warn=%s flood=%s) — shorted "
-                      "probe, or the hull is flooded before launch. Do not dive on this.",
-                      self._warn_wet_at_boot, self._flood_wet_at_boot)
+        self._warn_wet_at_boot = False
+        self._flood_wet_at_boot = False
+        # How many times an operator has re-armed the detector this run. On the
+        # wire so the console can say the reassurance it is showing was restored
+        # by hand rather than never having been in doubt.
+        self._leak_rearms = 0
+
+        def _build_leak() -> None:
+            self._leak_warn_in = DigitalInputDevice(self.PIN_LEAK_WARN, pull_up=True)
+            self._leak_flood_in = DigitalInputDevice(self.PIN_LEAK_FLOOD, pull_up=True)
+            # The hull is sealed dry and then powered up, so a probe already reading
+            # wet right now is shorted — or the sub is genuinely flooded before it has
+            # been launched. Either way it is a fault, and it is captured HERE because
+            # a second later it is indistinguishable from a leak that just started.
+            self._warn_wet_at_boot = self._is_wet(self._leak_warn_in)
+            self._flood_wet_at_boot = self._is_wet(self._leak_flood_in)
+            if self._warn_wet_at_boot or self._flood_wet_at_boot:
+                log.error("leak probe(s) already WET at power-on (warn=%s flood=%s) — shorted "
+                          "probe, or the hull is flooded before launch. Do not dive on this.",
+                          self._warn_wet_at_boot, self._flood_wet_at_boot)
+
+        _group("leak", _build_leak,
+               "hull integrity is UNKNOWN — not dry, unwatched. Do not dive on this")
 
         # --- pulse inputs: interrupts, never polling --------------------------
         # gpiozero calls these back on its own edge threads. A polling loop would
@@ -1384,19 +1510,26 @@ class RealHardware(HardwareBase):
         self._paddle = PaddleWheel(nav_settings.m_per_pulse,
                                    nav_settings.paddle_window_s,
                                    nav_settings.paddle_stale_s)
-        # A3144 hall sensors are open-collector: a magnet pulls the line LOW, so
-        # with pull_up=True the ACTIVE state is that low, and when_activated is
-        # the falling edge.
-        self._paddle_in = DigitalInputDevice(self.PIN_PADDLE, pull_up=True)
-        self._paddle_in.when_activated = self._on_paddle_pulse
         self._spool = QuadratureDecoder()
-        self._spool_a = DigitalInputDevice(self.PIN_SPOOL_A, pull_up=True)
-        self._spool_b = DigitalInputDevice(self.PIN_SPOOL_B, pull_up=True)
-        for dev in (self._spool_a, self._spool_b):
-            # BOTH edges of BOTH channels, or the decoder sees half the
-            # transitions and loses the direction information entirely.
-            dev.when_activated = self._on_spool_edge
-            dev.when_deactivated = self._on_spool_edge
+        self._paddle_in = None
+        self._spool_a = self._spool_b = None
+
+        def _build_pulses() -> None:
+            # A3144 hall sensors are open-collector: a magnet pulls the line LOW, so
+            # with pull_up=True the ACTIVE state is that low, and when_activated is
+            # the falling edge.
+            self._paddle_in = DigitalInputDevice(self.PIN_PADDLE, pull_up=True)
+            self._paddle_in.when_activated = self._on_paddle_pulse
+            self._spool_a = DigitalInputDevice(self.PIN_SPOOL_A, pull_up=True)
+            self._spool_b = DigitalInputDevice(self.PIN_SPOOL_B, pull_up=True)
+            for dev in (self._spool_a, self._spool_b):
+                # BOTH edges of BOTH channels, or the decoder sees half the
+                # transitions and loses the direction information entirely.
+                dev.when_activated = self._on_spool_edge
+                dev.when_deactivated = self._on_spool_edge
+
+        _group("pulses", _build_pulses,
+               "water speed and tether payout both go to cannot-tell")
 
         # --- sensor cache (written only by _sensor_loop) ----------------------
         # EVERY ONE OF THESE IS A REMEMBERED VALUE, and a remembered value is only
@@ -1494,20 +1627,28 @@ class RealHardware(HardwareBase):
     def _gpio_available() -> bool:
         """True once a real GPIO stack is importable AND the sensor code is wired.
 
-        Flip the `wired` flag when the harness is actually built — the import
-        check alone is not enough, because gpiozero installs fine on a Pi that has
-        no sensors attached, and this class would then come up reporting
-        mock=False over a loom that does not exist.
+        The import check alone is not enough, because gpiozero installs fine on a
+        Pi with nothing attached, and this class would then come up reporting
+        mock=False over a loom that does not exist. So there are two gates and
+        both must pass: a human saying the harness exists, and the GPIO stack
+        actually importing.
 
-        This one flag stays the ONLY thing to change when the parts arrive. The
-        code below it is complete; what it cannot know is whether the wires are
-        in the holes, and nothing in software can find that out. Until a human
-        says so by flipping it, __init__ raises and NEPTUNE_HW=auto lands on the
-        bench simulator, which flags itself as a simulation. That fallback is the
-        honest failure and it is worth more than the convenience of guessing.
+        THE HUMAN HALF MOVED OUT OF THIS FUNCTION. It was a `wired = False`
+        literal here, which meant asserting "the wires are in the holes" required
+        editing this file on the vehicle — a source edit to state a fact about a
+        workbench. It is now settings.hardware_wired (NEPTUNE_HW_WIRED), which is
+        the same assertion made by the same human in a place that does not need a
+        commit. What has NOT changed is that something outside the software has to
+        make it: nothing here can see a connector.
+
+        WHAT THIS FLAG NO LONGER MEANS is "every sensor is fitted". It used to be
+        all-or-nothing — one flag for a whole vehicle — which made the first sensor
+        on the bench untestable, because turning it on claimed the other eleven
+        were there too. __init__ now brings up each group separately and names the
+        ones that did not come up, so this says only "there is a harness worth
+        talking to", and the console reports the rest per group.
         """
-        wired = False        # set True once the harness is built and the pins are on
-        if not wired:
+        if not settings.hardware_wired:
             return False
         try:
             import gpiozero  # noqa: F401
@@ -1521,11 +1662,27 @@ class RealHardware(HardwareBase):
         # arming is a software gate and this is where it is enforced. Disarming
         # zeroes the bridges immediately rather than waiting for the next control
         # frame, because "the next control frame" may never come.
+        #
+        # ARMING IS REFUSED WITHOUT THE BRIDGES. Every other group in __init__ may
+        # be missing and the vehicle still flies, one reading poorer. This one is
+        # different in kind: arming a sub whose H-bridges never came up hands the
+        # operator a live console, a moving stick and a vehicle in water that
+        # cannot answer it — and the console would have no way to know, because
+        # "armed" would be true and the thrust command would be accepted and
+        # dropped. Refuse, say so, and stay disarmed.
+        if on and not self._have.get("thrusters"):
+            self._fault("thrusters", "REFUSING TO ARM: the H-bridges did not come up, so "
+                                     "the sticks would move nothing. Fix the thruster "
+                                     "wiring before arming this vehicle")
+            self._armed = False
+            return
         self._armed = bool(on)
         if not on:
             self.set_thrusters(0.0, 0.0)
 
     def set_thrusters(self, left: float, right: float) -> None:
+        if not self._have.get("thrusters"):
+            return
         if not self._armed:
             left = right = 0.0
         self._drive_bridge(self._l_in1, self._l_in2, self._l_en, left)
@@ -1578,16 +1735,26 @@ class RealHardware(HardwareBase):
         log.warning("set_magnet(%s) ignored — the electromagnet is v2 hardware, "
                     "nothing is fitted", on)
 
+    # THE COMMANDED STATE IS RECORDED EVEN WITH NO LAMP ON THE PIN, and the pin is
+    # only written if there is one. get_light() answers from _lights, so with the
+    # lamps unwired the console shows what you asked for and "lights" sits in
+    # sensor_faults() saying it went nowhere. The alternative — dropping the
+    # command — would leave the switch flicking back on its own with no
+    # explanation anywhere.
     def set_light(self, which: Which, on: bool) -> None:
         _, lvl = self._lights[which]
         self._lights[which] = (on, lvl)
-        self._light_dev[which].value = lvl if on else 0.0
+        dev = self._light_dev.get(which)
+        if dev is not None:
+            dev.value = lvl if on else 0.0
 
     def set_light_level(self, which: Which, level: float) -> None:
         on, _ = self._lights[which]
         lvl = max(0.0, min(1.0, level))
         self._lights[which] = (on, lvl)
-        self._light_dev[which].value = lvl if on else 0.0
+        dev = self._light_dev.get(which)
+        if dev is not None:
+            dev.value = lvl if on else 0.0
 
     def release_dropweight(self) -> None:
         # v2 — LOUD NO-OP. There is no burn-wire and no drop-weight on the v1
@@ -1704,6 +1871,64 @@ class RealHardware(HardwareBase):
                                self._answering("leak-probes"),
                                self.leak_probe_fault())
 
+    def reset_leak_latches(self) -> dict:
+        """Clear the latches and the wet-at-boot verdict. REFUSED WHILE WET.
+
+        The live pins are read HERE rather than trusting the debouncers, and that
+        is the whole guard: the debouncer is a memory, and a memory is exactly
+        what this call is asking to erase. Asking the pin instead means the
+        refusal is based on the water, not on the bookkeeping about the water.
+
+        Clearing the boot verdict too is deliberate. _warn_wet_at_boot makes
+        read_leak() answer UNKNOWN for the life of the process — correctly, because
+        a probe wet in a hull sealed dry is a probe that cannot certify anything —
+        but it is precisely the state a human returns from having inspected. If
+        this cleared only the latches, a bench-wet boot would leave the console
+        stuck on UNKNOWN with no way back short of a restart, which is the problem
+        this method exists to remove.
+        """
+        if not self._have.get("leak"):
+            return {"ok": False, "cleared": [],
+                    "why": ("there are no leak probes on this vehicle to re-arm — the "
+                            "leak group did not come up at boot")}
+        try:
+            wet_now = [n for n, dev in (("warn", self._leak_warn_in),
+                                        ("flood", self._leak_flood_in))
+                       if self._is_wet(dev)]
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "cleared": [],
+                    "why": f"the probes would not read ({exc}), so nothing can be vouched for"}
+        if wet_now:
+            log.warning("leak re-arm REFUSED: %s probe(s) are wet right now",
+                        "+".join(wet_now))
+            return {"ok": False, "cleared": [], "wet_now": wet_now,
+                    "why": (f"the {' and '.join(wet_now)} probe is WET RIGHT NOW. This clears "
+                            f"the memory of water, never water that is present — dry the hull "
+                            f"and find out where it came from first")}
+        cleared = []
+        if self._warn_debounce.latched:
+            cleared.append("warn-latch")
+        if self._flood_debounce.latched:
+            cleared.append("flood-latch")
+        if self._warn_wet_at_boot:
+            cleared.append("warn-wet-at-boot")
+        if self._flood_wet_at_boot:
+            cleared.append("flood-wet-at-boot")
+        self._warn_debounce.reset()
+        self._flood_debounce.reset()
+        self._warn_wet_at_boot = False
+        self._flood_wet_at_boot = False
+        self._leak_rearms += 1
+        # WARNING, not INFO. Someone dismissed the strongest claim this vehicle
+        # makes, and the boat's own log is where that has to be findable later.
+        log.warning("leak detector RE-ARMED by operator (cleared: %s; re-arm #%d). Both "
+                    "probes read dry at this moment.",
+                    ", ".join(cleared) or "nothing was latched", self._leak_rearms)
+        return {"ok": True, "cleared": cleared, "rearms": self._leak_rearms,
+                "why": ("both probes read dry and the detector is re-armed"
+                        if cleared else
+                        "nothing was latched; both probes read dry and remain armed")}
+
     def leak_probe_fault(self) -> str | None:
         # The DEBOUNCED latches, not the live pins — the same evidence read_leak()
         # answers from. These two used to read the same probes by different rules:
@@ -1780,6 +2005,12 @@ class RealHardware(HardwareBase):
         # `.value`s together, and complementing both bits of a Gray code maps the
         # cycle onto itself — the phase shifts, the direction does not, so this
         # is correct either way round.
+        # Belt and braces: with no pulse group there is nothing to have registered
+        # this callback, so reaching it should be impossible — but an edge thread
+        # already in flight when a group is torn down would find the pins gone,
+        # and a raise on a gpiozero callback thread is silent.
+        if self._spool_a is None or self._spool_b is None:
+            return
         self._spool.update(bool(self._spool_a.value), bool(self._spool_b.value))
 
     @staticmethod
@@ -1809,6 +2040,16 @@ class RealHardware(HardwareBase):
         down, it loses steps, and a lost step on an open-loop axis is the
         reported level quietly drifting away from where the plunger actually is.
         """
+        # NO AXIS, NO LOOP. The thread still exists and still exits cleanly on
+        # _stop; it simply never pretends to drive a driver that is not there. The
+        # "ballast" fault latched in __init__ is what the console shows, and
+        # get_ballast_level() answers from the axis, which stays where it was
+        # rather than reporting a plunger travelling on command.
+        if not self._have.get("ballast"):
+            log.warning("ballast axis not wired — the stepper thread is idle. The syringe "
+                        "cannot be driven and its reported level will not move.")
+            self._stop.wait()
+            return
         period = 1.0 / max(1.0, settings.ballast_step_rate)
         while not self._stop.is_set():
             direction = -1 if self._homing else {"fill": +1, "empty": -1}.get(
@@ -2217,6 +2458,14 @@ class RealHardware(HardwareBase):
 
     # ---- leak + link ------------------------------------------------------
     def _leak_tick(self, now: float) -> None:
+        # NO PROBES, NO REASSURANCE — and specifically, no _device_ok below. That
+        # omission is the whole mechanism: "leak-probes" stays faulted, read_leak()
+        # returns UNKNOWN rather than NORMAL, and the console shows a hull nobody
+        # is watching instead of a hull certified dry. Returning early WITH a
+        # _device_ok would be this file's oldest bug rebuilt on purpose — a
+        # sampler that certifies itself for work it did not do.
+        if not self._have.get("leak"):
+            return
         # Called from its OWN try-block at the top of the sensor tick, ahead of
         # every bus operation — these are two GPIO pins and the chips are on I2C,
         # unrelated hardware that has to be able to fail independently. Sampling
@@ -2263,7 +2512,13 @@ class RealHardware(HardwareBase):
             # Only now is it safe to release the stepper: nothing is going to ask
             # it to move again, and a de-energised driver on a shut-down vehicle
             # is one less thing drawing from the pack.
-            self._en_pin.off()
+            #
+            # Absent on a part-built vehicle, and absent is not a failure to quiet
+            # it. Without this test the warning below fires on every clean shutdown
+            # saying the outputs may still be live, which is both false and exactly
+            # the kind of routine alarm that gets read past on the day it is real.
+            if self._en_pin is not None:
+                self._en_pin.off()
         except Exception as exc:  # noqa: BLE001
             log.warning("shutdown: could not fully quiet the outputs (%s)", exc)
         for dev in (getattr(self, "_paddle_in", None), getattr(self, "_spool_a", None),

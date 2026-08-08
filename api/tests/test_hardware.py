@@ -228,6 +228,77 @@ class LeakProbeFaultTest(unittest.TestCase):
         self.assertEqual(hw.leak_probe_fault(), "warn")
 
 
+class LeakRearmTest(unittest.TestCase):
+    """Re-arming the detector: the way back from a one-way latch.
+
+    A latch that could only be cleared by restarting the service meant a bench
+    test left the console alarming for the rest of the session, and on the water
+    the cure was SSH-ing into a submarine. The way back exists — but it clears the
+    MEMORY of water and never water that is present, and that distinction is the
+    only thing keeping it from being a button that dismisses a flood.
+    """
+
+    def setUp(self):
+        self.hw = MockHardware()
+
+    def test_a_wet_probe_refuses_the_rearm_and_says_which(self):
+        """THE GUARD. Without it this is a dismiss-the-alarm button."""
+        self.hw._set_probe_wet(warn=True, flood=False)
+        got = self.hw.reset_leak_latches()
+        self.assertFalse(got["ok"],
+                         f"re-arm was ACCEPTED with the warn probe wet — this clears "
+                         f"live water, not the memory of it: {got}")
+        self.assertIn("warn", got.get("wet_now", []),
+                      f"the refusal does not name which probe is wet: {got}")
+        self.assertGreater(len(str(got.get("why") or "")), 40,
+                           f"a refusal with no sentence is a button that does nothing: {got}")
+
+    def test_a_flood_refuses_too(self):
+        self.hw._set_probe_wet(warn=True, flood=True)
+        self.assertFalse(self.hw.reset_leak_latches()["ok"],
+                         "re-arm accepted DURING A FLOOD")
+
+    def test_the_state_does_not_move_when_the_rearm_is_refused(self):
+        """A refused re-arm must change nothing at all — no partial clear."""
+        self.hw._set_probe_wet(warn=True, flood=False)
+        before = self.hw.read_leak()
+        self.hw.reset_leak_latches()
+        self.assertEqual(self.hw.read_leak(), before,
+                         "a REFUSED re-arm still moved the leak state")
+
+    def test_a_dry_probe_wet_at_boot_can_be_rearmed_back_to_normal(self):
+        """The case that sent us here: powering up with a wet probe pins the
+        console on UNKNOWN for the whole session, because a probe wet in a hull
+        sealed dry cannot certify anything. Drying it and re-arming is exactly the
+        human inspection the latch was waiting for."""
+        self.hw._set_probe_wet_at_boot(warn=True, flood=False)
+        self.assertEqual(self.hw.read_leak(), "UNKNOWN",
+                         "a probe wet at boot should not be certifying the hull dry")
+        got = self.hw.reset_leak_latches()
+        self.assertTrue(got["ok"], f"re-arm refused with both probes dry: {got}")
+        self.assertIn("warn-wet-at-boot", got["cleared"],
+                      f"the boot verdict was not cleared, so this is still stuck: {got}")
+        self.assertEqual(self.hw.read_leak(), "NORMAL",
+                         "after a re-arm with both probes dry the hull reads NORMAL")
+
+    def test_rearms_are_counted_so_the_console_can_say_it_happened(self):
+        """NORMAL restored by hand and NORMAL never in doubt are different claims."""
+        self.assertEqual(self.hw._leak_rearms, 0)
+        self.hw.reset_leak_latches()
+        self.hw.reset_leak_latches()
+        self.assertEqual(self.hw._leak_rearms, 2,
+                         "re-arms are not counted, so the console cannot tell an "
+                         "operator that the reassurance on screen was restored by hand")
+
+    def test_the_base_class_declines_rather_than_pretending(self):
+        """A backend with no latches has nothing to re-arm, and saying so is a real
+        answer. Returning ok=True would have the console report a detector re-armed
+        on hardware that never had one."""
+        got = HardwareBase.reset_leak_latches(self.hw)
+        self.assertFalse(got["ok"])
+        self.assertTrue(str(got.get("why") or ""))
+
+
 # ---------------------------------------------------------------------------
 # Ballast — an open-loop axis with no position sensor
 # ---------------------------------------------------------------------------

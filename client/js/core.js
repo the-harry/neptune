@@ -393,6 +393,12 @@ const state = {
   // the same ladder (the "Leak test (sim)" action), because WARN is the stage nobody
   // would ever see before it mattered.
   leakState:'NORMAL', simLeakStage:'NORMAL', leakProbeFault:null,
+  // THE RE-ARM CONVERSATION, which is a conversation and not a setting: what was
+  // asked, whether the vehicle agreed, and what it said if it did not. leakRearms
+  // comes off the telemetry and counts re-arms this run — a NORMAL that was
+  // restored by hand and a NORMAL that was never in doubt are different claims,
+  // and the console should be able to tell them apart.
+  leakRearms:0, leakResetPending:false, leakResetSaid:'', leakResetOk:false,
   // §5 readings that are allowed to say CANNOT-TELL. null is not 0 here: a null
   // speed means the paddlewheel is stalled, stale or not fitted, and a null mag_cal
   // means no IMU answered at all - which is a different fault from an IMU answering

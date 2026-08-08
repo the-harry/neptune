@@ -768,12 +768,25 @@ async def ws_control(ws: WebSocket) -> None:
                 bb.event("cmd_recv", {"name": msg.name, "value": msg.value}, c_id=c_id)
                 valid = msg.name in COMMAND_NAMES
                 bb.event("cmd_validate", {"name": msg.name, "ok": valid}, c_id=c_id)
+                # ok USED TO MEAN "THE NAME WAS SPELLED RIGHT", which was fine while
+                # every command simply happened. leak_reset can be REFUSED by the
+                # vehicle — a probe is wet, and the operator is asking to dismiss
+                # water that is present — and acking ok=true for that would tell the
+                # console the detector had been re-armed when it had not. A command
+                # that returns a verdict decides its own ack; the rest are unchanged.
+                verdict = None
                 if valid:
-                    rov.apply_command(msg)
-                    bb.event("cmd_apply", {"name": msg.name, "value": msg.value}, c_id=c_id)
-                bb.event("cmd_ack_send", {"name": msg.name, "ok": valid}, c_id=c_id)
-                await ws.send_text(Ack(c_id=c_id, name=msg.name, ok=valid,
-                                       reason=None if valid else "unknown command").model_dump_json())
+                    verdict = rov.apply_command(msg)
+                    bb.event("cmd_apply", {"name": msg.name, "value": msg.value,
+                                           "verdict": verdict}, c_id=c_id)
+                ok = valid and (verdict is None or bool(verdict.get("ok", True)))
+                reason = ("unknown command" if not valid
+                          else None if verdict is None or verdict.get("ok", True)
+                          else str(verdict.get("why") or "refused by the vehicle"))
+                bb.event("cmd_ack_send", {"name": msg.name, "ok": ok, "reason": reason},
+                         c_id=c_id)
+                await ws.send_text(Ack(c_id=c_id, name=msg.name, ok=ok,
+                                       reason=reason).model_dump_json())
             elif t == "ping":
                 # §2 SNTP: stamp receive (t2) and send (t3) in the Pi's monotonic ms
                 t2 = bb.now_ms()

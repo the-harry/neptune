@@ -65,7 +65,16 @@ function handleMessage(raw){
   let m; try{ m=JSON.parse(raw); }catch(e){ LOG.warn('bad ws frame', raw); return; }
   if(m.type==='telemetry'){ LOG.rxRate('tel','telemetry', m); if(window.REC&&REC.enabled) REC.onTelemetry(m); onTelemetry(m); }
   else if(m.type==='pong'){ if(window.REC&&REC.enabled) REC.onPong(m); else state.linkMs=Date.now()-state.lastPingAt; LOG.rxRate('pong','pong RTT', state.linkMs+'ms'); }
-  else if(m.type==='ack'){ if(window.REC&&REC.enabled) REC.cmdAck(m.c_id, m.ok); LOG.rxRate('ack','cmd ack', m.name, m.ok); }
+  else if(m.type==='ack'){
+    if(window.REC&&REC.enabled) REC.cmdAck(m.c_id, m.ok);
+    LOG.rxRate('ack','cmd ack', m.name, m.ok);
+    // AN ACK IS THE ONLY PLACE A REFUSAL EXISTS. `ok` used to mean nothing more
+    // than "the vehicle recognised the name", so nothing here ever had to read it;
+    // leak_reset is the first command the vehicle can decline on its merits, and
+    // the reason it gives is the whole value of asking.
+    if(m.name==='leak_reset' && typeof noteLeakResetAck==='function')
+      noteLeakResetAck(m.ok, m.reason);
+  }
   // THE ALARM FRAME IS THE ONE MESSAGE THAT CANNOT BE DROPPED. Matching the single
   // name 'leak' silently discarded BOTH of the names the vehicle actually sends now
   // (api/rov.py leak_alarm_edges -> leak_warn / leak_flood), and with them the latch
@@ -167,6 +176,10 @@ function onTelemetry(t){
   if(typeof t.right==='number') state.right=t.right;
   if(typeof t.armed==='boolean') state.armed=t.armed;
   if(typeof t.magnet==='boolean') state.magnet=t.magnet;
+  // Absent on an older vehicle, which is not the same as zero — but zero is also
+  // the honest reading for a vehicle whose leak detector cannot be re-armed at all,
+  // so the default stands rather than becoming another cannot-tell.
+  if(typeof t.leak_rearms==='number') state.leakRearms=t.leak_rearms;
   if(typeof t.light_green==='boolean') state.lights.green.on=t.light_green;
   if(typeof t.light_white==='boolean') state.lights.white.on=t.light_white;
   // LEAK, in stages. `leak` (bool) is true for WARN *or* FLOOD, so on its own it

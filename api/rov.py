@@ -78,6 +78,11 @@ class RovState:
         # rank decides whether this tick is an edge, the latch remembers that an
         # edge happened at all. See latched_alarms().
         self._alarm_latch: str | None = None
+        # HOW MANY TIMES THE LEAK DETECTOR HAS BEEN RE-ARMED BY HAND this run. On
+        # the wire because "NORMAL" after a re-arm and "NORMAL" that was never in
+        # doubt are not the same claim, and the console should be able to tell an
+        # operator which one it is showing them.
+        self.leak_rearms = 0
         hw.set_armed(False)
 
     # ---- inbound application --------------------------------------------
@@ -112,11 +117,19 @@ class RovState:
                 self.ballast_target = level
         self.hw.ballast_pump(m.cmd)
 
-    def apply_command(self, m: CommandMsg) -> None:
+    def apply_command(self, m: CommandMsg) -> dict | None:
+        """Apply one command. Returns a verdict dict for commands that can be
+        REFUSED for a reason, None for the ones that simply happen.
+
+        Most commands here cannot fail meaningfully — arming is a software gate,
+        a light either has a pin or does not. leak_reset is the first that can be
+        legitimately declined by the vehicle, so it needs a way to say why, and
+        the caller turns that into the ack.
+        """
         name = m.name
         if name not in COMMAND_NAMES:
             log.warning("unknown command %r ignored", name)
-            return
+            return None
         val = m.value
         if name == "arm":
             self._set_armed(True)
@@ -146,6 +159,19 @@ class RovState:
                 self.hw.release_dropweight()
             else:
                 log.warning("dropweight command without 'release' value ignored")
+        elif name == "leak_reset":
+            # THE HARDWARE DECIDES, NOT THIS LINE. The refusal-while-wet rule lives
+            # in the backend beside the pins it reads, so it cannot be bypassed by
+            # anything that reaches the hardware another way. This returns the
+            # verdict so the ack carries the REASON — a button that silently does
+            # nothing when refused teaches an operator that the button is broken,
+            # and the next thing they do is stop believing the console.
+            res = self.hw.reset_leak_latches()
+            if res.get("ok"):
+                self.leak_rearms += 1
+            else:
+                log.warning("leak re-arm refused: %s", res.get("why"))
+            return res
 
     # ---- driving / watchdog ---------------------------------------------
     def _set_armed(self, on: bool) -> None:
@@ -417,6 +443,7 @@ class RovState:
             roll_deg=None if roll is None else round(roll, 1),
             current_a=None if current is None else round(current, 2),
             leak_probe_fault=self.hw.leak_probe_fault(),
+            leak_rearms=self.leak_rearms,
             # WHICH chips are silent, so a blank gauge arrives with its reason. The
             # nulls above and this list are one verdict read twice — they are both
             # taken from the same hardware call in the same frame, so the console

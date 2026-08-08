@@ -86,6 +86,54 @@ function setLightLevel(which, level){
   if(nowOn!==L.on){ L.on=nowOn; cmd(which==='green'?'light_green':'light_white', L.on); }
 }
 
+/* RE-ARM THE LEAK DETECTOR — the way back from a latch that used to need a restart.
+
+   A leak latch is one-way on the vehicle for a good reason: a probe drying out is
+   not evidence the hull is sound. But one-way with no way back meant the only cure
+   was restarting the service, i.e. SSH-ing into a submarine, so a bench test left
+   the console stuck on an alarm for the rest of the session.
+
+   THE CONSOLE DOES NOT DECIDE WHETHER THIS IS ALLOWED. The vehicle refuses it
+   outright while either probe is wet, and refuses with a sentence saying so. That
+   check has to live beside the pins, not here, or it is a check an operator can
+   get around by using a different client. All this does is ask, and then show the
+   answer — including "no".
+
+   Local mirror deliberately NOT updated on send. Everywhere else in this file the
+   simulator follows the command optimistically, which is right for a light. Here it
+   would paint the hull green on the strength of having ASKED, which is the one
+   claim on this console that has to come from the vehicle. */
+function resetLeak(){
+  if(typeof commandsBlocked==='function' && commandsBlocked()){
+    // No vehicle: clear the SIMULATED stage, so a sim leak drill can be re-run
+    // without a reload. Nothing is claimed about a hull that does not exist.
+    state.simLeakStage='NORMAL'; state.simLeak=false; state.alarmLeakStage='NORMAL';
+    LOG.cmd('leak_reset','(simulated)');
+    return true;
+  }
+  state.leakResetPending=true;
+  state.leakResetSaid='';                       // the last answer, cleared on a new ask
+  return cmd('leak_reset');
+}
+
+/* The vehicle's answer to a leak_reset, good or bad. Called from net.js's ack
+   handler because an ack is the ONLY place a refusal exists — there is no telemetry
+   field for "you asked and I said no", and a button that silently does nothing
+   teaches an operator that the button is broken. */
+function noteLeakResetAck(ok, reason){
+  state.leakResetPending=false;
+  state.leakResetSaid = ok ? 'RE-ARMED' : (reason || 'refused by the vehicle');
+  state.leakResetOk = !!ok;
+  if(ok){
+    // The console's own latch has to go too, or the worse-of-the-two rule in
+    // leakStage() keeps showing the stage the vehicle has just cleared.
+    state.alarmLeakStage='NORMAL';
+    LOG.info('leak detector re-armed by the vehicle');
+  } else {
+    LOG.warn('leak re-arm REFUSED: ' + state.leakResetSaid);
+  }
+}
+
 function fireScreenFlash(){
   const el=$('screen-flash');
   el.classList.remove('fire'); void el.offsetWidth; el.classList.add('fire');

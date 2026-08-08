@@ -124,5 +124,19 @@ class Settings:
     # Force with "mock" or "real".
     hardware_backend: str = field(default_factory=lambda: _s("NEPTUNE_HW", "auto"))
 
+    # IS THE HARNESS BUILT? This used to be a `wired = False` literal inside
+    # RealHardware._gpio_available, on the reasoning that no software can find out
+    # whether the wires are in the holes, so a human has to say so. That reasoning
+    # still holds — this is the human saying so, in a place that does not need the
+    # file edited to change it, and it is still the ONE assertion that separates
+    # "mock, and honest about it" from "real, and answering for real pins".
+    #
+    # It does NOT claim every sensor is fitted. RealHardware now brings up each
+    # group on its own and names the ones that are not there, so the vehicle can be
+    # built up a sensor at a time with the console telling the truth at every step.
+    # gpiozero still has to import, so a bench machine falls back to the mock
+    # whatever this says.
+    hardware_wired: bool = field(default_factory=lambda: _b("NEPTUNE_HW_WIRED", True))
+
 
 settings = Settings()
