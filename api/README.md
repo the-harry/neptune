@@ -273,7 +273,7 @@ Client fate is in `map.js`'s `connectNavWs` handler.
 | 12 | `snap_offset_m` | — | **IGNORED** — spec §5.7 calls this "the drift indicator" |
 | 13 | `range_m` | — | **DEAD STORE** — `MAP.rangeM`, written every frame, read by nothing |
 | 14 | `payout_m` | — | **DEAD STORE** — `MAP.payoutM` |
-| 15 | `confidence` | *no null to spend* | **DEAD STORE** — `MAP.confidence` |
+| 15 | `confidence` | *no null to spend* | **DEAD STORE** — `MAP.confidence` (`map.js:699`), written every frame, zero readers. Topside only: the number does reach the dive journal and `GET /api/nav/state`, so replay can grade a recorded track. It gets to the log and the API and stops there — every individual *cause* has a badge, only the composite is unshown, and that is parked deliberately until real dive logs say how it behaves (`.specs/tasks.md` → Open) |
 | 16 | `mag_cal` | no IMU answered; `0` = one did, and says do not trust it | **RENDERED**, behind two gates |
 | 17 | `speed_ms` | *no null to spend* | **RENDERED**, behind the gates — the Speed tile |
 | 18 | `speed_src` | *no null to spend* | **RENDERED**, behind the gates |

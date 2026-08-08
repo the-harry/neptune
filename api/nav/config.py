@@ -25,6 +25,15 @@ def _b(env, d):
         return d
     return v.strip().lower() in ("1", "true", "yes", "on")
 
+def _csv(env, d):
+    """Comma-separated env override → tuple. Empty string means an EMPTY list, not the
+    default: `NAV_CRT_EXTRA=` is how you say "fetch nothing but the Hub", and silently
+    handing back the seven hardcoded services would be answering a different question."""
+    v = os.environ.get(env)
+    if v is None:
+        return tuple(d)
+    return tuple(p.strip() for p in v.split(",") if p.strip())
+
 
 # WGS84 for the flat-earth approximation (spec §5.2). Exact enough at pond/canal scale.
 EARTH_R = 6378137.0
@@ -122,6 +131,64 @@ class NavSettings:
     sat_avg_kb: float = field(default_factory=lambda: _f("NAV_SAT_AVG_KB", 20.0))  # for size estimates (§3.3)
     overpass_url: str = field(default_factory=lambda: _s("NAV_OVERPASS", "https://overpass-api.de/api/interpreter"))
     nominatim_url: str = field(default_factory=lambda: _s("NAV_NOMINATIM", "https://nominatim.openstreetmap.org"))
+
+    # --- Canal & River Trust hazard layers (nav/crt.py) — BOOTSTRAP-ONLY DOWNLOAD ---
+    # Every hostname below is reached exactly once, by `python -m nav.crt`, while there is
+    # still internet. Nothing in the serving path may resolve any of them: canal-side there
+    # is no DNS, and a lookup that hangs is worse than a layer that says ABSENT.
+    #
+    # The ArcGIS Hub search endpoint. Enumerates the ~20 datasets CRT publishes as open
+    # data; each item's properties.url is a FeatureServer root.
+    crt_hub_search_url: str = field(default_factory=lambda: _s(
+        "NAV_CRT_HUB",
+        "https://data-canalrivertrust.opendata.arcgis.com/api/search/v1/collections/dataset/items?limit=100"))
+    # The org's own service root. The Hub is a WINDOW onto 204 services and the best hazard
+    # layers are not in that window — sluices, safety gates, stop-plank grooves and outfalls
+    # are all reachable here and none of them is on the Hub.
+    crt_org_service_root: str = field(default_factory=lambda: _s(
+        "NAV_CRT_ORG", "https://services.arcgis.com/DknzyjEEie5tEW0u/arcgis/rest/services"))
+    # Item metadata (licence text) for a service, looked up by its serviceItemId. A
+    # FeatureServer root carries copyrightText — an ATTRIBUTION — and no licence at all, so
+    # the terms have to be read from the item or they are being assumed.
+    crt_item_lookup_url: str = field(default_factory=lambda: _s(
+        "NAV_CRT_ITEMS", "https://www.arcgis.com/sharing/rest/content/items"))
+    # Hardcoded because they are NOT discoverable from the Hub, verified 2026-08-07 against
+    # the live org (national feature counts in nav/crt.py's _EXPECTED_FEATURES). Names are
+    # deliberately the Hub-curated *_View / *_View_Public family: the org also carries older
+    # near-duplicates — five separate Sluices services answering 886, 892, 893 and 937 —
+    # and picking one by its name being shorter is how a survey gets 44 sluices it will
+    # never be told about.
+    crt_extra_services: tuple = field(default_factory=lambda: _csv("NAV_CRT_EXTRA", (
+        "Canal_And_River_Trust_Sluices_View",
+        "Safety_Gates_View_Public",
+        "Stop_Plank_Grooves_View_Public",
+        "Outfall_Discharge_Points_View_Public",
+        "Towpath_Access_Points_2022",
+        "Canal_And_River_Trust_Moorings_All_View",
+        "Canal_And_River_Trust_Feeders_View",
+    )))
+    # Requests per second, sequential. Same reasoning as sat_rate_per_s: a full run is a few
+    # hundred requests against somebody's free ArcGIS quota, and being blocked mid-bootstrap
+    # leaves half an area on disk.
+    crt_rate_per_s: float = field(default_factory=lambda: _f("NAV_CRT_RATE", 4.0))
+    # data/crt/<area>/<layer>.geojson + <layer>.prov.json + provenance.json. Deliberately
+    # NOT inside areas_dir: areas.list_areas() globs areas/*.json and reads every hit as an
+    # area, so a provenance file landing there would invent areas that do not exist.
+    crt_dir: Path = field(default_factory=lambda: Path(_s("NAV_CRT_DIR", str(_ROOT / "data" / "crt"))))
+    # Skip a layer whose NATIONAL count is below this — Boat_Lifts has 1 feature and
+    # Flow_Control_Structures has 3, and a toggle that can only ever be empty teaches the
+    # pilot that empty means broken. Judged on the national count, never on the clipped one:
+    # a bridges layer with nothing in this area is the true and useful claim "no bridges
+    # here", and that file gets written.
+    crt_min_features: int = field(default_factory=lambda: _i("NAV_CRT_MIN_FEATURES", 5))
+    # What to do with a service whose licence text forbids reuse. Two of the seven hardcoded
+    # services read "Internal use only" (Towpath_Access_Points_2022, Moorings_All_View)
+    # despite being served publicly. "flag" (default) fetches them — this is one operator's
+    # own safety copy, not a republication — and marks them redistributable=false in every
+    # provenance record. Set "skip" to leave the tree clean enough to publish.
+    crt_restricted: str = field(default_factory=lambda: _s("NAV_CRT_RESTRICTED", "flag"))
+    crt_user_agent: str = field(default_factory=lambda: _s(
+        "NAV_CRT_UA", "NeptuneROV/1.0 (canal survey; offline hazard cache)"))
 
     # --- live track decimation (§7.5) — cap the polyline ---
     max_live_points: int = field(default_factory=lambda: _i("NAV_MAX_POINTS", 4000))

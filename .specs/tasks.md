@@ -7,6 +7,93 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 
 ---
 
+## A map of water nobody had surveyed, drawn as though somebody had
+
+- 🧪 **"There are no hazards here" and "nobody downloaded the hazards for here" were the
+  same blank map, and "the bed is 1.07 m down" was a figure no instrument had ever taken.**
+  A canal is full of things that will stop this vehicle and are invisible from the surface —
+  sluice intakes that pull, stop-plank grooves that eat a tether, culvert mouths, weirs,
+  safety gates — and the console drew none of them, so an unfetched card and a clear channel
+  were one picture. The same trap one layer down: there is no canal bathymetry to download
+  anywhere (i-Boating's UK layer is proprietary UKHO coastal data with no canal soundings,
+  the EA's multibeam is estuarine, LIDAR cannot see through water, and the Trust's own
+  hydrographic surveys are internal), so a depth drawn over the water had to come from
+  somewhere honest or not be drawn at all.
+
+  **What landed.** `api/nav/crt.py` fetches the Canal & River Trust's published hazard
+  layers for one area into `<crt_dir>/<area>/<layer>.geojson`, each with its own
+  `.prov.json` beside it and a `provenance.json` index over the lot. `api/nav/nominal.py`
+  derives the published **guideline draught** per waterway section from geometry already on
+  disk. `api/nav/soundings.py` turns dive journals into measured cells. `api/nav/service.py`
+  serves all three (`/api/areas/{name}/crt`, `…/crt/{layer}`, `…/depth/nominal`,
+  `…/depth/surveyed`) and gates them at pre-dive; `client/js/crt.js` carries them in one table
+  — **33 rows, 7 tier-1 KEEP AWAY / 11 tier-2 operations / 15 tier-3 extras** — where the row
+  *is* the layer: its tier, its mark, its keep-away radius, and a sentence saying what it means
+  **for this vehicle** rather than what it is called. Adding a layer is adding a row there;
+  there is no second place to remember, which is the point.
+
+  **`crt.py` is the only half that touches the network, and it is BOOTSTRAP-ONLY.** It is
+  never imported on the runtime path, and there is **no hostname in it** — every one lives in
+  `nav/config.py`, is reached exactly once by `python -m nav.cli crt-fetch <area>`, and is
+  never resolved canal-side, where a DNS lookup does not fail so much as hang. `nominal.py`
+  and `soundings.py` touch nothing at all: on a bank with no internet they behave identically
+  to the bench. Same two-phase split as `areas.py` and `satellite.py`.
+
+  **THE FETCHED CARD IS PER-AREA, AND NEW WATER MEANS A NEW FETCH — BEFORE YOU GO.** This is
+  the operational fact this whole entry exists to state. There is no internet at the canal, so
+  a card that was not downloaded at home cannot be downloaded at the waterside, and a console
+  with no card draws a map with nothing on it, which is the exact shape of a map of water with
+  nothing in it. It is therefore a **go/no-go readiness item**, not a nicety:
+  `NavService.readiness()` fails the check labelled `CRT hazard layers cached…` when the
+  active area has no card, when any layer's fetch failed, or when a file on the card will not
+  parse — and its detail prints `fetched <date>` so the operator can judge the age themselves.
+  Activating a different area (`activate_area()`) re-points that check at a different
+  directory, so arriving at new water cannot silently inherit the last site's answer.
+
+  **The honesty rules, applied to a download and to a depth.** A layer that fetched cleanly
+  and matched nothing still gets a file with zero features — that is a survey result and worth
+  writing. A layer whose fetch failed part-way gets **no file**, because a truncated page has
+  exactly the shape of "no hazards here"; the serving side then reports it **ABSENT**, and
+  `crt.js` speaks three words where a map would normally have two — **PRESENT**, **ABSENT**
+  ("the Pi looked and that file is not on the disk") and **CANNOT TELL** ("nobody could be
+  asked"). A licence that could not be read is recorded as `null`, never as "OGL v3". Two
+  independent counts guard every fetch, because a silently truncated page is this API's
+  signature failure: `returnCountOnly` for the same bbox before paging, compared with what
+  landed after, plus a national count per layer measured against the live service so a
+  service quietly swapped for one of its own legacy near-duplicates shows as drift.
+
+  **A sounding is a LOWER BOUND, and it says so in six places.** The MS5837 measures the depth
+  of the *sub*; nothing aboard measures the depth of the *bed*. So a sample counts only where
+  the journal shows bottom contact — **descent stopped while the syringe was still taking on
+  water**, which is the one signature that is not neutral buoyancy — and even then the pressure
+  port sits above the keel, the sub may have landed on silt or a sunken trolley, and the datum
+  is the surface of *that day*. Every error has the same sign, so the quantity is named
+  `lower_bound_m`, each cell carries `bound="lower"`, and cells absent from the file are
+  **UNSURVEYED**, which is not shallow and not zero. Cells are longitudinal along the
+  centreline rather than an (x, y) grid, because position error here exceeds the canal's
+  half-width and a raster would draw cross-channel structure the navigation cannot support.
+  `nominal.py` is stamped **NOMINAL** in five places — collection, feature, title, aria-label,
+  `basis` — because it is guidance, not bathymetry, and a guideline draught is a *floor* on the
+  depth: "max draught 1.07 m" means the bed is deeper by a margin nobody publishes. It errs
+  shallow on purpose (a nominal that is too shallow makes an operator cautious) and
+  `shoals_to_banks` is true on every section, because these are mid-channel figures.
+
+  **NO FLOW IS EVER SHOWN.** CRT publish no flow measurement of any kind. So the hazard marks
+  are the honest proxy for *expect current here* and every one of them carries the sentence
+  saying so — a mark implying a measured current at a weir would be inventing the single
+  number this system has no way to take.
+
+  *Verified by running, ROG Ally, 2026-08-07.* api **306/306 in 5 s across 8 suites**
+  (`crt` 24/24, `soundings` 22/22); client **484/484 across 15 suites in 151 s**
+  (`crt-overlay` 50/50), the run exiting 1 on unblessed baselines only — logged in its own row
+  below. Against the live services the same day, `crt-fetch` pulled **26 layers / 721
+  features** for one area — and then died with `UnicodeEncodeError` on the *last* thing it
+  prints, a Trust licence string carrying U+FFFD that cp1252 has no character for: a good
+  download reporting itself as a crash, with an exit code saying the fetch had failed while
+  721 features sat on the card. Fixed once in `nav.cli`'s `main()` (`stream.reconfigure(
+  errors="replace")`) rather than guarded at each print, because every string arriving from
+  off this vehicle can do it.
+
 ## The readings nobody could see
 
 - 🧪 **Twenty facts were leaving the vehicle on every frame and reaching no readout, a
@@ -120,12 +207,16 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
   in this project colour is never the only carrier — the same rule as the gauges.
 
   *Verified by running, on the ROG Ally (RC71L, Ryzen Z1 Extreme, Windows 11, PowerShell
-  5.1), 2026-08-07.* The api suite is green and exits 0. The client suite **exits 1 as this
-  is written**, on one check — `Speed — a null renders as "?" and never as the stale "--"` —
-  which is a real finding in the round landing beside this one and is logged below rather
-  than waited out. Wall time on this machine: **api ≈5 s, client ≈145 s**; that is a
-  measurement of one box on one day, not a contract. Totals are deliberately not written
-  here — run them.
+  5.1), 2026-08-07.* The api suite is green and exits 0. The client suite **exited 1 as this
+  was first written**, on one check — `Speed — a null renders as "?" and never as the stale
+  "--"` — which was a real finding in the round landing beside this one, logged rather than
+  waited out. **That check now passes** (`renderSpeed()` in `client/js/render.js` maps a null
+  `speed_ms`/`speed_src` to `'?'`, with `NO SPEED` beside it and `NO DATUM` for the different
+  failure of having no origin yet); `instrument-cluster` is 76/76 and every check in the
+  client suite passes. The suite still exits 1, for an unrelated reason that is logged in its
+  own row below — unblessed screenshot baselines, which stopped being advisory in the same
+  work. Wall time on this machine: **api ≈5 s, client ≈150 s**; that is a measurement of one
+  box on one day, not a contract. Totals are deliberately not written here — run them.
 
 ---
 
@@ -672,21 +763,49 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 
 ## Open
 
+The first four rows are one **pre-first-dive batch**, grouped at the top and labelled in the
+Item column so the set that must land before water is readable at a glance rather than
+reconstructed from owners. They are not the largest defects on this page; they are the ones
+that stop being fixable afterwards. Three of them write something permanently wrong or
+permanently ambiguous into the first real dive logs, and the fourth is the gate that would
+otherwise certify the estimator against a world where the speed model is exactly right — and
+those first dive logs are the evidence half the rest of this table is waiting on. None is
+fixed, and none is being fixed in the round that logged them, because `api/hardware.py` and
+`api/nav/` are frozen until the loom is on the pins.
+
+**How to read a citation in this table, and why they changed shape.** Every one now names a
+**function** and quotes a **distinctive line of code**, with the line number kept only as a
+hint. That is not decoration. Those six rows were written against a committed HEAD and were
+already pointing at the wrong lines one round later, because the round that followed inserted
+code above them: `client/js/map.js:702` had become `:653`, `client/js/map.js:699` had become
+`:713`, `api/nav/service.py:355` had become `:358`, and `api/nav/cli.py:73` had become `:88` —
+four of six wrong, and every one of them still *resolving* to a real line of code, which is the
+dangerous kind of wrong. A bare line number is a citation with a shelf life measured in
+commits, and a backlog written to survive a hardware bring-up cannot have one. Re-verified
+against the working tree on 2026-08-07 by opening every file; if a number below has moved
+again, grep the quoted line and it will be there.
+
 | | Item | Owner |
 |---|---|---|
+| ⚠️ | **PRE-FIRST-DIVE BATCH (1 of 4) — the drift penalty is nested inside the snap branch.** In **`DeadReckoner.update()`** (`api/nav/deadreckoning.py`, ~line 158), find `if near and near[2] <= settings.snap_max_dist_m:` and read the two lines indented under it: `if snap_off > 8.0:` → `confidence = min(confidence, 0.7)`. Between 8 m and 25 m of raw↔snapped divergence the snap happens *and* confidence is floored at 0.7; past `snap_max_dist_m` (25 m) the magnet lets go and the knock goes with it, because it lives inside the same `if`. So the drift indicator falls silent exactly when the drift is worst, and the score written into the journal carries no drift penalty at all for the ticks that deserve it most. A *missing* 0.7 currently spells "no drift" and "wandered off the mapped water" with one number. `docs/maths.md` §5 and §12 both set the gap out. **Must land before the first real dive** | api |
+| ⚠️ | **PRE-FIRST-DIVE BATCH (2 of 4) — modelled tether payout is journalled without provenance.** Two lines, in two files. **`VehicleSensorSource.read()`** (`api/nav/sensors.py`, ~line 345) accumulates `self._payout += abs(fields["throttle"]) * dt * 1.2` whenever no spool answers, and the line after it picks between them: `payout = spool_m if spool_m > 0.0 else self._payout`. That 1.2 is a deliberate over-estimate, admissible as a *bound* (`docs/maths.md` §4) and never as a measurement. **`DiveLog.add()`** (`api/nav/divelog.py`, ~line 153) then writes `"encoder_m": getattr(raw, "encoder_m", 0.0),` into the journal — under the encoder's own name, unlabelled, with nothing beside it saying which of the two branches produced it. Every log written before the fix is therefore permanently ambiguous about whether its payout was counted or modelled, and no later pass can repair a log that did not record which it was. **Must land before the first real dive** | api |
+| ⚠️ | **PRE-FIRST-DIVE BATCH (3 of 4) — `calibrate.py` lets the model outrank the witness.** In **`report()`** (`api/nav/calibrate.py`, ~line 440), under `print("\n--- SPEED ---")`: `enc, why_enc = encoder_speed(samples)` is tried first, and four lines below it an explicitly supplied `--ground-truth` sits in the `elif ground_truth:` behind it. So on an encoder-less hull the payout column is the 1.2 model of the row above, and the speed LUT is derived from the model's own constant: circular, biased fast, and produced by the one tool in the repo written to refuse rather than guess. A tape measure and a stopwatch that an operator went and used must outrank anything derived. `docs/maths.md` §8 sets out the three witnesses and the encoder's known bias; **the precedence between them is stated nowhere but this row**, which is why it must not be retired without being written into the code. **Must land before the first real dive** | api |
+| ⚠️ | **PRE-FIRST-DIVE BATCH (4 of 4) — the simulator shares its speed table with the estimators.** **`Simulator.__init__`** (`api/nav/sim.py`, ~line 72) accepts `true_lut: SpeedLUT \| None = None` and resolves it ~19 lines later as `self.true_lut = true_lut or DEFAULT_LUT` — the estimators' own table. Grep `Simulator(` across `api/`: **four** construction sites, **none** passes one. `_sim()` in `api/nav/cli.py` (`sim = Simulator()`, ~line 88 — it was `:73` before this round moved it); `SimSensorSource.__init__` and `SimSensorSource.reset()` in `api/nav/sensors.py` (`self._sim = Simulator(hold_at_end=True)`, ~lines 209 and 231); and the A/B gate's own `_fly_journal()` in `api/tests/test_replay.py` (`sim = Simulator(mag_gain_deg=mag_gain_deg)`, ~line 68). So `NAV_FILTER` would be promoted on a world where the speed model is exactly right, with the largest real error term in the system removed from the trial that exists to measure it. A one-argument, test-only fix: the door is cut and nobody has walked through it (`docs/maths.md` §7, §14). Before **NAV_FILTER promotion** | api tests |
+| ⚠️ | **Snapping is invisible on the console.** In **`connectNavWs()`**'s `ws.onmessage` (`client/js/map.js`, ~line 653) the handler opens `if(m.type==='nav'){ MAP.x=m.x_m; MAP.y=m.y_m;` and closes ~63 lines later with `pushTrack(m.x_m,m.y_m,m.depth_m);` — both the dot and the track are the **raw, un-snapped** coordinates. The snapped `lat`/`lon`, the `snapped` flag and `snap_offset_m` all ride the frame — **`NavService.nav_frame()`** builds it as `f = {"type": "nav", **ns.model_dump(),` (`api/nav/service.py`, ~line 358, in a function that starts at ~317) — and not one of them is consumed anywhere in `client/js`. The faint raw dot promised by `raw_lat: float  # un-snapped estimate (rendered faint, §5.7)` (`api/nav/models.py`, ~line 141) does not exist either, so the operator sees neither the correction nor its size, and a snap that is quietly hauling the estimate 20 m sideways looks identical to no snap at all. Parked for the **post-hardware audit** on purpose: what the offset does against real logs is what decides how it should be drawn | client |
+| ⚠️ | **Confidence is never rendered.** Near the end of that same handler: `if(typeof m.confidence==='number') MAP.confidence=m.confidence;` in **`connectNavWs()`**'s `ws.onmessage` (`client/js/map.js`, ~line 713). The check that survives any edit is `grep -rn confidence client/js/` — it returns **exactly two hits, both in `map.js`**: that write, and the `confidence:1` slot in the `MAP` initialiser (~line 42). Zero readers. The number is not lost — **`DiveLog.add()`** writes `"confidence": ns.confidence,` into the journal (`api/nav/divelog.py`, ~line 119) and it reaches `GET /api/nav/state`, so replay can grade a recorded track — but it stops there. Every individual CAUSE has a badge (snagged, gyro-only, no-compass, heading-suspect) and only the composite, the estimator's own account of what the dot it just drew is worth, is invisible. Held back **deliberately until real dive logs show how it behaves**: a score that sits at 0.6 through most of every dive is a badge the operator learns to stop reading | client |
+| ⚠️ | **A hazard card's AGE is printed and compared with nothing.** The pre-dive gate covers *presence* and *readability*: **`NavService.readiness()`** (`api/nav/service.py`) fails the `CRT hazard layers cached…` check when the active area has no card, when any layer's fetch failed, or when a file on it will not parse — so arriving at new water cannot silently produce an empty map. What no code anywhere does is judge the date it then prints: the detail string ends `f"fetched {crt_block.get('fetched')}; "` and nothing compares that with today. `grep -rn "max_age\|age_days\|expiry\|expires" api/nav/crt.py api/nav/nominal.py client/js/crt.js` returns **nothing**, and `nav/config.py` has no interval either — so a card pulled a year ago passes the identical check as one pulled this morning, while the Trust adds stop-plank grooves and takes weirs out of service in between. Deliberately not guessed at now, and that is the whole finding: the right interval is a question about how fast those layers actually change, nobody here has watched them long enough to answer it, and a number invented to fill the gap would be the estimate-dressed-as-measurement this system refuses everywhere else. Needs one season of re-fetches to say | field trial |
 | ⚠️ | **`DPC_WATCHDOG_VIOLATION` — IDENTIFIED: `amdkmdag.sys` (AMD display driver) overruns its ISR.** `Failure.Bucket: 0x133_ISR_amdkmdag!unknown_function`, driver `32.0.23027.3001`. The dashboard no longer adds sustained compositing load, but the defect itself needs an AMD driver update or rollback | hardware |
 | ⚠️ | **USB tether NIC drops off the bus** (`Present: False`), needs a physical replug; suspect the hub/port/power path | hardware |
-| ⚠️ | **The parts are not bought.** The v1 build is specified end-to-end in `docs/hardware.md`, but `RealHardware._gpio_available()` still returns a hardcoded `wired = False`, so `NEPTUNE_HW=auto` lands on the bench simulator and says so. Flipping that flag is the **last** step of the bring-up, after §10's readbacks are proven — not the first | hardware |
+| ⚠️ | **The parts are not bought.** The v1 build is specified end-to-end in `docs/hardware.md`, but `RealHardware._gpio_available()` still returns a hardcoded `wired = False`, so `NEPTUNE_HW=auto` lands on the bench simulator and says so. That flag is now flipped **with the first module on the pins** — §10 step 3, not the last step — because since `bd743ad` a chip that is absent reads as absent, per chip, all the way to the console: every module not yet wired shows `?` and names itself, and each one visibly comes alive as its connector seats. "Flip it last" was correct when an unwired loom presented constants as instrument readings; that failure no longer exists, and the old order now costs a staged build its per-module acceptance test | hardware |
 | ⚠️ | **Every calibration constant is still a placeholder** — `NAV_M_PER_PULSE`, `NAV_M_PER_SPOOL_TICK`, `NEPTUNE_BALLAST_SPAN_STEPS`, `NEPTUNE_SURFACE_PSI`, `NAV_IMU_YAW_OFFSET_DEG`. They exist so the code runs on the bench; each has a procedure in `docs/hardware.md` §8 and each needs water | field trial |
 | ⚠️ | **`NAV_FILTER` promotion is undecided** — `dr` remains the default until `nav.cli replay --filter both` says otherwise on a real dive log. There are no real dive logs | field trial |
 | ⚠️ | **No GNSS on the Ally** — Wi-Fi positioning needs internet, so the field workflow is tap-on-map. A USB GNSS on the Pi feeding `/api/origin` is the real answer | hardware |
 | ⚠️ | **Chrome geolocation policy unverified** — kept as belt-and-braces; nothing depends on it | topside |
 | ⚠️ | **Blind nav zoom/dial size are judgement calls** — `radarMetersPerPixel`, `blindSpanM` and the dial size were tuned by measurement, not by driving | field trial |
 | ⚠️ | **Nav track unexercised in the field** — needs an origin set at a real site and a dive | field trial |
-| ⚠️ | **SPEED still spells cannot-tell as `--`.** `instrument-cluster` fails exactly one check on it: a null `speed_ms` renders as the **stale** dash rather than the `?`, so "the frame is late, wait" and "the paddlewheel is not turning and nothing is measuring speed" read identically on the one gauge the snag warning is built from. Every other reading on the console was converted; this one was written before the rule existed and has been showing a dropped-frame mark about a dead sensor since. *Measured 2026-08-07 on the ROG Ally: client `428/429`, exit 1, this the only failure* | client |
-| ⚠️ | **Visual baselines are unblessed again**, and for the textbook reason: the instrument cluster changed the layout and `client/tests/baseline/*.layout.png` did not move with it. *Measured 2026-08-07:* 12 of the 13 compared suites drift **0.93%–1.31%** against a 0.10% tolerance (`ballast-syringe` worst at 1.31%, 11 598 of 883 116 px), and `instrument-cluster` has no baseline at all. Drift only reports unless `--strict-visual`, so this does **not** show up in the exit code — which is precisely why it is written here: the picture layer is currently telling nobody anything. `--bless` belongs in the commit that changed the UI, after looking at the shots | client tests |
+| ⚠️ | **The client suite exits 1 and not one check fails.** Visual drift stopped being advisory: `run.py`'s verdict is now `if failed or crashed or (drifted and not args.loose_visual): return 1`, and the comment above it says why — the old gate printed `VISUAL DRIFT 1.2%` on twelve suites and exited 0, which is the shape of a check nobody acts on, and the baselines went twelve rounds without being looked at. The sources of honest noise were removed first (map and video hidden for the layout shot, animations frozen, so two identical runs now differ by **zero** pixels), so a drift now means the picture really changed. What it is reporting is three unblessed baselines and one missing one. *Measured by running, ROG Ally, 2026-08-07, Chrome 151.0.7922.76:* **484/484 checks pass across 15 suites in 151 s — and the run exits 1.** `operator-marker` and `status-and-rail` both drift **0.20%** (1753 of 883 116 px, the *identical* count on both, so it is one shared rail change and not two coincidences), `input-dial` **0.10%** (903 px) against a 0.10% tolerance, and the new `crt-overlay` suite has no baseline at all. `--bless` belongs in the commit that changed the UI, after looking at the shots — which is exactly what has not happened yet | client tests |
 | ⚠️ | **`.specs/design.md` §14 still quotes four stale totals** — `295 checks`, `~114 s`, `four suites, 147 checks`, and a `100/103 across 2 of 4` no-deps figure, all of which the runners now contradict. It was outside this round's file ownership, which is the same shape of miss as the unowned `api/nav/sensors.py`: the one document nobody was assigned went on saying what every other document had stopped saying. It should say what `client/tests/README.md` → *Where the numbers live* says, and quote nothing | specs |
-| ⚠️ | **The `/ws/nav` dead stores are still dead.** `range_m`, `payout_m` and `confidence` are written into `MAP.*` every frame and read by nothing, and `snap_offset_m` — which spec §5.7 calls "the drift indicator" — is not even ingested. The inventory in `api/README.md` now names them rather than letting each round rediscover them, but naming a gap is not closing it: `confidence` in particular is the estimator's own account of how much the track it just drew is worth, and it reaches the operator nowhere | client |
+| ⚠️ | **The `/ws/nav` dead stores are still dead.** `range_m` and `payout_m` are written into `MAP.*` every frame and read by nothing — the tether readout on screen is the client's own straight-line arithmetic against the cable length in `CONFIG`, and never touches either server figure. The other two, `confidence` and `snap_offset_m` (spec §5.7's "drift indicator"), now carry their own rows above and are not reasoned about twice. The inventory in `api/README.md` names all four rather than letting each round rediscover them, but naming a gap is not closing it | client |
 | ⚠️ | **Three telemetry fields are shown from somewhere else, so a disagreement is invisible.** `light_green_level` / `light_white_level` (the gauge shows what was *commanded*, so a lamp driver that clamps, fails or comes up at half brightness looks perfect), `signal`, and `link_ms` (the readout is the client's own pong RTT). None is a safety signal; all three are listed in the inventory as suspicious rather than as decided | client |
 
 ---
@@ -715,6 +834,14 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 - **Dive logs can be calibrated** (`api/nav/calibrate.py`): the sample carries the control
   channels, and the analyser derives turn rate, depth and speed — refusing to answer where
   the data cannot support it.
+- **The published hazards are on the card, and the sub surveys its own depth**
+  (`api/nav/crt.py`, `api/nav/nominal.py`, `api/nav/soundings.py`). One of the three needs the
+  internet and is bootstrap-only — `python -m nav.cli crt-fetch <area>`, run before you go,
+  because there is none at the canal. **The card is per-area: new water needs a new fetch**, and
+  the pre-dive readiness check fails without one, since an absent hazard layer is not a clear
+  channel. Depth comes in two inks that are never mixed: NOMINAL (the authority's guideline
+  draught, a floor on the depth, guidance and not bathymetry) and SURVEYED (a lower bound the
+  sub itself established by landing on the bed). Anywhere unsurveyed is drawn as unsurveyed.
 - **A public simulator demo** ships from `client/` on every push (`?sim=1`), with every
   glyph and number carrying a written explanation.
 - **`bootstrap.py`** reports what a machine has and lacks, for both halves of the system —
@@ -727,7 +854,8 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 
 - **Nothing has been on a bench yet.** The v1 vehicle is fully specified (`docs/hardware.md`)
   and the backend is written against it, but not one of those parts has been bought, wired or
-  measured. `_gpio_available()`'s `wired` flag stays `False` until they have been, so
+  measured. `_gpio_available()`'s `wired` flag stays `False` until the first module actually
+  goes on the pins (`docs/hardware.md` §10, step 3), so
   `NEPTUNE_HW=auto` falls back to the bench simulator and flags itself — which is the correct
   behaviour for a vehicle that cannot yet see. Until then a "real" dive has no IMU, no depth
   sensor and no encoder, which is why `calibrate` refuses most numbers and why the operator

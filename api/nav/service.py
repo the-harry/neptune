@@ -7,7 +7,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode as _urlencode
 
@@ -15,6 +17,7 @@ from fastapi import APIRouter, Body, HTTPException, WebSocket, WebSocketDisconne
 from fastapi.responses import JSONResponse, Response
 
 from . import areas as areamod
+from . import nominal as nominalmod
 from . import satellite as satmod
 from .config import settings
 from .divelog import DiveLog
@@ -474,6 +477,65 @@ class NavService:
         add("waterway centreline cached (or snapping off)",
             bool(self.centreline) or not settings.snapping_enabled,
             "centreline loaded" if self.centreline else "snapping disabled")
+        # 2b CRT hazard layers cached for this area (§3 bootstrap → §9 pre-dive)
+        #
+        # WHY THIS IS A GO/NO-GO ITEM AND NOT A NICETY. A canal is full of things
+        # that will stop this vehicle and are invisible from the surface: sluice
+        # intakes that pull, stop-plank grooves that eat a tether, culvert mouths,
+        # weirs, safety gates. All of them are published, none of them is
+        # reachable from the bank, and the console draws whatever is on the card.
+        # An operator who has not fetched them sees a map with no hazards on it,
+        # which is indistinguishable from a map of water with no hazards in it —
+        # and the moment to find that out is before the water, because afterwards
+        # there is no internet to fix it with.
+        #
+        # A DELIBERATE SKIP DOES NOT FAIL THIS. crt.py leaves out layers it judged
+        # empty-by-design or licence-refused, on purpose, and those are decisions.
+        # A layer whose fetch FAILED is different: no file was written (correctly —
+        # a truncated hazard layer reads as an empty canal), so the map is quietly
+        # missing a whole class of obstruction. That fails.
+        #
+        # AND A LAYER THAT IS ON THE CARD AND WILL NOT PARSE FAILS TOO. This check
+        # used to ask the provenance whether any fetch had failed and the filesystem
+        # whether the files existed, and never asked whether a single one of them
+        # could be READ — so the one question that gets asked before a sub goes in the
+        # water was answered by a stat(). A card pulled mid-write, a fetch killed by a
+        # dying hotspot: the file has a size, the check went green, and the console
+        # drew a clear channel. _crt_layers now parses each layer (once per version of
+        # the file — see the cache above it) and reports the three states apart, and
+        # this reads all three.
+        crt_block = _crt_layers(self.active_area or "")
+        failed = crt_block.get("failed") or []
+        corrupt = crt_block.get("unreadable") or []
+        if not self.active_area:
+            hz_ok, hz_why = False, "no area is activated, so no hazard layer can be checked"
+        elif crt_block["status"] != "present":
+            hz_ok, hz_why = False, (crt_block.get("why", "not fetched")
+                                    + " — an absent hazard layer is NOT a clear channel")
+        elif failed or corrupt:
+            # BOTH sentences, when both apply. They send the operator to two different
+            # jobs — one to the internet, one to the card — and a gate that reports
+            # only the first leaves the second to be found in the water.
+            hz_ok = False
+            parts = []
+            if failed:
+                parts.append(f"{len(failed)} layer(s) did not download and no file was "
+                             f"written for them ({', '.join(failed[:4])}) — nothing is "
+                             f"known about those hazards here")
+            if corrupt:
+                parts.append(f"{len(corrupt)} layer(s) are on the card and CANNOT BE READ "
+                             f"({', '.join(corrupt[:4])}) — a half-written hazard layer "
+                             f"draws as an empty canal; delete those files and re-fetch "
+                             f"while there is still internet")
+            hz_why = "; ".join(parts)
+        else:
+            n = len(crt_block.get("layers") or [])
+            hz_ok = True
+            hz_why = (f"{n} layer(s) cached and PARSED (not merely present on disk), "
+                      f"fetched {crt_block.get('fetched')}; "
+                      f"{len(crt_block.get('skipped') or [])} skipped on purpose")
+        add("CRT hazard layers cached AND readable (absent is not 'no hazards', "
+            "and neither is corrupt)", hz_ok, hz_why)
         # 3 origin + accuracy
         add("origin set within accuracy threshold",
             bool(self.origin) and (self.origin.accuracy <= settings.max_origin_accuracy_m if self.origin else False),
@@ -550,6 +612,546 @@ class NavService:
         add("camera pre-flight + video (see camera plane)", True, "run /api/preflight separately")
         passed = all(x.ok for x in items)
         return ReadinessResult(passed=passed, items=items)
+
+
+# ==========================================================================
+# Overlay layers — serving what BOOTSTRAP put on the card, and saying plainly
+# when it put nothing there
+# ==========================================================================
+#
+# THE ONE RULE EVERYTHING BELOW EXISTS FOR. A layer whose file is not on this card
+# must never be answered with an empty FeatureCollection. "No sluices in this
+# area" is a survey result somebody's fetch established; "the sluices never
+# downloaded" is the absence of one — and they are opposite claims about the water
+# the vehicle is about to go into. `features: []` says the first. Only the first
+# is safe to fly on, and a renderer handed it cannot tell which it was given, so
+# it draws clear water either way.
+#
+# So an absent layer comes back as a document that is NOT GeoJSON at all —
+# `type: "AbsentLayer"` — carrying why it is absent, what its absence means in a
+# full sentence, and the command that would fix it. A renderer that hands that to
+# MapLibre gets an error, which is the correct outcome: nothing is drawn and
+# nothing is claimed. THREE states, not two: `unreadable` is its own answer,
+# because a half-written file is not an empty canal either.
+#
+# WHY THIS FILE READS DIRECTORIES AND NEVER HOSTNAMES. Everything served here was
+# downloaded at bootstrap by nav/crt.py, which is the module that owns the network
+# and is not on this path. Canal-side there is no DNS, and a lookup does not fail
+# so much as hang — so the runtime answer to "is the hazard layer here" is a stat
+# call, always, and it is instant whether the answer is yes or no.
+
+_NAME_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,80}$")
+
+# Endpoint URLs quoted back to the client so it does not have to build them, and
+# to the operator so the fix is one copy-paste rather than a hunt through a README.
+_FETCH_CMD = "python -m nav.cli crt-fetch {area}"
+_SOUND_CMD = "python -m nav.cli soundings <dive.jsonl> --area {area}"
+
+
+def _crt_mod():
+    """nav/crt.py, imported lazily and only for its path arithmetic.
+
+    Lazy on purpose. That module's own docstring says it "is never imported by the
+    runtime path", and it is right to: it is the half of this subsystem that talks
+    to the network. Nothing here calls anything in it but `safe_area_name`,
+    `area_dir` and `provenance_path` — the three pure functions its `area_dir`
+    docstring explicitly offers to the serving side — and none of them resolves a
+    hostname. Returning None rather than raising keeps a card with no downloader
+    on it serving everything else.
+    """
+    try:
+        from . import crt
+        return crt
+    except ImportError:      # noqa: BLE001 — a build without the downloader still serves
+        return None
+
+
+def _soundings_mod():
+    """nav/soundings.py, for its store path and its three explanatory constants.
+
+    Also lazy, for a different reason: that module is where the sentences live
+    that say what a sounding IS (a lower bound on bed depth, not a measurement of
+    it) and what an absent cell means. Copying those strings into this file would
+    put the same claim in two places, and the day they drift is the day the map
+    and the store disagree about what the number under the sub means.
+    """
+    try:
+        from . import soundings
+        return soundings
+    except ImportError:      # noqa: BLE001
+        return None
+
+
+def _unsurveyed_sentence(snd) -> str:
+    """What an absent sounding means, taken from the module that owns the claim.
+
+    getattr rather than a direct read: nav/soundings.py is landing in the same
+    round as this file and its constant names are its own to change. A rename must
+    cost a duller sentence, not a 500 from the endpoint an operator checks before
+    a dive. The fallback says the same thing in fewer words and is deliberately
+    short, so it is obvious in a diff which one is being shown.
+    """
+    return getattr(snd, "UNSURVEYED", None) or (
+        "no dive has left bottom evidence here, so the bed is UNSURVEYED. Absent is "
+        "not shallow and it is not zero.")
+
+
+def _surveyed_collection(area: str, store: dict, snd) -> dict:
+    """A sounding store → the FeatureCollection a map can draw.
+
+    EVERY KEY IS READ OUT OF THE STORE RATHER THAN NAMED HERE. The store already
+    carries the name of its own quantity (`quantity`), because the number is
+    meaningless without it — that is nav/soundings.py's rule, and hardcoding
+    `lower_bound_m` in this file would break the day that module renames it and,
+    far worse, would go on serving numbers under a name nothing had checked. The
+    rename has already happened once during this round.
+
+    THE CLAIM TRAVELS WITH THE NUMBER, on every feature and not only on the
+    collection: `bound: "lower"` says the bed is at LEAST this deep, `measured`
+    says a hull was there, `is_survey` says what kind of layer this is. A cell
+    that loses those on the way to a renderer is a depth reading, and it is not
+    one — it is the deepest this vehicle got without grounding.
+    """
+    quantity = store.get("quantity") or "lower_bound_m"
+    cell_m = store.get("cell_length_m")
+    feats = []
+    for cell in store.get("cells") or []:
+        depth = cell.get(quantity)
+        geom = cell.get("geom")
+        if geom and len(geom) >= 2:
+            geometry = {"type": "LineString", "coordinates": geom}
+        elif cell.get("lon") is not None and cell.get("lat") is not None:
+            # A renderer that meets a point draws a cell_m square around it — which
+            # is why cell_m goes on the properties. It is the store's own bin width
+            # and not a guess made here.
+            geometry = {"type": "Point", "coordinates": [cell["lon"], cell["lat"]]}
+        else:
+            continue
+        d = f"{depth:.2f}" if isinstance(depth, (int, float)) else "?"
+        feats.append({
+            "type": "Feature", "geometry": geometry,
+            "properties": {
+                "layer": "depth-surveyed",
+                # `depth_m` is the name every depth renderer on this console looks
+                # for first; the store's own name for the quantity is carried
+                # beside it, unchanged, so nothing has to trust this translation.
+                "depth_m": depth,
+                quantity: depth,
+                "quantity": quantity,
+                "bound": cell.get("bound", "lower"),
+                "measured": True, "nominal": False, "is_survey": True,
+                "cell_m": cell_m,
+                "line": cell.get("line"), "cell": cell.get("cell"),
+                "from_m": cell.get("from_m"), "to_m": cell.get("to_m"),
+                "samples": cell.get("samples"), "contacts": cell.get("contacts"),
+                "dives": cell.get("dives"),
+                "confidence_min": cell.get("confidence_min"),
+                "confidence_mean": cell.get("confidence_mean"),
+                "offset_m_max": cell.get("offset_m_max"),
+                "deepest_from": cell.get("deepest_from"),
+                "title": (f"MEASURED: the bed here is at least {d} m below the surface "
+                          f"of the day. This is a LOWER BOUND, not a depth — it is the "
+                          f"deepest this sub got while the journal showed it resting on "
+                          f"something solid, and the pressure port sits above the keel, "
+                          f"so there may be more water under it. There is no vertical "
+                          f"datum: canal levels move with rain and lock use."),
+                "aria_label": (f"Measured lower bound on bed depth, at least {d} metres, "
+                               f"from {len(cell.get('dives') or [])} dive(s). The bed is "
+                               f"at least this deep and may be deeper."),
+            },
+        })
+    n = len(feats)
+    return {
+        "type": "FeatureCollection",
+        "features": feats,
+        "status": "present",
+        "layer": "depth-surveyed",
+        "area": area,
+        "measured": True, "nominal": False, "is_survey": True,
+        "quantity": quantity,
+        # `cell_m` ON THE WIRE, both here and on every feature above. The store calls
+        # its bin width `cell_length_m` and this collection used to publish that name
+        # at the top level while the features underneath carried `cell_m` — one
+        # document, one quantity, two names, and client/js/crt.js reads the
+        # collection-level one to size a cell it cannot size from a point. It found
+        # nothing there and fell back to a hardcoded 5 m, so a survey binned in tens
+        # drew at half size and the sounded water looked like water somebody had not
+        # coloured in. The store's own name is kept BESIDE it, assigned from the same
+        # local on the next line so the two cannot drift, for the same reason
+        # `quantity` rides beside `depth_m`: nothing downstream has to trust this
+        # file's translation.
+        "cell_m": cell_m,
+        "cell_length_m": cell_m,
+        "schema": store.get("schema"),
+        "updated_at": store.get("updated_at"),
+        "dives": sorted(store.get("dives") or {}),
+        "centreline": store.get("centreline"),
+        # The three sentences that say what this layer means, taken from the module
+        # that owns them rather than restated here. `unsurveyed` is the important
+        # one: it is what a renderer must draw for every cell NOT in this list.
+        "means": getattr(snd, "MEANS", None),
+        "unsurveyed": _unsurveyed_sentence(snd),
+        "datum": getattr(snd, "DATUM", None),
+        "title": (f"{n} surveyed cell(s) for {area}, from "
+                  f"{len(store.get('dives') or {})} dive(s). Each is a LOWER BOUND on "
+                  f"bed depth: the bed is at least this deep and may be deeper. "
+                  f"Anywhere not drawn is UNSURVEYED, which is not shallow and not "
+                  f"zero."),
+        "aria_label": (f"Measured soundings for area {area}: {n} cells, each a lower "
+                       f"bound on the depth of the bed. Anywhere not listed has never "
+                       f"been surveyed by this vehicle."),
+    }
+
+
+def _absent(area: str, layer: str, why: str, means: str, remedy: str) -> dict:
+    """The answer for a layer that is not on this card. Deliberately not GeoJSON."""
+    return {
+        "type": "AbsentLayer",          # NOT "FeatureCollection". See the note above.
+        "status": "absent",
+        "area": area,
+        "layer": layer,
+        "why": why,
+        "means": means,
+        "remedy": remedy,
+        "title": f"{layer}: ABSENT for {area}. {why} {means}",
+        "aria_label": (f"The {layer} layer is absent for area {area}. {why} {means} "
+                       f"This is missing data, not an empty result."),
+    }
+
+
+# What "unreadable" MEANS, in one place. The per-layer document below and the index
+# rows in _crt_layers both have to say it, and a sentence that exists twice is a
+# sentence that will one day disagree with itself about whether a corrupt hazard
+# layer is a missing one.
+_UNREADABLE_MEANS = ("this layer's file is on the card and could not be parsed — almost "
+                     "always a download killed part-way or a card that was pulled while "
+                     "writing. It is NOT an empty layer and it is NOT a missing one: "
+                     "something is there and nothing can be read out of it, so nothing "
+                     "is claimed about this water")
+_UNREADABLE_REMEDY = "delete the file and re-run the fetch while there is still internet"
+
+
+def _unreadable(area: str, layer: str, path, exc: Exception) -> dict:
+    """A file that is there and cannot be parsed. Its own answer, on purpose.
+
+    A truncated download has exactly the shape of "nothing here" and this is the
+    only place that can still tell the difference — the file's existence says a
+    fetch ran, and its failure to parse says the fetch did not finish. Folded into
+    "absent" it would send an operator to re-run a download that already ran;
+    folded into "present" with zero features it would be the lie this whole file
+    is built to refuse.
+    """
+    return {
+        "type": "UnreadableLayer",
+        "status": "unreadable",
+        "area": area,
+        "layer": layer,
+        "file": str(path),
+        "error": str(exc),
+        "means": _UNREADABLE_MEANS,
+        "remedy": _UNREADABLE_REMEDY,
+        "title": (f"{layer}: UNREADABLE for {area}. The file exists and cannot be "
+                  f"parsed, so nothing is claimed about this water."),
+        "aria_label": (f"The {layer} layer for area {area} is present on disk and "
+                       f"cannot be read. No claim is made about this water."),
+    }
+
+
+def _read_json(path: Path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _crt_index(area: str) -> dict | None:
+    """The CRT fetch's own provenance index for an area, or None if it never ran."""
+    crt = _crt_mod()
+    if crt is None:
+        return None
+    name = crt.safe_area_name(area)
+    if not name:
+        return None
+    p = crt.provenance_path(name)
+    if not p.exists():
+        return None
+    try:
+        return _read_json(p)
+    except Exception as exc:  # noqa: BLE001 — a corrupt index is reported, not raised
+        log.warning("CRT provenance for %s could not be read: %s", area, exc)
+        return {"_unreadable": str(exc)}
+
+
+# A skip that was a DECISION and a skip that was a FAILURE are different facts
+# about the water, and nav/crt.py already separates them in its own records. The
+# ones here are decisions: the layer was left off on purpose and the operator has
+# lost nothing. Everything else — "fetch-failed" above all — means a hazard layer
+# that SHOULD be on this card is not, and that is what the readiness check gates
+# on. crt.py writes no file for a partial fetch precisely so it cannot read as
+# empty; this is the other end of that decision.
+_DELIBERATE_SKIPS = frozenset({"licence", "near-empty", "no-geometry"})
+
+
+# WHAT IS ACTUALLY IN A CACHED LAYER FILE — remembered per file, so nobody pays for
+# the answer twice.
+#
+# WHY THIS EXISTS. Everything below used to call a hazard layer "present" because
+# stat() answered, and a stat cannot tell 400 kB of GeoJSON from 400 kB OF a
+# GeoJSON. A download killed part-way leaves a file with a size and no closing
+# brace, and both readers of this block then certified it: the pre-dive gate went
+# green, and the index published status "present" with a feature count copied out of
+# the fetch's own provenance — a number describing a file nobody had opened. The
+# operator's console then drew clear water over a culvert mouth. A layer is PRESENT
+# WHEN IT HAS BEEN READ, not when it has a size.
+#
+# WHAT IS CHEAP ENOUGH TO DO PER REQUEST, because parsing two dozen GeoJSON files
+# (one of them a couple of megabytes) on every readiness poll would be a new problem
+# on a Pi 3B+: the parse happens once per (mtime_ns, size) of each file, and what is
+# kept is the VERDICT — state, error, feature count, byte count. Steady state is one
+# stat() per layer per request, which is one syscall FEWER than the exists()+stat()
+# pair it replaces. The parse is paid the first time a file is seen and again
+# whenever it changes on disk, which is exactly when the answer could have changed.
+# A signature rather than a timer, for the reason nominal_layer gives: a timer has to
+# choose between re-reading files nobody has touched and certifying the card as it
+# was ten minutes ago.
+#
+# THE PARSED DOCUMENT IS DELIBERATELY NOT KEPT. Holding two dozen decoded
+# FeatureCollections would park the whole hazard fetch in this process's RSS for the
+# life of the session, on a board with a gigabyte of it, to answer a yes/no question.
+_layer_cache: dict[str, tuple[tuple, str, str | None, int | None, int | None]] = {}
+
+# A JSON file is not a hazard layer. crt.py writes nothing but FeatureCollections, so
+# anything else under a .geojson name got there by accident — a service error body
+# saved as a layer is the common one, and it parses perfectly and contains no
+# features. Answering "0 features" for it is the empty-canal lie arriving by the one
+# route a JSON parse cannot catch.
+_NOT_A_LAYER = ("the file is valid JSON and is not a GeoJSON FeatureCollection, so "
+                "nothing can be read out of it")
+
+
+def _is_layer_doc(doc) -> bool:
+    return (isinstance(doc, dict) and doc.get("type") == "FeatureCollection"
+            and isinstance(doc.get("features"), list))
+
+
+def _read_layer(path: Path) -> tuple[str, str | None, int | None, int | None]:
+    """(state, error, features, bytes) for one hazard layer file on the card.
+
+    state is "present" | "absent" | "unreadable", and the third one is the entire
+    point: a file that is there and will not parse is neither an empty canal nor a
+    missing download, and the remedies are opposite — re-fetch versus delete-then-
+    fetch. `features` is counted out of the FILE. The fetch's record of how many it
+    wrote is a claim about a file that may no longer be the one on this card.
+    """
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return "absent", None, None, None
+    except OSError as exc:
+        # NOT absent. Something is there and this process cannot look at it — a card
+        # going bad, a permission, a directory half-written. Cannot-tell, and the
+        # difference matters because "you never downloaded this" sends the operator
+        # to the internet and a failing card does not care.
+        return "unreadable", f"{type(exc).__name__}: {exc}", None, None
+    sig = (st.st_mtime_ns, st.st_size)
+    key = str(path)
+    hit = _layer_cache.get(key)
+    if hit is not None and hit[0] == sig:
+        return hit[1], hit[2], hit[3], hit[4]
+    state, err, n = "present", None, None
+    try:
+        doc = _read_json(path)
+        if _is_layer_doc(doc):
+            n = len(doc["features"])
+        else:
+            state, err = "unreadable", _NOT_A_LAYER
+    except Exception as exc:  # noqa: BLE001 — a corrupt layer is an answer, never a 500
+        state, err = "unreadable", f"{type(exc).__name__}: {exc}"
+    if state == "unreadable":
+        # Logged HERE and not at the call site: this runs once per version of the
+        # file, so the operator's log gets one line per corrupt layer rather than one
+        # per readiness poll — and a warning nobody can read is a warning nobody
+        # reads.
+        log.warning("CRT hazard layer %s is on the card and could not be read: %s — it is "
+                    "NOT being served as an empty layer", path, err)
+    _layer_cache[key] = (sig, state, err, n, st.st_size)
+    return state, err, n, st.st_size
+
+
+def _crt_layers(area: str) -> dict:
+    """Everything the CRT fetch did for this area: what landed, and what did not."""
+    crt = _crt_mod()
+    remedy = _FETCH_CMD.format(area=area)
+    if crt is None:
+        return {"status": "absent", "layers": [], "skipped": [], "warnings": [],
+                "why": "api/nav/crt.py is not in this build",
+                "means": ("nothing on this card can have downloaded CRT hazard data, so "
+                          "no claim whatsoever is made about obstructions here"),
+                "remedy": remedy}
+    index = _crt_index(area)
+    if index is None:
+        return {"status": "absent", "layers": [], "skipped": [], "warnings": [],
+                "why": "no CRT fetch has ever run for this area",
+                "means": ("nothing has been downloaded about sluices, weirs, culverts, "
+                          "stop-plank grooves, outfalls or safety gates on this water. "
+                          "That is NOT a clear channel — it is no information at all, "
+                          "and the two look identical on a map that draws an absent "
+                          "layer as an empty one"),
+                "remedy": remedy}
+    if "_unreadable" in index:
+        return {"status": "unreadable", "layers": [], "skipped": [], "warnings": [],
+                "why": f"the fetch's provenance index could not be parsed "
+                       f"({index['_unreadable']})",
+                "means": ("a fetch ran and its own record of what it did is corrupt, so "
+                          "what is on this card cannot be accounted for"),
+                "remedy": remedy}
+
+    # Unreachable today — _crt_index already answered None for an unusable name —
+    # but the fallback that used to sit here was `or area`, which would have handed
+    # an unchecked operator string to a path join. A name that walks out of the data
+    # directory is not a name, and the check is cheaper than the argument.
+    name = crt.safe_area_name(area)
+    if name is None:
+        return {"status": "absent", "layers": [], "skipped": [], "warnings": [],
+                "why": f"{area!r} is not a usable area name",
+                "means": "nothing can be looked up for it",
+                "remedy": remedy}
+    d = crt.area_dir(name)
+    rows, missing, corrupt = [], [], []
+    for rec in index.get("layers") or []:
+        key = rec.get("layer_key")
+        f = d / (rec.get("file") or f"{key}.geojson")
+        # READ, not stat()ed. See _read_layer: "the file has a size" is not a claim
+        # anybody can dive on.
+        state, err, n, size = _read_layer(f)
+        row = {"layer": key, "title": rec.get("title"),
+               # COUNTED OUT OF THE FILE just now — null while it cannot be. The
+               # fetch's own number rides along under its own name instead of
+               # standing in for this one, so the two can be compared rather than
+               # confused: crt.py sets rec["features"] = len(feats) in the same
+               # breath as it writes the file, so the day they differ, the file on
+               # this card is not the file that was downloaded.
+               "features": n,
+               "features_recorded": rec.get("features"),
+               "geometry_type": rec.get("geometry_type"),
+               "attribution": rec.get("attribution"),
+               "licence": rec.get("licence"), "licence_class": rec.get("licence_class"),
+               "redistributable": rec.get("redistributable"),
+               "count_check": rec.get("count_check"), "fetched": rec.get("fetched"),
+               "url": f"/api/areas/{area}/crt/{key}"}
+        if state == "present":
+            row.update(status="present", bytes=size)
+            claimed = rec.get("features")
+            if claimed is not None and n != claimed:
+                row["count_disagrees"] = True
+                row["means"] = (f"this file holds {n} feature(s) and the fetch recorded "
+                                f"writing {claimed}. It has been edited or replaced since "
+                                f"it was downloaded, so what would be drawn here is not "
+                                f"what the Trust served")
+            elif not n:
+                # A layer that fetched cleanly and matched nothing is a RESULT, and it
+                # is the one case where an empty feature list is the honest answer.
+                # Said out loud so a client showing "0" knows which zero it has.
+                row["means"] = ("this layer downloaded cleanly and there is nothing of "
+                                "its kind inside this area. An empty result, not a "
+                                "missing one")
+        elif state == "unreadable":
+            # The third state, and the reason this loop parses at all. The file is on
+            # the card, so the fetch ran and re-running it is not the fix; nothing can
+            # be read out of it, so no claim is made about this water either way.
+            row.update(status="unreadable", bytes=size, error=err,
+                       why="the file is on this card and could not be parsed",
+                       means=_UNREADABLE_MEANS, remedy=_UNREADABLE_REMEDY)
+            corrupt.append(key)
+        else:
+            # The index says it was written and it is not there. Somebody deleted it,
+            # or the card is failing. Either way it is not an empty layer.
+            row.update(status="absent",
+                       why="the fetch recorded writing this layer and the file is gone",
+                       means=("this layer's file has been removed since the fetch. "
+                              "Nothing is known about its hazards here"),
+                       remedy=remedy)
+            missing.append(key)
+        rows.append(row)
+
+    skipped = []
+    for rec in index.get("skipped") or []:
+        kind = rec.get("skipped")
+        deliberate = kind in _DELIBERATE_SKIPS
+        skipped.append({
+            "layer": rec.get("layer_key"), "title": rec.get("title"),
+            "status": "absent", "skipped": kind, "why": rec.get("why"),
+            "deliberate": deliberate,
+            "means": ("left out on purpose — nothing was lost" if deliberate else
+                      "THIS LAYER IS MISSING AND SHOULD NOT BE. The fetch could not "
+                      "complete it and wrote no file rather than a partial one, "
+                      "because a truncated hazard layer reads exactly like an empty "
+                      "canal. Nothing is known about this kind of hazard here"),
+            "remedy": remedy,
+        })
+    failed = [s["layer"] for s in skipped if not s["deliberate"]]
+    return {
+        "status": "present",
+        "fetched": index.get("finished"),
+        "bbox": index.get("bbox"),
+        "clip_rule": index.get("clip_rule"),
+        "attribution": index.get("attribution"),
+        "dir": str(d),
+        "layers": rows,
+        "skipped": skipped,
+        "failed": failed + missing,
+        # KEPT OUT OF `failed` ON PURPOSE. Both are go/no-go, and both are quoted to
+        # the operator, but the sentences attached to them are opposite: `failed`
+        # says "no file was written for this, go and download it", and that sentence
+        # over a corrupt file sends somebody to re-run a fetch that already ran and
+        # will now be refused by the very card that broke it. Absent is "you never
+        # downloaded this"; unreadable is "what you downloaded is not usable".
+        "unreadable": corrupt,
+        "warnings": index.get("warnings") or [],
+    }
+
+
+# The computed NOMINAL layer, cached against the files it is computed FROM.
+#
+# nominal.load() reads every CRT layer in the area's directory to find the one
+# worth hanging depth guidance on — two dozen files on a live fetch, one of them
+# 2 MB — and this is a Pi. Caching it against a signature of those files rather
+# than on a timer means the answer can never be stale: the moment a fetch writes a
+# new layer the directory's mtime moves and the next request rebuilds. A timer
+# would have to choose between rebuilding work nobody asked for and serving a
+# depth layer that describes the card as it was.
+_nominal_cache: dict[str, tuple[tuple, dict | None, str | None]] = {}
+
+
+def _nominal_signature(area: str) -> tuple:
+    def stamp(p: Path):
+        try:
+            st = p.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+    crt = _crt_mod()
+    name = (crt.safe_area_name(area) if crt else None) or area
+    sig = [stamp(settings.areas_dir / f"{area}.geojson")]
+    if crt is not None:
+        d = crt.area_dir(name)
+        sig.append(stamp(d))
+        try:
+            sig.append(tuple(sorted((p.name, stamp(p)) for p in d.glob("*.geojson"))))
+        except OSError:
+            sig.append(None)
+    return tuple(sig)
+
+
+def nominal_layer(area: str) -> tuple[dict | None, str | None]:
+    """(layer, error). Both None-able: None/None is ABSENT, and it is a real answer."""
+    sig = _nominal_signature(area)
+    hit = _nominal_cache.get(area)
+    if hit is not None and hit[0] == sig:
+        return hit[1], hit[2]
+    try:
+        layer, err = nominalmod.load(area), None
+    except ValueError as exc:            # the waterway source is there and corrupt
+        layer, err = None, str(exc)
+    _nominal_cache[area] = (sig, layer, err)
+    return layer, err
 
 
 def _centreline_from_geojson(gj: dict) -> list[tuple[float, float]]:
@@ -788,10 +1390,305 @@ def build_router(svc: NavService) -> APIRouter:
 
     @r.get("/api/areas/{name}/centreline")
     async def area_centreline(name: str):
+        # THIS USED TO RETURN AN EMPTY FeatureCollection FOR A MISSING FILE, which
+        # is the exact failure the rest of this section exists to prevent, sitting
+        # in the oldest endpoint: a client cannot tell "this area has no mapped
+        # waterway" from "the centreline was never downloaded", and one of those is
+        # the reason the snapping is off and the estimator is running raw. The
+        # PRESENT shape is unchanged — it is still the file's own GeoJSON, so
+        # client/js/map.js's walk() keeps working — with `status` added as a
+        # foreign member (RFC 7946 §6.1, ignored by MapLibre) so both answers can
+        # be told apart by one key.
         p = settings.areas_dir / f"{name}.geojson"
         if not p.exists():
-            return {"type": "FeatureCollection", "features": []}
-        return json.loads(p.read_text())
+            return _absent(
+                name, "centreline",
+                why="no waterway centreline has been downloaded for this area",
+                means=("nothing here knows where the channel runs, so the estimator "
+                       "cannot snap to it and the map has no water drawn on it. That "
+                       "is missing data, not a stretch with no canal in it"),
+                remedy="re-create the area (the download fetches the OSM centreline), "
+                       f"or {_FETCH_CMD.format(area=name)}")
+        try:
+            gj = _read_json(p)
+        except Exception as exc:  # noqa: BLE001
+            return _unreadable(name, "centreline", p, exc)
+        gj["status"] = "present"
+        gj["layer"] = "centreline"
+        gj["area"] = name
+        return gj
+
+    # ---- CRT hazard overlays + the two depth layers (this round) --------------
+    #
+    # THE PATHS ARE THE CONSOLE'S, NOT THIS FILE'S PREFERENCE. client/js/crt.js
+    # names them in one object at the top of itself (`/api/areas/{area}/crt`,
+    # `/api/areas/{area}/crt/{layer}`, `/api/areas/{area}/depth/nominal`,
+    # `/api/areas/{area}/depth/surveyed`) and its comment says the index may hand
+    # back its own `path` per layer so the server can move an endpoint without the
+    # client being edited in the same breath — so `url` travels on every row below
+    # and these four names are what the console asks for today.
+    #
+    # THE INDEX IS THE GATE, and it is the reason `layers` is a flat array carrying
+    # the ABSENT rows as well as the present ones. crt.js will not report any layer
+    # absent until the index has answered, because a per-layer 404 also happens on
+    # a Pi with no chart service at all, and "the file is not on the disk" and "I
+    # could not ask anybody" are different claims. So this endpoint answering is
+    # what earns the console the right to say ABSENT — which means it has to say
+    # what is missing, not only what is here.
+
+    @r.get("/api/areas/{name}/crt")
+    async def area_crt_index(name: str):
+        """What overlay data this area has, INCLUDING what it has not.
+
+        A listing of the files present is the easy half and the useless one: the
+        question before a dive is "did the hazard fetch run?", and only a listing
+        that names what is missing can answer it.
+        """
+        if not _NAME_OK.match(name or ""):
+            raise HTTPException(400, "bad area name")
+        crt_block = _crt_layers(name)
+
+        # ONE ARRAY, BOTH ANSWERS. Present layers and absent ones sit in the same
+        # list with a `present` boolean, because the console binds its table to
+        # whatever the wire calls a layer and then needs to know, per layer,
+        # whether to draw it or to say ABSENT. Two arrays would make absence
+        # something a client has to go and look for, and the whole point is that
+        # it arrives unasked.
+        rows = []
+        for row in crt_block.get("layers") or []:
+            rows.append({**row, "present": row.get("status") == "present",
+                         "count": row.get("features")})
+        for row in crt_block.get("skipped") or []:
+            rows.append({**row, "present": False, "count": None,
+                         "url": f"/api/areas/{name}/crt/{row['layer']}"})
+
+        layer, err = nominal_layer(name)
+        if err is not None:
+            nominal_block = {"status": "unreadable", "present": False, "why": err,
+                             "url": f"/api/areas/{name}/depth/nominal"}
+        elif layer is None:
+            nominal_block = {"status": "absent", "present": False,
+                             "url": f"/api/areas/{name}/depth/nominal",
+                             "why": "no waterway geometry is cached for this area",
+                             "means": ("there is nothing to hang published depth "
+                                       "guidance on — not that the water here is "
+                                       "unguided, that nobody has downloaded it"),
+                             "remedy": _FETCH_CMD.format(area=name)}
+        else:
+            nominal_block = {
+                "status": "present", "present": True,
+                "url": f"/api/areas/{name}/depth/nominal",
+                "nominal": True, "measured": False, "is_survey": False,
+                "count": layer["sections"],
+                "sections": layer["sections"],
+                "sections_with_guidance": layer["sections_with_guidance"],
+                "sections_without_guidance": layer["sections_without_guidance"],
+                "built_from": layer["built_from"], "title": layer["title"],
+            }
+
+        snd = _soundings_mod()
+        sp = snd.store_path_for(name) if snd else None
+        surveyed_url = f"/api/areas/{name}/depth/surveyed"
+        if snd is None:
+            sound_block = {"status": "absent", "present": False, "url": surveyed_url,
+                           "why": "api/nav/soundings.py is not in this build",
+                           "means": "nothing on this card can have recorded a sounding"}
+        elif sp is not None and sp.exists():
+            sound_block = {"status": "present", "present": True, "url": surveyed_url,
+                           "file": str(sp), "bytes": sp.stat().st_size,
+                           "measured": True, "nominal": False, "is_survey": True,
+                           "quantity": getattr(snd, "QUANTITY", None),
+                           "means": getattr(snd, "MEANS", None),
+                           "unsurveyed": getattr(snd, "UNSURVEYED", None),
+                           "datum": getattr(snd, "DATUM", None)}
+        else:
+            sound_block = {"status": "absent", "present": False, "url": surveyed_url,
+                           "why": "no dive has contributed a sounding to this area yet",
+                           "means": _unsurveyed_sentence(snd),
+                           "remedy": _SOUND_CMD.format(area=name)}
+
+        cl = settings.areas_dir / f"{name}.geojson"
+        # THE SUMMARY MUST COUNT WHAT IT COULD NOT READ. It used to add up the absent
+        # rows only, so an area whose files were all present-and-corrupt was headlined
+        # "Every hazard layer the fetch produced is here" — a certification issued by
+        # a function that had opened none of them. Unreadable is counted separately
+        # rather than folded in, because the two sentences send an operator to two
+        # different places.
+        n_absent = ((1 if crt_block["status"] != "present" else 0)
+                    + len(crt_block.get("failed") or []))
+        n_corrupt = len(crt_block.get("unreadable") or [])
+        bits = ([f"{n_absent} hazard layer(s) are MISSING"] if n_absent else []) + \
+               ([f"{n_corrupt} are on this card and UNREADABLE"] if n_corrupt else [])
+        summary = (" and ".join(bits) + " — absent is not empty, unreadable is not empty "
+                   "either, and nothing here claims this water is clear."
+                   if bits else
+                   "Every hazard layer the fetch produced is here, and every one of them "
+                   "was read.")
+        aria_summary = (" and ".join(bits) + "; no claim is made about the hazards they "
+                        "would have shown."
+                        if bits else
+                        "All downloaded hazard layers are present and readable.")
+        return {
+            "area": name,
+            "status": crt_block["status"],
+            "fetched": crt_block.get("fetched"),
+            "bbox": crt_block.get("bbox"),
+            "clip_rule": crt_block.get("clip_rule"),
+            "attribution": crt_block.get("attribution"),
+            # Read first by client/js/crt.js — see the note above.
+            "layers": rows,
+            "failed": crt_block.get("failed") or [],
+            # Its own key, beside `failed` and never inside it. A console that shows
+            # these as one list tells the operator to download something they already
+            # have.
+            "unreadable": crt_block.get("unreadable") or [],
+            "warnings": crt_block.get("warnings") or [],
+            "why": crt_block.get("why"),
+            "means": crt_block.get("means"),
+            "remedy": crt_block.get("remedy"),
+            "depth": {"nominal": nominal_block, "surveyed": sound_block},
+            "centreline": {"status": "present" if cl.exists() else "absent",
+                           "present": cl.exists(),
+                           "url": f"/api/areas/{name}/centreline"},
+            "title": f"Overlay data on this card for {name}. {summary}",
+            "aria_label": f"Overlay layers for area {name}. {aria_summary}",
+        }
+
+    @r.get("/api/areas/{name}/crt/{layer}")
+    async def area_crt_layer(name: str, layer: str):
+        """One downloaded CRT layer, or a distinguishable answer about why it is not here."""
+        if not _NAME_OK.match(name or "") or not _NAME_OK.match(layer or ""):
+            raise HTTPException(400, "bad area or layer name")
+        crt = _crt_mod()
+        safe = crt.safe_area_name(name) if crt else None
+        remedy = _FETCH_CMD.format(area=name)
+        if crt is None or safe is None:
+            return _absent(name, layer,
+                           why="no CRT layer directory exists for this area",
+                           means="nothing has been downloaded about hazards here",
+                           remedy=remedy)
+        p = crt.area_dir(safe) / f"{layer}.geojson"
+        if not p.exists():
+            # WHY it is not there, when the fetch's own record can say. A layer that
+            # was skipped on purpose and a layer whose fetch failed part-way are
+            # different facts, and the second is the one worth interrupting somebody
+            # over: crt.py deliberately writes NO file for a partial fetch, so the
+            # only trace it leaves is this record.
+            index = _crt_index(name) or {}
+            for rec in index.get("skipped") or []:
+                if rec.get("layer_key") != layer:
+                    continue
+                deliberate = rec.get("skipped") in _DELIBERATE_SKIPS
+                return _absent(
+                    name, layer,
+                    why=f"the fetch skipped it ({rec.get('skipped')}): {rec.get('why')}",
+                    means=("left out on purpose, and nothing was lost" if deliberate else
+                           "the fetch could not complete this layer and wrote no file "
+                           "rather than a partial one, because a truncated hazard "
+                           "layer is indistinguishable from an empty canal. Nothing "
+                           "is known about this kind of hazard here"),
+                    remedy=remedy)
+            return _absent(
+                name, layer,
+                why=("this area has no layer by that name — "
+                     + ("the fetch has never run here" if not index else
+                        "the fetch ran and produced no such layer")),
+                means="nothing is known about hazards of this kind in this area",
+                remedy=remedy)
+        try:
+            gj = _read_json(p)
+        except Exception as exc:  # noqa: BLE001
+            return _unreadable(name, layer, p, exc)
+        if not _is_layer_doc(gj):
+            # THE SAME LIE, ONE LEVEL DOWN. A file that parses and is not a collection
+            # fell through here with status "present" and a title reading "0
+            # feature(s) … an empty result, the fetch ran cleanly and there is nothing
+            # of this kind here" — over a service error body somebody's fetch saved
+            # under a layer name. The index calls that unreadable (see _read_layer)
+            # and the two must not disagree about the same file.
+            return _unreadable(name, layer, p, ValueError(_NOT_A_LAYER))
+        # Parsed and re-emitted rather than streamed as bytes so the status marker
+        # rides in the body where the client already looks. crt.py has already put
+        # `attribution` and `clip` on the collection; per-file provenance sits
+        # beside it and is folded in here so one request answers "what is this and
+        # where did it come from" — the alternative is a console that draws hazards
+        # it cannot attribute.
+        gj["status"] = "present"
+        gj["layer"] = layer
+        gj["area"] = name
+        prov = p.with_suffix(".prov.json")
+        if prov.exists():
+            try:
+                gj["provenance"] = _read_json(prov)
+            except Exception:  # noqa: BLE001 — the layer still stands without it
+                gj["provenance"] = None
+        n = len(gj.get("features") or [])
+        gj["title"] = (f"{layer} for {name}: {n} feature(s) downloaded from the Canal & "
+                       f"River Trust and clipped to this area."
+                       + (" An empty result — the fetch ran cleanly and there is nothing "
+                          "of this kind here, which is a survey result and not a gap."
+                          if n == 0 else ""))
+        gj["aria_label"] = (f"CRT layer {layer} for area {name}, {n} features. "
+                            f"Downloaded data, not a survey by this vehicle.")
+        return gj
+
+    @r.get("/api/areas/{name}/depth/nominal")
+    async def area_depth_nominal(name: str):
+        """Published depth GUIDANCE over the water. Never a survey, and says so five ways."""
+        if not _NAME_OK.match(name or ""):
+            raise HTTPException(400, "bad area name")
+        layer, err = nominal_layer(name)
+        if err is not None:
+            return _unreadable(name, "depth/nominal",
+                               settings.areas_dir / f"{name}.geojson", ValueError(err))
+        if layer is None:
+            return _absent(
+                name, "depth/nominal",
+                why="no waterway geometry is cached for this area at all",
+                means=("there is nothing to hang published depth guidance on. This is "
+                       "not a stretch of canal with no published depth — it is a "
+                       "stretch nobody has downloaded"),
+                remedy=_FETCH_CMD.format(area=name))
+        return layer
+
+    @r.get("/api/areas/{name}/depth/surveyed")
+    async def area_depth_surveyed(name: str):
+        """The depths this hull has actually stood on, as GeoJSON. LOWER BOUNDS.
+
+        Served beside the nominal layer and never merged into it. One is what the
+        Trust publishes about a class of canal; the other is where this vehicle
+        came to rest. They are drawn separately for the same reason they are stored
+        separately — an estimate must never dress as a measurement, and a
+        measurement must not be diluted by an estimate averaged into it.
+
+        THE STORE IS NOT GeoJSON and this is where it becomes some. That conversion
+        lives here rather than in nav/soundings.py on purpose: the store's shape is
+        an accumulator with a per-dive breakdown inside every cell, which is what
+        makes re-running a dive idempotent, and flattening it for a renderer is a
+        serving concern. What must NOT be lost on the way through is the claim
+        attached to the number, so `bound`, `measured` and the store's own sentence
+        about what an absent cell means ride out with it.
+        """
+        if not _NAME_OK.match(name or ""):
+            raise HTTPException(400, "bad area name")
+        snd = _soundings_mod()
+        if snd is None:
+            return _absent(name, "depth/surveyed",
+                           why="api/nav/soundings.py is not in this build",
+                           means="nothing on this card can have recorded a sounding",
+                           remedy="")
+        p = snd.store_path_for(name)
+        if not p.exists():
+            return _absent(
+                name, "depth/surveyed",
+                why="no dive has contributed a sounding to this area yet",
+                means=_unsurveyed_sentence(snd),
+                remedy=_SOUND_CMD.format(area=name))
+        try:
+            store = _read_json(p)
+        except Exception as exc:  # noqa: BLE001
+            return _unreadable(name, "depth/surveyed", p, exc)
+        return _surveyed_collection(name, store, snd)
 
     @r.delete("/api/areas/{name}")
     async def area_delete(name: str):

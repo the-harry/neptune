@@ -195,6 +195,11 @@ function initMap(){
   const eb=$('map-empty-btn'); if(eb) eb.addEventListener('click', (e)=>{ e.stopPropagation(); if(!MAP.hasArea) openAreaManager(); else openOriginModal(); });
 
   tryInitMapLibre();                 // real basemap when vendored + area active (§3)
+  // CHART LAYERS (crt.js): the CRT hazard/operations/extras overlays and the depth
+  // picture. Guarded like every other optional module here — if crt.js failed to
+  // load, the map must still draw. It is deliberately NOT the other way round: the
+  // hazard marks are worth nothing without the map they sit on.
+  if(typeof crtInit==='function'){ try{ crtInit(); }catch(e){ LOG.warn('chart layers init failed (map unaffected):', e && e.message); } }
   connectNavWs();
   refreshBootstrap();                // areas + origin → empty states + ORIGIN tile
   setInterval(refreshBootstrap, 5000);
@@ -449,6 +454,11 @@ async function refreshBootstrap(){
       }
       MAP.hasArea = areas.some(a=>a.name===MAP.activeArea) || areas.length>0;
       if(MAP.activeArea && MAP._clArea!==MAP.activeArea){ MAP._clArea=MAP.activeArea; loadCentreline(MAP.activeArea); }   // Pi-side overlay if reachable
+      // The chart layers are per-area too, and crtSetArea is a no-op when the name
+      // has not changed — including the null case, so an area being CLEARED resets
+      // every layer to "no area" rather than leaving the last area's hazards drawn
+      // over somewhere else entirely.
+      if(typeof crtSetArea==='function') crtSetArea(MAP.activeArea);
     }
   }catch(e){ MAP.hasArea=false; }
   try{
@@ -537,6 +547,10 @@ function updateEmptyState(){
       ? 'No navigation: the vehicle reports no sensors fitted, so the marker holds position'
       : 'No navigation data from the vehicle — the marker holds position';
   }
+  // CHART LAYERS THAT ARE NOT THERE. Same decision, same place: the badge's wording
+  // depends on how much room the current view has, exactly as NO NAV's does, and
+  // this function is already called on every transition that changes that.
+  if(typeof crtRenderBadge==='function') crtRenderBadge();
 }
 
 /* HOW MUCH THE MAP'S HEADING IS WORTH (§5.6).
@@ -1027,10 +1041,25 @@ function pressureColor(psi){
 function drawDepthLegend(ctx,w,h,dpr){
   if(!(MAP.expanded || MAP.blind) || !MAP.showTrack) return;
   const n=DEPTH_RAMP.length, bh=Math.max(5, Math.round(7*dpr)), bw=Math.round(11*dpr);
-  const x=Math.round(w-bw-58*dpr), y0=Math.round(h/2-(n*bh)/2);
+  // CLEAR OF THE RIGHT-HAND FURNITURE, which it was not. The key was placed 58 px in
+  // from the canvas edge — but the canvas is the whole viewport in both views that
+  // draw this, and the control rail (84 px, fixed) plus the map tool column (34 px at
+  // right:94px) sit on top of it. The whole legend was therefore painted UNDERNEATH
+  // them: the word DEPTH, half the ramp and both labels were behind the ballast
+  // slider. It survived because a key you cannot read looks like a key you have not
+  // looked at. 136 px clears the rail, the gap and the tool column together.
+  const gutter = 136*dpr;
+  const n2 = 58*dpr + gutter;
+  const x=Math.round(w-bw-n2), y0=Math.round(h/2-(n*bh)/2);
+  // Room for the second half of the key: the colour says HOW DEEP, and the two
+  // swatches underneath say how much the number behind the colour is worth
+  // (crt.js crtDrawDepthKey). They are drawn only when there is a depth overlay to
+  // explain, so the box does not grow on a console that never had one.
+  const keyed = (typeof crtDrawDepthKey==='function') && (typeof crtEntry==='function')
+             && (typeof crtIsOn==='function') && (crtIsOn('depth_nominal') || crtIsOn('depth_surveyed'));
   ctx.save(); ctx.setTransform(1,0,0,1,0,0);
   ctx.fillStyle='rgba(12,1,24,.62)';
-  ctx.fillRect(x-6*dpr, y0-16*dpr, bw+52*dpr, n*bh+30*dpr);
+  ctx.fillRect(x-6*dpr, y0-16*dpr, bw+52*dpr, n*bh+30*dpr+(keyed?31*dpr:0));
   for(let i=0;i<n;i++){ ctx.fillStyle=DEPTH_RAMP[i]; ctx.fillRect(x, y0+i*bh, bw, bh); }
   ctx.strokeStyle='rgba(255,255,255,.25)'; ctx.lineWidth=1;
   ctx.strokeRect(x+.5, y0+.5, bw-1, n*bh-1);
@@ -1041,6 +1070,7 @@ function drawDepthLegend(ctx,w,h,dpr){
   ctx.fillText('0 m', x+bw+5*dpr, y0+bh/2);
   // "+" because the deepest band is a CLAMP: everything past maxDepthColorM lands in it.
   ctx.fillText((CONFIG.map.maxDepthColorM||6)+'+ m', x+bw+5*dpr, y0+n*bh-bh/2);
+  if(keyed){ try{ crtDrawDepthKey(ctx, x, y0+n*bh+8*dpr, bw, dpr); }catch(e){/* the key is not worth the map */} }
   ctx.restore();
 }
 
@@ -1073,7 +1103,17 @@ function drawCanvas(target){
   const headingUp = !MAP.expanded && MAP.headingUp;
   const rot = headingUp ? -MAP.hdg*Math.PI/180 : 0;
   const center = (MAP.viewLat!=null)? { lat:MAP.viewLat, lon:MAP.viewLon } : null;
-  const prov = _provider(MAP.activeArea);                  // offline tiles when an area is active, else online
+  // THE CONFIGURED PROVIDER, WHICHEVER AREA IS ACTIVE. This said "offline tiles when
+  // an area is active, else online", and _provider() does no such thing: it ignores
+  // the argument and hands back CONFIG.map.tileProvider every time (tiles.js). That
+  // is not a bug, it is how the offline archive actually works — SAVE OFFLINE warms
+  // the service worker's tile cache with the SAME Esri URLs this provider builds
+  // (store.js tileUrlsForBBox), and sw.js answers them cache-first, so a downloaded
+  // area draws with the Pi and the internet both gone without the URL changing. The
+  // `offline` entry in CONFIG.map.tileProviders is the other route — tiles served by
+  // the Pi itself — and it is reached by setting tileProvider, never by having an
+  // area. The area is still passed because _tileUrl fills {area} into that template.
+  const prov = _provider(MAP.activeArea);
   const haveProj = !!center && !!prov.url;                 // satellite projection available this frame
 
   // 1) satellite imagery (§3)
@@ -1105,8 +1145,26 @@ function drawCanvas(target){
     ctx.stroke(); ctx.restore();
   }
 
+  // 3.5) DEPTH — nominal underneath everything, surveyed cells on top of it. It goes
+  // here, below the grid lines and the centreline, because it is a WASH over the
+  // water rather than a mark on it: laid over the vectors it would bury the very
+  // things it is supposed to give context to. Nominal is hatched and surveyed is
+  // solid (crt.js), which is this console's usual measured-versus-published
+  // distinction wearing texture instead of a tag.
+  if(haveProj && typeof crtDrawDepth==='function'){
+    try{ crtDrawDepth(ctx,dpr); }catch(e){ LOG.warn('depth overlay:', e && e.message); }
+  }
+
   // 4) waterway centreline over imagery (§3.5) — the snapping target + channel outline
   if(haveProj && MAP.centreline) drawCentreline(ctx,dpr);
+
+  // 4.5) CHART LAYERS — extras, then operations, then the hazard keep-away marks on
+  // top, so a mooring glyph can never be drawn over a lock. Its own error boundary:
+  // a bad feature in one layer must not take the sub marker and the tether ring down
+  // with it, because those are what the operator is flying on.
+  if(haveProj && typeof crtDraw==='function'){
+    try{ crtDraw(ctx,dpr); }catch(e){ LOG.warn('chart layers:', e && e.message); }
+  }
 
   // 5) origin marker + dive track + sub marker — only with an origin (§6)
   if(MAP.hasOrigin){
@@ -1299,10 +1357,24 @@ function drawSelectionRect(ctx,dpr){
   ctx.strokeStyle=C.shallow; ctx.lineWidth=2*dpr; ctx.setLineDash([9*dpr,6*dpr]);
   ctx.strokeRect(px.x0,px.y0,px.x1-px.x0,px.y1-px.y0); ctx.setLineDash([]);
 }
+/* CREDITS. This strip is where credits live on this console, so the Canal & River
+   Trust line goes here beside the imagery one rather than on a new surface — the
+   Open Government Licence asks for the words wherever the data is shown, and the
+   map is where it is shown. Drawn only when CRT marks are actually on screen, which
+   is the same rule the imagery credit already follows (it is drawn when tiles drew).
+   The same sentence is also in the CHART LAYERS panel, where it can be selected and
+   read by a screen reader — a credit painted into a canvas is legible to a human and
+   to nothing else. */
 function drawAttribution(ctx,w,h,dpr){
-  const s=tileAttribution(); if(!s) return;
+  const lines=[];
+  const s=tileAttribution(); if(s) lines.push(s);
+  if(typeof crtAnyPresent==='function' && typeof crtAttribution==='function' && crtAnyPresent())
+    lines.push(crtAttribution());
+  if(!lines.length) return;
   ctx.setTransform(1,0,0,1,0,0); ctx.font=(11*dpr)+'px sans-serif';
-  const tw=ctx.measureText(s).width;
-  ctx.fillStyle='rgba(6,2,16,.5)'; ctx.fillRect(6*dpr,h-20*dpr,tw+12*dpr,16*dpr);
-  ctx.fillStyle='rgba(236,227,255,.8)'; ctx.fillText(s, 12*dpr, h-8*dpr);
+  const lh=16*dpr;
+  let tw=0; for(const t of lines) tw=Math.max(tw, ctx.measureText(t).width);
+  ctx.fillStyle='rgba(6,2,16,.5)'; ctx.fillRect(6*dpr, h-4*dpr-lh*lines.length, tw+12*dpr, lh*lines.length);
+  ctx.fillStyle='rgba(236,227,255,.8)';
+  lines.forEach((t,i)=>ctx.fillText(t, 12*dpr, h-8*dpr-lh*(lines.length-1-i)));
 }

@@ -5,20 +5,35 @@
   python -m nav.cli speed-cal --distance 20 --pairs 0.25:36,0.5:19,0.75:13,1.0:10 --id hullA
   python -m nav.cli calibrate data/dives/dive-*.jsonl [--ground-truth 20]
   python -m nav.cli calibrate --selftest
+  python -m nav.cli crt-fetch gas-street          # CRT hazards — BOOTSTRAP, needs internet
+  python -m nav.cli crt-fetch --list             # what the Trust publishes (needs internet)
+  python -m nav.cli soundings data/dives/dive-*.jsonl [--area gas-street] [--dry-run]
+  python -m nav.cli soundings --selftest
   python -m nav.cli mag-cal   [--base http://127.0.0.1:8000]   # guide IMU calibration
   python -m nav.cli state     [--base ...]
   python -m nav.cli readiness [--base ...]
+
+WHICH OF THESE NEED THE INTERNET (§3, the two-phase rule). Exactly one:
+`crt-fetch`, which is a BOOTSTRAP-time command and says so before it does
+anything. Everything else — including `soundings`, which reads a journal off the
+card and writes to a store on the same card — runs unchanged in the isolated
+canal-side segment, where there is no WAN and no hostname resolution.
 """
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import math
+import socket
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
+from . import nominal as nominalmod
 from .calibrate import read_dive
 from .config import settings
 from .divelog import DiveLog
@@ -655,6 +670,318 @@ def _replay(args) -> int:
     return 0
 
 
+# ===========================================================================
+# crt-fetch and soundings (§3) — filling an area's overlays
+# ===========================================================================
+#
+# BOTH ARE DRIVERS, NOT IMPLEMENTATIONS. nav/crt.py does the downloading and
+# nav/soundings.py owns what a sounding is and what qualifies as one; what lives
+# here is the part an operator types, the PREFLIGHT that says whether the command
+# can possibly work, and — for the fetch — a report of what actually changed on
+# disk. Both are imported inside their command rather than at the top of this
+# file, exactly as `calibrate` already is: `python -m nav.cli sim` must not stop
+# working because a module six of these commands never touch is missing from a
+# card.
+#
+# WHAT THE FETCH REPORT IS TAKEN FROM. Not the downloader's return value — the
+# directory. `download_hazards` deliberately does not raise (a Trust server having
+# a bad afternoon must not throw away an area's imagery), so it reports failure by
+# returning, and a driver that printed its own optimism would be the one place in
+# this chain where a layer that never landed looks fetched. The before/after is a
+# listing of the files.
+
+
+def _reachable(url: str, timeout: float = 4.0) -> tuple[bool, str]:
+    """Is there any internet behind this URL, answered inside a fixed deadline.
+
+    THE ISOLATED SEGMENT HAS NO DNS (§3). Not "slow DNS" — no resolver to ask, so
+    a lookup can sit for tens of seconds before anything raises, and a bootstrap
+    command that appears to hang at the water's edge is read as a broken tool
+    rather than as the correct answer to "is there internet here?". Both nav/crt.py
+    and satellite.py say the same thing about that in their own words; this is the
+    only place in the repo that does something about it. The lookup runs on a
+    daemon thread and the deadline is enforced HERE, because a socket timeout
+    bounds the connect and does not bound getaddrinfo.
+
+    A PROBE, NOT A GUARANTEE, and the message says which host was asked. It
+    answers "something accepted a TCP connection there"; the fetch that follows
+    can still fail and reports its own failure when it does. What this buys is the
+    difference between a clean "unavailable — come back before you go isolated"
+    and a wait with no message.
+    """
+    parts = urlsplit(url if "//" in url else "//" + url)
+    host = parts.hostname
+    if not host:
+        return False, f"{url!r} carries no hostname to probe"
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    box: dict = {}
+
+    def probe():
+        try:
+            socket.create_connection((host, port), timeout=timeout).close()
+            box["ok"] = True
+        except Exception as exc:  # noqa: BLE001 — every failure here is one answer
+            box["err"] = exc
+
+    th = threading.Thread(target=probe, daemon=True)
+    th.start()
+    th.join(timeout + 1.0)
+    if th.is_alive():
+        # Daemon, so it cannot hold the interpreter open on the way out. A wedged
+        # resolver is exactly the case this exists for and it must not become a
+        # command that never returns.
+        return False, (f"{host}:{port} did not answer within {timeout:.0f}s and the "
+                       f"lookup is still outstanding — the usual reading is a tether "
+                       f"with no route off it and no DNS server to ask")
+    if box.get("ok"):
+        return True, f"{host}:{port} answered"
+    exc = box.get("err")
+    if isinstance(exc, socket.gaierror):
+        return False, (f"{host} does not resolve ({exc}) — there is no name service on "
+                       f"this network, which is the NORMAL state of the isolated "
+                       f"segment and not a fault")
+    return False, f"{host}:{port} unreachable ({exc})"
+
+
+def _crt_files(name: str) -> dict[str, int]:
+    """The CRT layer files on disk for one area, by name and size. The fetch's
+    before/after is two of these, so what gets printed is what is on the card."""
+    from . import crt
+    out: dict[str, int] = {}
+    d = crt.area_dir(name)
+    if not d.is_dir():
+        return out
+    for p in sorted(d.glob("*.geojson")):
+        try:
+            out[p.name] = p.stat().st_size
+        except OSError:
+            out[p.name] = -1
+    return out
+
+
+def _print_crt_diff(before: dict[str, int], after: dict[str, int]) -> None:
+    keys = sorted(set(before) | set(after))
+    if not keys:
+        print("  (no layer files at all — nothing has ever been fetched for this area)")
+        return
+    for k in keys:
+        b, a = before.get(k), after.get(k)
+        if a is None:
+            print(f"  {k:<44} GONE")
+        elif b is None:
+            print(f"  {k:<44} NEW        {a:>10,} bytes")
+        elif a != b:
+            print(f"  {k:<44} UPDATED    {a:>10,} bytes  (was {b:,})")
+        else:
+            print(f"  {k:<44} unchanged  {a:>10,} bytes")
+
+
+def _crt_fetch(args) -> int:
+    """Download the CRT hazard layers for an area. BOOTSTRAP-time: needs internet."""
+    try:
+        from . import crt
+    except ImportError as exc:      # noqa: F841 — reported, not raised
+        print(f"error: api/nav/crt.py is not in this build ({exc}) — nothing else in "
+              f"the repo can fetch CRT layers", file=sys.stderr)
+        return 2
+
+    print("crt-fetch: the Canal & River Trust hazard layers for an offline area")
+    print("  BOOTSTRAP-time (§3). It needs the internet and there is none in the")
+    print("  isolated canal-side segment, so run it before you go. Sluices, weirs,")
+    print("  stop-plank grooves and outfalls are invisible from the surface.\n")
+
+    # PREFLIGHT — every reason this cannot work, gathered before anything is
+    # tried, so one run tells the whole story. A command that reports the first
+    # blocker, gets fixed, and then reports the second is a command somebody
+    # drives to the canal twice.
+    online, why = _reachable(settings.crt_hub_search_url)
+    print(f"internet : {('available — ' + why) if online else ('UNAVAILABLE — ' + why)}")
+
+    if args.list:
+        if not online:
+            print("\nthe layer catalogue lives on the Trust's servers and cannot be "
+                  "listed from here.", file=sys.stderr)
+            return 2
+        print("\nlayers the Trust currently publishes (key, layer id, national count, "
+              "licence class):")
+        return asyncio.run(crt._main(["--list"]))
+
+    name = crt.safe_area_name(args.area or "")
+    if not name:
+        print(f"error: {args.area!r} is not a usable area name — it has to be plain "
+              f"letters, digits, spaces, dot, dash or underscore, because it becomes a "
+              f"directory name.", file=sys.stderr)
+        return 2
+
+    if args.bbox:
+        try:
+            bbox = [float(v) for v in args.bbox.replace(" ", "").split(",")]
+            if len(bbox) != 4:
+                raise ValueError("needs four numbers")
+        except ValueError as exc:
+            print(f"error: --bbox must be W,S,E,N in degrees ({exc})", file=sys.stderr)
+            return 2
+        bbox_note = "given on the command line"
+    else:
+        bbox = crt.area_bbox(name)
+        bbox_note = f"from {settings.areas_dir / (name + '.json')}"
+
+    print(f"area     : {name}")
+    print(f"store    : {crt.area_dir(name)}")
+    if bbox:
+        print(f"bbox     : {bbox[0]:.4f},{bbox[1]:.4f} .. {bbox[2]:.4f},{bbox[3]:.4f}  "
+              f"({bbox_note})")
+    else:
+        print(f"bbox     : MISSING — {bbox_note} does not exist or carries no bbox. "
+              f"Hazards belong to an area, so download the area first or pass --bbox.")
+
+    before = _crt_files(name)
+    if not online or not bbox:
+        print("\nnothing was fetched. What is on this card is unchanged:")
+        _print_crt_diff(before, before)
+        print("\nAn ABSENT layer is not an empty one. Nothing above claims this water is")
+        print(f"clear — it says nobody has downloaded what is in it. "
+              f"GET /api/areas/{name}/crt says the same thing to the console.")
+        return 2
+
+    async def say(msg: dict) -> None:
+        print("  " + " ".join(f"{k}={v}" for k, v in msg.items() if k != "bbox"),
+              flush=True)
+
+    print("\nfetching (sequential and rate-limited — this is somebody's free quota):")
+    try:
+        res = asyncio.run(crt.download_hazards(name, bbox, progress=say))
+    except Exception as exc:  # noqa: BLE001 — documented not to raise; believe the disk
+        print(f"\nerror: the fetch raised ({_brief(exc)}). Whatever landed before it "
+              f"stopped is listed below.", file=sys.stderr)
+        res = {"ok": False, "error": _brief(exc)}
+
+    after = _crt_files(name)
+    print("\nwhat is on the card now (read off the disk, not off the downloader's "
+          "report):")
+    _print_crt_diff(before, after)
+    if res.get("ok"):
+        print(f"\nlayers   : {res.get('layers')} written, {res.get('features')} features, "
+              f"{res.get('skipped')} skipped")
+    else:
+        print(f"\nfailed   : {res.get('error')}", file=sys.stderr)
+    for w in res.get("warnings") or []:
+        # Every one of these is a claim about what the file is worth — a licence
+        # that refuses reuse, a count that disagrees with the server's own, a
+        # layer that was NOT written. They are printed in full rather than
+        # counted: a warning nobody reads is worth the same as no warning.
+        print(f"  warn   : {w}")
+    print(f"provenance: {crt.provenance_path(name)}")
+    # WHETHER THAT FETCH UPGRADED THE DEPTH GUIDANCE, said out loud. If one of the
+    # layers that just landed publishes a draught per navigation, the NOMINAL layer
+    # stops quoting a figure somebody typed into nominal.py and starts quoting the
+    # Trust; if none does, that is worth knowing too, because it means the
+    # hand-typed table is the best this area will ever have.
+    _src, scan = nominalmod.crt_depth_layer(name)
+    print(f"nominal  : {scan}")
+    print(f"serve it : GET /api/areas/{name}/crt")
+    return 0 if res.get("ok") else 1
+
+
+# --- soundings --------------------------------------------------------------
+# A pass-through, on purpose and by invitation: nav/soundings.py's own docstring
+# specifies this wiring ("main(argv) parses its own argv and returns an exit code,
+# exactly like calibrate.main"), and that module is the one that gets to decide
+# what a sounding is — a depth is only evidence about the BED when the journal
+# shows the sub arriving on something solid, and that rule has no business being
+# reimplemented, or second-guessed, in a command-line front end.
+#
+# The one thing added here is choosing the area when the operator did not, which
+# is the question they cannot answer at the bank: an area on the card has a name
+# somebody typed weeks ago, and the dive knows where it started.
+
+
+def _area_for_journal(journal: Path) -> tuple[list[str], list[str], str]:
+    """Which known areas' bounding boxes contain this dive's launch point.
+
+    Ambiguity is refused by the caller rather than resolved. Two overlapping areas
+    mean the soundings could go into the wrong store, and a sounding filed against
+    the wrong stretch of canal is worse than no sounding: it is a measurement of
+    somewhere else, in the file that will one day be the only record of this bed.
+    """
+    try:
+        header, _rows = read_dive(journal)
+    except Exception as exc:  # noqa: BLE001
+        return [], [], f"the journal header could not be read ({_brief(exc)})"
+    o = (header or {}).get("origin") or {}
+    try:
+        lat, lon = float(o["lat"]), float(o["lon"])
+    except (KeyError, TypeError, ValueError):
+        return [], [], "this journal's header carries no launch point"
+    inside, names = [], []
+    for p in sorted(settings.areas_dir.glob("*.json")):
+        names.append(p.stem)
+        try:
+            bb = json.loads(p.read_text(encoding="utf-8")).get("bbox")
+        except Exception:  # noqa: BLE001
+            continue
+        if bb and len(bb) == 4 and bb[0] <= lon <= bb[2] and bb[1] <= lat <= bb[3]:
+            inside.append(p.stem)
+    return inside, names, f"launch point {lat:.5f}, {lon:.5f}"
+
+
+def _soundings(args) -> int:
+    """Dive journal -> the area's sounding store. Offline: no internet is involved."""
+    try:
+        from .soundings import main as _snd, store_path_for
+    except ImportError as exc:
+        print(f"error: api/nav/soundings.py is not in this build ({exc})",
+              file=sys.stderr)
+        return 2
+
+    if args.selftest:
+        return _snd(["--selftest"])
+    if not args.dive:
+        print("error: give a dive .jsonl journal, or --selftest", file=sys.stderr)
+        return 2
+
+    area = args.area
+    if not area and not args.centreline:
+        inside, names, how = _area_for_journal(Path(args.dive))
+        if len(inside) == 1:
+            area = inside[0]
+            print(f"area     : {area}  (chosen: this dive's {how} is inside its bbox "
+                  f"and no other area's)")
+        elif not inside:
+            print(f"error: no area on this card has a bounding box containing this "
+                  f"dive's {how}. Pass --area <name> or --centreline <file>.",
+                  file=sys.stderr)
+            print(f"  known : {', '.join(names) if names else '(no areas on this card)'}",
+                  file=sys.stderr)
+            return 2
+        else:
+            print(f"error: this dive's {how} falls inside {len(inside)} areas "
+                  f"({', '.join(inside)}), so the store cannot be chosen for you. "
+                  f"Pass --area.", file=sys.stderr)
+            return 2
+
+    argv2 = [args.dive]
+    if area:
+        argv2 += ["--area", area]
+    if args.centreline:
+        argv2 += ["--centreline", args.centreline]
+    if args.store:
+        argv2 += ["--store", args.store]
+    if args.cell_m is not None:
+        argv2 += ["--cell-m", str(args.cell_m)]
+    if args.dry_run:
+        argv2.append("--dry-run")
+    if args.json:
+        argv2.append("--json")
+    rc = _snd(argv2)
+    # Not printed under --json: that output is somebody's stdin, and a friendly
+    # trailer on the end of a JSON document is a parse error with a helpful tone.
+    if not args.json and rc == 0 and area and not args.store:
+        print(f"store    : {store_path_for(area)}")
+        print(f"serve it : GET /api/areas/{area}/depth/surveyed")
+    return rc
+
+
 def _speed_cal(args) -> int:
     # pairs "throttle:seconds" over a measured distance → speed = distance/seconds
     pts = [(0.0, 0.0)]
@@ -707,6 +1034,20 @@ def _get(args, path) -> int:
 
 
 def main(argv=None) -> int:
+    # A CONSOLE THAT CANNOT SPELL A CHARACTER MUST NOT KILL THE COMMAND. Measured
+    # on the ROG Ally, 2026-08-07: `crt-fetch` downloaded all 26 CRT layers for an
+    # area, wrote them, and then died with UnicodeEncodeError on the LAST thing it
+    # prints — a Trust licence string carrying U+FFFD, which cp1252 has no
+    # character for. A good fetch reported itself as a crash, and the exit code
+    # said the download had failed when 721 features were sitting on the card.
+    # Every string that arrives from off this vehicle (licence text, service
+    # names, exception messages) can do this, so it is fixed once here rather than
+    # guarded at each print. 'replace' loses a glyph; strict loses the run.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:  # noqa: BLE001 — not a TextIOWrapper (a pipe under test, say)
+            pass
     p = argparse.ArgumentParser(prog="nav.cli")
     sub = p.add_subparsers(dest="cmd", required=True)
     sm = sub.add_parser("sim", help="fly the scripted path and write a replayable dive")
@@ -724,6 +1065,33 @@ def main(argv=None) -> int:
     sc.add_argument("--distance", type=float, required=True, help="measured run length in metres")
     sc.add_argument("--pairs", required=True, help="throttle:seconds,throttle:seconds,…")
     sc.add_argument("--id", default="default")
+    cf = sub.add_parser("crt-fetch",
+                        help="download the CRT hazard layers for an area "
+                             "(BOOTSTRAP-time: needs internet)")
+    cf.add_argument("area", nargs="?", help="an area already on this card (see /api/areas)")
+    cf.add_argument("--bbox", default=None,
+                    help="W,S,E,N in degrees, overriding the area's own bbox")
+    cf.add_argument("--list", action="store_true",
+                    help="list the layers the Trust publishes and fetch nothing")
+    so = sub.add_parser("soundings",
+                        help="extract bed soundings from a dive journal into an "
+                             "area's sounding store (offline)")
+    so.add_argument("dive", nargs="?", help="path to a dive .jsonl journal")
+    so.add_argument("--area", default=None,
+                    help="which area's store and centreline (default: the area whose "
+                         "bbox contains the dive's launch point; refused if ambiguous)")
+    so.add_argument("--centreline", default=None,
+                    help="explicit centreline GeoJSON, overriding --area")
+    so.add_argument("--store", default=None,
+                    help="sounding store to accumulate into "
+                         "(default: data/soundings/<area>.json)")
+    so.add_argument("--cell-m", type=float, default=None,
+                    help="cell length along the channel axis, 5-10 m")
+    so.add_argument("--dry-run", action="store_true",
+                    help="report what would be stored and write nothing")
+    so.add_argument("--json", action="store_true", help="machine-readable output")
+    so.add_argument("--selftest", action="store_true",
+                    help="check the sounding maths and its refusals")
     for name in ("mag-cal", "state", "readiness"):
         sp = sub.add_parser(name)
         sp.add_argument("--base", default="http://127.0.0.1:8000")
@@ -740,6 +1108,8 @@ def main(argv=None) -> int:
             if args.ground_truth is not None: argv2 += ["--ground-truth", str(args.ground_truth)]
         return _cal(argv2)
     if args.cmd == "speed-cal":  return _speed_cal(args)
+    if args.cmd == "crt-fetch":  return _crt_fetch(args)
+    if args.cmd == "soundings":  return _soundings(args)
     if args.cmd == "mag-cal":    return _mag_cal(args)
     if args.cmd == "state":      return _get(args, "/api/nav/state")
     if args.cmd == "readiness":  return _get(args, "/api/readiness")

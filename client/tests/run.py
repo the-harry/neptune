@@ -78,11 +78,18 @@ BASELINE = HERE / "baseline"      # what it is supposed to look like (committed)
 SHOT_TOLERANCE = 0.001   # measured floor is 0.000-0.016%; this is ~6x it
 VERBOSE_SHOTS = False
 
-# The one suite whose picture is ABOUT the map. Satellite tiles arrive from the network
-# and the vehicle is moving underneath them, so its portrait is RECORDED and never
-# compared - a check that cannot be stable should not pretend to be. Every other suite
-# is photographed with the map hidden, which is what makes them comparable at all.
-NO_COMPARE = {"map-zoom-and-rov"}
+# The suites whose picture is ABOUT the map. Satellite tiles arrive from the network and
+# the vehicle is moving underneath them, so their portraits are RECORDED and never
+# compared - a check that cannot be stable should not pretend to be. Every other suite is
+# photographed with the map hidden, which is what makes them comparable at all.
+#
+# crt-overlay joined this set on evidence, not on suspicion: it expands the map to draw
+# the hazard marks over it, and two back-to-back runs with no code change between them
+# differed by 0.28% - all of it in the middle of the expanded map, none of it in the
+# console furniture. That is six times over a tolerance measured at 0.000-0.016%, so as a
+# gate it would have failed at random forever. Its numeric checks (46 of them) are the
+# real guard on the overlay; the portrait is there to be looked at.
+NO_COMPARE = {"map-zoom-and-rov", "crt-overlay"}
 
 # Throwaway Chrome profiles are named with this prefix so a leaked one can be recognised
 # as ours and swept. On a handheld with a 512 GB eMMC and a suite that opens 13 profiles

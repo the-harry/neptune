@@ -19,11 +19,15 @@ itself uncalibrated"*, and a leak state of `NORMAL` is a **positive claim that t
 dry**. None of those means *unknown* to the person holding the console.
 
 `RealHardware._gpio_available()` returns a hardcoded `wired = False`, so `NEPTUNE_HW=auto`
-falls back to the bench simulator and the dashboard keeps its SIM badge. Flipping that flag
-is the **last** step of the build, after the readbacks are real — not the first. A backend
-reporting `mock: false` while every sensor returns a constant is strictly worse than an
-honest simulation, because the console then presents `0.0 V`, `heading 0`, "at the surface"
-as instrument readings.
+falls back to the bench simulator and the dashboard keeps its SIM badge. Flip that flag when
+the **first** module goes on the pins — §10 step 3 — not when the last one does. A backend
+reporting `mock: false` while every sensor returned a constant would be strictly worse than
+an honest simulation, because the console would present `0.0 V`, `heading 0`, "at the
+surface" as instrument readings; that is the failure the flag was put there to prevent, and
+it is why this page used to say flip it last. Since `bd743ad` it is not the failure you get:
+a chip that is not answering blanks its own gauges and names itself, so an unwired module
+reads as unwired instead of as a comfortable number. §10 explains what that buys a staged
+build, and what it still does not cover.
 
 ---
 
@@ -962,19 +966,102 @@ of the fallback chain, it needs no software at all, and it is why the drop-weigh
 ## 10. Bring-up order
 
 Each step is provable on its own. Doing them out of order is how a fault in one subsystem
-gets attributed to another.
+gets attributed to another. This build is **staged** — modules go on the pins one at a time,
+over several evenings, not all at once on a Saturday — so the order below is also the order
+the console lights up in.
 
-1. Pi boots, I²C enabled, `i2cdetect -y 1` shows `40 4a 76`.
-2. `python bootstrap.py` — Python, the checkout and the hardware libraries all present.
-3. Power tree wired, fuse fitted, **INA219 reading pack voltage on the bench** before any
-   actuator exists. This is the first honest number the vehicle produces.
-4. Thrusters: direction, deadband, and that `safe()` really stops them. Out of the water.
-5. Ballast: current limit, home, span (§8.3), both limit switches proven by triggering them
-   **by hand** and watching motion stop.
-6. Lights: both channels, dim to zero and back.
-7. Leak probes: the dip test (§5.1), both stages, both orders.
-8. Sensors: heading turns the right way, depth reads surface pressure, paddlewheel counts
-   when the wheel is spun by hand, encoder counts both ways.
+### The flag goes on early now, and here is why that changed
+
+`RealHardware._gpio_available()`'s `wired` flag is the single switch that takes the vehicle
+off the bench simulator and onto the loom. **Flip it at step 3, with the first module on the
+pins.** Not at the end.
+
+That is the opposite of what this section said until now, and the reversal is worth reading
+rather than obeying, because the old advice was right when it was written. Before `bd743ad`,
+`RealHardware` answered with constants for everything it could not read. Flip the flag then,
+with three empty I²C sockets, and the vehicle came up reporting `mock: false`, `0.0 V`,
+`heading 0` and "at the surface": the SIM badge went out and the console drew every one of
+those constants as an instrument reading. In that world an early flip was an act of
+dishonesty, and the only safe moment was after every readback had been proven real — so
+"last" was the correct instruction, for the correct reason.
+
+`bd743ad` removed the constants. Every chip now carries a liveness verdict, every readback
+behind it is gated on that verdict, and a chip that has **never** answered is faulted exactly
+like one that answered and stopped (§6.2). A module that is not yet fitted therefore reads as
+not fitted, per chip, all the way to the console: its gauges show `?` in amber with the wavy
+underline, `sensor_faults` names it, and `RealHardware.__init__` says so on the way up —
+
+```
+RealHardware active (GPIO + I2C); not answering yet: <the chips that have not answered>
+```
+
+Which turns the flag from a certificate into an **instrument**. Flipped at step 3, every
+later step gets a free acceptance test that costs nothing to run: seat the connector, and
+watch that module's gauge go from `?` to a number and its name leave `sensor_faults` in the
+same frame. A module that comes alive on screen the moment it is plugged in has proven its
+wiring, its address, its power and its whole path to the operator in one motion. A module
+that does not has said so on the evening you wired it — instead of on the evening you flip a
+flag and meet six faults at once with nothing to bisect.
+
+**Three things the early flip does not do**, all worth knowing before you trust the screen
+mid-build:
+
+- **Actuators have no liveness verdict at all**, and cannot have one: nothing in a GPIO
+  output can tell a wired H-bridge from an empty pin. A not-yet-wired thruster, stepper or
+  lamp accepts every command and reports nothing wrong. Steps 4, 5 and 6 are still proven by
+  watching the hardware move, exactly as before.
+- **A not-yet-wired leak probe reads *dry*.** The pin's own pull-up holds it high and the
+  sampler is running, so `read_leak()` answers `NORMAL` — a positive claim that the hull is
+  dry, made about probes that are not there. `NORMAL` means nothing until step 7's dip test
+  has passed. This is the one reading the early flip makes *less* honest, which is precisely
+  why that dip test is not optional.
+- **Not every gauge has learned to say `?` yet**, so three readouts will lie to a
+  half-built loom rather than blank. The box in §6.2 has two: a dead INA219 nulls the
+  voltage but the readout falls back to `--V` and raises no alert chip, and a `leak_state`
+  of `UNKNOWN` is collapsed to `NORMAL` topside. The third is SPEED, which still renders a
+  null as the **stale** `--` — the dropped-frame mark — rather than `?` (`.specs/tasks.md`
+  → Open). For those three, read `sensor_faults` in the telemetry frame rather than the
+  glyph until they are fixed.
+
+And if the SIM badge does **not** go out when you flip the flag, stop and read the log:
+`RealHardware.__init__` raised, `NEPTUNE_HW=auto` has landed on the bench simulator, and
+everything on the screen is simulated. That badge is the only notice you get. (`NEPTUNE_HW=real`
+refuses to fall back at all, which is the louder version of the same check.)
+
+### The order
+
+1. Pi boots, I²C enabled (`raspi-config` → Interface Options, or `dtparam=i2c_arm=on`), and
+   `i2cdetect -y 1` runs. On a staged build it will list **nothing** at this point, and that
+   is the correct answer — §2.1's three-address check is step 8's acceptance test, not this
+   one. What is being proven here is that the bus exists and the kernel drives it.
+2. `python bootstrap.py` — Python, the checkout and the Pi-only hardware libraries all
+   present. It installs none of them; absence is a finding, not a task for the tool.
+3. **Power tree, INA219, and the flag.** Fuse fitted, shunt high side and first in the chain
+   (§4.4), master switch in, and the **INA219 reading pack voltage on the bench** before any
+   actuator exists. This is the first honest number the vehicle produces, which is why it is
+   the module the flag rides in on: now flip `wired = True` in
+   `RealHardware._gpio_available()` and run `NEPTUNE_HW=real`. *Proven when:* the SIM badge
+   is gone, the boot line names the chips that are not yet fitted, pack voltage tracks a pack
+   you can also read with a multimeter, and **every other sensor gauge shows `?`** — bar the
+   three readouts named above, which have not learned the shape yet. That screen — one real
+   number among a dozen honest blanks — is the picture the rest of the bring-up fills in, one
+   connector at a time.
+4. **Thrusters:** direction, deadband, and that `safe()` really stops them. Out of the water.
+   Proven at the shafts, not on the screen — see the actuator caveat above.
+5. **Ballast:** current limit (§4.2), `ballast_home()`, span (§8.3), and both limit switches
+   proven by triggering them **by hand** and watching motion stop. The level stays `?` until
+   the first successful home, which is the syringe being honest about an open-loop axis
+   rather than a fault.
+6. **Lights:** both channels, dim to zero and back.
+7. **Leak probes:** the dip test (§5.1), both stages, both orders. Only from here on does a
+   `NORMAL` on the console mean anything at all.
+8. **Sensors onto the bus, one connector at a time.** BNO085, then MS5837, then the
+   paddlewheel and the spool encoder. `i2cdetect -y 1` now shows `40 4a 76` — three addresses
+   or the wiring is wrong. Then the readings: heading turns the right way, depth reads
+   surface pressure, the paddlewheel counts when the wheel is spun by hand, the encoder
+   counts **both** ways. Fit them one at a time so that each chip's `?` becoming a number,
+   and its name leaving `sensor_faults` in that same frame, is unambiguous evidence about
+   *that* connector.
 9. **Prove the cannot-tell path, one chip at a time** (§6.2). Out of the water, with the
    console open, pull each I²C chip's connector in turn and confirm three things: only
    *that* chip's gauges go to `?`, `sensor_faults` names it, and no gauge keeps showing the
@@ -983,8 +1070,15 @@ gets attributed to another.
    probes and confirm the frame carries `leak_state: "UNKNOWN"` rather than `NORMAL`.
    This step is not optional and it is not a formality: this exact failure shipped three
    times, because every layer passed its own tests and nobody put a dead sensor in one end
-   and looked at the other.
-10. Only now flip `wired = True` in `RealHardware._gpio_available()`, and run
-    `NEPTUNE_HW=real`. Until then `auto` lands on the bench simulator and says so — which is
-    the correct behaviour for a vehicle that cannot yet see.
+   and looked at the other. A staged bring-up has been running the *positive* half of this
+   test all along — a chip arriving — but that only proves a `?` can become a number. This
+   step is the half that proves a number can become a `?` again, which is the direction that
+   kills dives.
+10. **Nothing is standing in any more.** With the whole loom on, confirm the vehicle is
+    reading rather than modelling: `sensor_faults` empty with every gauge carrying a number,
+    and the payout figure moving when cable is pulled off the drum **by hand** — not only
+    when the props spin. While no spool answers, `api/nav/sensors.py` fabricates payout from
+    throttle × time × 1.2 (an over-estimate: admissible as a *bound*, never as a measurement)
+    and the dive journal writes it under the encoder's own name, so through every stage above
+    that is what the number has been. See the pre-first-dive batch in `.specs/tasks.md`.
 11. Calibrate (§8), in the water, in the order the sections are written.

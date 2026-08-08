@@ -536,6 +536,90 @@ body.map-expanded #map-ctl{display:flex}
   background:rgba(18,4,38,.7);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
   color:var(--primary);font-family:var(--font-sans);font-size:16px;font-weight:700;cursor:pointer;line-height:1}
 .map-btn:hover{border-color:var(--primary)}
+.map-btn svg{margin:0 auto}
+.map-btn.on{border-color:var(--tertiary);color:var(--tertiary)}
+
+/* ---- CHART LAYERS (crt.js) — the CRT overlays, their switches, and their absences.
+   The panel sits to the LEFT of the map tool column (right:94px, 34 px wide) so the
+   two never overlap, and it is bottom-anchored: rows are added by a table that will
+   grow, and a top-anchored list that grows downwards runs into the area-select card.
+   Shown in the expanded map AND in blind nav — blind nav is the driving view, which
+   is precisely when knowing where the culverts are matters most. --------------- */
+.crt-panel{position:absolute;right:136px;bottom:20px;z-index:7;display:none;flex-direction:column;
+  width:330px;max-width:calc(100vw - 190px);max-height:min(70vh,520px);
+  border-radius:.5rem;border:1px solid rgba(180,107,255,.45);background:rgba(16,4,32,.96);
+  box-shadow:0 0 24px rgba(0,0,0,.6);overflow:hidden}
+body.map-expanded #crt-panel.on,
+body.map-blind #crt-panel.on{display:flex}
+.crt-top{display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.08)}
+.crt-title{flex:1;font-family:var(--font-sans);font-size:12px;font-weight:800;letter-spacing:.12em;color:var(--primary)}
+.crt-btn{font-family:var(--font-sans);font-size:10px;font-weight:700;letter-spacing:.06em;padding:4px 8px;
+  border-radius:.3rem;border:1px solid rgba(180,107,255,.4);color:var(--on-surface-variant);
+  background:transparent;cursor:pointer}
+.crt-btn:hover{border-color:var(--primary);color:var(--primary)}
+.crt-list{flex:1;min-height:0;overflow-y:auto;padding:4px 0}
+/* Tier headings carry the tier's colour, because the tier IS the safety decision:
+   orange = keep away, green = operational, dim lilac = incidental. */
+.crt-head{padding:8px 10px 3px;font-family:var(--font-sans);font-size:9px;font-weight:800;
+  letter-spacing:.14em;color:var(--on-surface-variant)}
+.crt-head.t1{color:var(--hazard)}
+.crt-head.t2{color:var(--tertiary)}
+.crt-row{display:flex;align-items:center;gap:8px;padding:4px 10px;min-height:28px}
+.crt-row:hover{background:rgba(180,107,255,.08)}
+.crt-glyph{flex:0 0 18px;height:18px;line-height:0}
+.crt-name{flex:1;font-family:var(--font-sans);font-size:11px;font-weight:700;letter-spacing:.03em;
+  color:var(--on-surface);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The state pill is the honest bit: SHOWN / NONE MAPPED / ABSENT / CANNOT TELL /
+   NOT ASKED are five different facts and they are never allowed to share a colour.
+   ABSENT and CANNOT TELL are the two that must not read as "nothing there", so they
+   are the two that are coloured like a fault. */
+.crt-state{flex:0 0 auto;font-family:var(--font-sans);font-size:9px;font-weight:800;letter-spacing:.06em;
+  padding:2px 6px;border-radius:8px;white-space:nowrap;color:var(--on-surface-variant);
+  border:1px solid rgba(255,255,255,.14)}
+.crt-state.s-present{color:var(--tertiary);border-color:color-mix(in srgb,var(--tertiary) 45%,transparent)}
+.crt-state.s-empty{color:var(--on-surface-variant)}
+.crt-state.s-absent{color:var(--error);border-color:var(--error)}
+.crt-state.s-unavailable{color:var(--hazard);border-color:var(--hazard)}
+.crt-state.s-loading{color:var(--primary)}
+.crt-state.s-off,.crt-state.s-no-area{color:rgba(185,169,214,.65)}
+/* A count with a +N on it is two facts in one pill: what the Pi has saved, and what
+   this sub has measured since. Bordered so the compound reading is visibly compound. */
+.crt-state.live{border-color:var(--tertiary)}
+.crt-toggle{flex:0 0 34px;text-align:center;font-family:var(--font-sans);font-size:9px;font-weight:800;
+  letter-spacing:.06em;padding:3px 0;border-radius:.25rem;border:1px solid var(--outline-variant);
+  color:var(--on-surface-variant);background:transparent;cursor:pointer}
+.crt-toggle.on{border-color:var(--tertiary);color:var(--tertiary);
+  background:color-mix(in srgb,var(--tertiary) 12%,transparent)}
+/* Hazards have no switch. The word sits where the switch would be, so the absence of
+   a control is itself visible rather than looking like a row that failed to render. */
+.crt-locked{flex:0 0 34px;text-align:center;font-family:var(--font-sans);font-size:8px;font-weight:800;
+  letter-spacing:.06em;color:var(--hazard);border:1px dashed color-mix(in srgb,var(--hazard) 60%,transparent);
+  border-radius:.25rem;padding:3px 0}
+.crt-row.absent .crt-name,.crt-row.unavailable .crt-name{color:var(--on-surface-variant)}
+.crt-row.absent .crt-glyph,.crt-row.unavailable .crt-glyph{opacity:.4}
+.crt-credit{padding:7px 10px;border-top:1px solid rgba(255,255,255,.08);
+  font-family:var(--font-sans);font-size:9px;line-height:1.35;color:rgba(185,169,214,.85);
+  -webkit-user-select:text;user-select:text}
+/* Row glyphs: the SAME shapes the canvas draws (octagon / rounded square / dot), so
+   the key and the map are one vocabulary and not two. */
+.crt-g.t1 polygon{fill:var(--hazard);stroke:#0c0118;stroke-width:1.4}
+.crt-g.t1 text{fill:#0c0118}
+.crt-g.t2 rect{fill:rgba(12,1,24,.75);stroke:var(--tertiary);stroke-width:1.4}
+.crt-g.t2 text{fill:var(--tertiary)}
+.crt-g.t3 circle{fill:rgba(12,1,24,.75);stroke:rgba(200,170,255,.75);stroke-width:1.4}
+.crt-g.t3 text{fill:rgba(200,170,255,.9)}
+
+/* CHART DATA MISSING — said on the map, not only inside the panel. Parked one row
+   above the heading-trust badge so the three map badges stack instead of colliding.
+   Tier 1 wears the error colour: a missing hazard layer means the map is not showing
+   hazards at all, which is a different order of problem from a missing mooring list. */
+.crt-absent{position:absolute;left:50%;bottom:48px;transform:translateX(-50%);display:none;z-index:5;
+  padding:2px 8px;border-radius:9px;white-space:nowrap;pointer-events:none;
+  font-family:var(--font-sans);font-size:9px;font-weight:800;letter-spacing:.10em;
+  color:var(--on-surface-variant);background:rgba(12,1,24,.88);border:1px solid var(--outline-variant)}
+.crt-absent.on{display:block}
+.crt-absent.tier1{color:var(--error);border-color:var(--error)}
+body.map-expanded .crt-absent{bottom:auto;top:78px;font-size:12px;padding:4px 12px;letter-spacing:.14em}
 
 /* ---- expanded-map toolbar + navigate-and-select download (§4) ---- */
 #map-search{position:absolute;top:76px;left:16px;z-index:6;display:none;flex-wrap:wrap;gap:6px;width:340px;max-width:60vw}

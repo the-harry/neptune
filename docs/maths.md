@@ -50,10 +50,31 @@ currently on fire and follow the links out.
 So: read the stories. Skip the formal bits with a clear conscience. And if a symbol does
 ambush you, the table below is the whole vocabulary in one place.
 
+## Six places where this document describes something that is not built
+
+Each of the six is set out **once**, in the section it belongs to, with the reasoning that
+makes it interesting. This is not a summary of them and deliberately does not restate one;
+it is an index, and it exists so that this document and the backlog cannot quietly disagree
+about what is still open. All six are parked in the Open table of
+[`.specs/tasks.md`](../.specs/tasks.md) — four of them as one labelled **pre-first-dive
+batch**, because they are the ones that stop being fixable once the vehicle is in water.
+If you fix one, close the row and delete the line here in the same commit.
+
+| What | Where it is explained | Parked as |
+|---|---|---|
+| The payout that bounds the leash is a model on a stock hull, and the journal keeps it under the encoder's own name | [§4](#4-the-tether-clamp--the-leash-is-a-fact), and the footnote in [§14](#14-what-a-number-is-allowed-to-claim) | pre-first-dive batch (2 of 4) — *api* |
+| The drift penalty is nested inside the snap branch | [§5](#5-centreline-snapping--the-magnet-that-is-not-allowed-to-lie), [§12](#12-confidence--the-humility-score) | pre-first-dive batch (1 of 4) — *api* |
+| The calibration tool takes the encoder over the operator's own tape measure | [§8](#8-calibration-forensics--the-tool-that-is-allowed-to-say-no) sets out the three witnesses and the encoder's known bias; the precedence between them is stated only in the parked row | pre-first-dive batch (3 of 4) — *api* |
+| The simulator's true speed table is the estimators' own, so the A/B gate runs in a world where the speed model is exactly right | [§7](#7-the-simulators-dirty-tricks--a-liar-with-a-fixed-seed), [§14](#14-what-a-number-is-allowed-to-claim) | pre-first-dive batch (4 of 4) — *api tests* |
+| The snapped position, and the size of the correction, never reach the screen | [§5](#5-centreline-snapping--the-magnet-that-is-not-allowed-to-lie) | *Snapping is invisible on the console* — client, post-hardware audit |
+| Confidence is computed every tick, logged, and drawn nowhere | [§12](#12-confidence--the-humility-score) | *Confidence is never rendered* — client, after real dive logs |
+
 ## Contents
 
-**Front matter** — [How to read this](#how-to-read-this) · [The symbols, in plain
-words](#the-symbols-in-plain-words)
+**Front matter** — [How to read this](#how-to-read-this) · [Six places where this document
+describes something that is not
+built](#six-places-where-this-document-describes-something-that-is-not-built) · [The symbols,
+in plain words](#the-symbols-in-plain-words)
 
 1. [Flat-earth geometry — the graph paper on the water](#1-flat-earth-geometry--the-graph-paper-on-the-water)
 2. [Dead reckoning — counting strokes with your eyes shut](#2-dead-reckoning--counting-strokes-with-your-eyes-shut)

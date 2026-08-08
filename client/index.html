@@ -211,7 +211,30 @@
       <button id="map-mock-me" class="map-btn" title="PLAN FROM ELSEWHERE - move your own dot somewhere you are not standing, to check whether a spot is reachable. Your dot turns red while you do." aria-label="PLAN FROM ELSEWHERE - move your own dot somewhere you are not standing, to check whether a spot is reachable. Your dot turns red while you do.">&#9873;</button>
       <!-- Hide the traces when the map gets busy. The sub marker always stays. -->
       <button id="map-track-toggle" class="map-btn" title="SHOW OR HIDE the paths already travelled." aria-label="SHOW OR HIDE the paths already travelled."></button>
+      <!-- CHART LAYERS. The hazard marks are always on and have no switch here on
+           purpose; this opens the panel that explains every mark, carries the
+           switches for the ones that DO have them, and reports any layer the Pi
+           does not have — because a missing layer and an empty stretch of canal
+           look identical on a map and mean opposite things. -->
+      <button id="map-crt-toggle" class="map-btn" title="CHART LAYERS - open the list of Canal &amp; River Trust map layers: what every mark on the map means for this sub, which layers are switched on, and which ones this Pi does not have. Hazards (locks, weirs, sluices, culverts, tunnel portals, outfalls) are always drawn and cannot be switched off." aria-label="CHART LAYERS - open the list of Canal &amp; River Trust map layers: what every mark on the map means for this sub, which layers are switched on, and which ones this Pi does not have. Hazards (locks, weirs, sluices, culverts, tunnel portals, outfalls) are always drawn and cannot be switched off."><svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M12 3 21 8l-9 5-9-5z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M4.5 12 12 16.2 19.5 12"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M4.5 15.8 12 20 19.5 15.8"/></svg></button>
       <button id="map-close" class="map-btn" title="CLOSE the full-screen map." aria-label="CLOSE the full-screen map.">&#10005;</button>
+    </div>
+    <!-- CHART LAYERS PANEL (§ tasks 2/3) — built by crt.js from its own layer table,
+         so a layer added there arrives here with its explanation attached and cannot
+         ship as a bare glyph. Three tiers: hazards (always on, no switch), operations
+         (on by default), extras (off, and "off" means NOT ASKED - never "absent").
+         Every row says which of ABSENT, NONE MAPPED and CANNOT TELL applies to it. -->
+    <div id="crt-panel" class="crt-panel">
+      <div class="crt-top">
+        <span id="crt-panel-title" class="crt-title" title="CHART LAYERS - the Canal &amp; River Trust map data drawn over the imagery. Each row says what that kind of mark means FOR THIS SUB, whether it is being drawn, and - just as importantly - whether this Pi actually has the layer at all. A layer that is missing says ABSENT, a layer that is present with nothing in this area says NONE MAPPED, and a layer nobody could be asked about says CANNOT TELL. Those are three different facts and an empty-looking map cannot tell you which one you are looking at." aria-label="CHART LAYERS - the Canal &amp; River Trust map data drawn over the imagery. Each row says what that kind of mark means FOR THIS SUB, whether it is being drawn, and - just as importantly - whether this Pi actually has the layer at all. A layer that is missing says ABSENT, a layer that is present with nothing in this area says NONE MAPPED, and a layer nobody could be asked about says CANNOT TELL. Those are three different facts and an empty-looking map cannot tell you which one you are looking at.">CHART LAYERS</span>
+        <button id="crt-refresh" class="crt-btn" title="ASK THE PI AGAIN for every chart layer. Worth pressing after the tether has been replugged or the Pi has been restarted: layers that said CANNOT TELL are re-requested and will report what they actually find." aria-label="ASK THE PI AGAIN for every chart layer. Worth pressing after the tether has been replugged or the Pi has been restarted: layers that said CANNOT TELL are re-requested and will report what they actually find.">REFRESH</button>
+        <button id="crt-close" class="crt-btn" title="CLOSE this panel. The layers themselves keep being drawn on the map exactly as they are now - closing the list does not switch anything off." aria-label="CLOSE this panel. The layers themselves keep being drawn on the map exactly as they are now - closing the list does not switch anything off.">CLOSE</button>
+      </div>
+      <div id="crt-list" class="crt-list"></div>
+      <!-- CREDITS. The licence asks for these words wherever the data is used, and
+           this console's credits are the map's attribution strip - so they appear
+           there too (map.js drawAttribution) rather than on a new surface. -->
+      <div id="crt-credit" class="crt-credit" title="WHERE THIS DATA COMES FROM - the marks on this map are the Canal &amp; River Trust's own published asset data, used under the Open Government Licence v3.0, which asks that they are credited wherever the data is shown. The same credit is drawn on the map itself beside the imagery credit." aria-label="WHERE THIS DATA COMES FROM - the marks on this map are the Canal &amp; River Trust's own published asset data, used under the Open Government Licence v3.0, which asks that they are credited wherever the data is shown. The same credit is drawn on the map itself beside the imagery credit.">Contains Canal &amp; River Trust data (c) Canal &amp; River Trust, licensed under the Open Government Licence v3.0</div>
     </div>
   </div>
   <!-- DIAL overlay: rings + input vector + FWD/REV + rotating North — drawn OVER the map (collapsed) -->
@@ -242,6 +265,12 @@
        suspect compass rotates the whole picture, not just one number - it has to be
        said here and not only in the top bar. Sits above NO NAV so the two never
        collide. Same words as the HUD flag (MAG? / GYRO), set by updateHeadingFlag. -->
+  <!-- CHART DATA THAT IS NOT THERE, said on the map itself and not only inside a
+       panel nobody opened. A hazard layer missing from the Pi means this map is not
+       showing locks, weirs, sluices, culverts, tunnel portals or outfalls at all -
+       and a stretch with no marks on it then means NO DATA, not "nothing there".
+       Text and explanation are written by crt.js (crtRenderBadge). -->
+  <div id="crt-absent" class="crt-absent"></div>
   <div id="hdg-warning" class="hdg-warning" title="HEADING TRUST ON THE MAP - MAG? means the sub's compass is not calibrated, so this map's rotation and the bearing it is drawn on are both suspect. GYRO means the heading filter is ignoring the compass on purpose while the thrusters swamp it, and is coasting on the spin sensor. NO BEARING means the compass has stopped answering: this picture is still being rotated, by the last angle it reported, so its ring is drawn broken and amber to say so." aria-label="HEADING TRUST ON THE MAP - MAG? means the sub's compass is not calibrated, so this map's rotation and the bearing it is drawn on are both suspect. GYRO means the heading filter is ignoring the compass on purpose while the thrusters swamp it, and is coasting on the spin sensor. NO BEARING means the compass has stopped answering: this picture is still being rotated, by the last angle it reported, so its ring is drawn broken and amber to say so."></div>
 </div>
 <div id="radar-scale" class="radar-scale">10&nbsp;m</div>
@@ -303,6 +332,7 @@
 <script src="js/render.js"></script>
 <script src="js/camera.js"></script>
 <script src="js/tiles.js"></script>
+<script src="js/crt.js"></script>
 <script src="js/map.js"></script>
 <script src="js/navui.js"></script>
 <script src="js/main.js"></script>

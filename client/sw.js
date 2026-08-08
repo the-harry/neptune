@@ -12,14 +12,25 @@
 /* Bump SHELL on every client release. It is the ONLY thing that evicts the old
    app shell — a stale cache silently pins the dashboard to old JS, which makes a
    deployed fix look like it did nothing. */
-const SHELL = "neptune-shell-v50";
+const SHELL = "neptune-shell-v51";
 const TILES = "neptune-tiles";
+/* EVERY <script> AND <link> IN index.html IS IN THIS LIST. There is no build step to
+   derive it from, so it is a hand-kept mirror, and a file that lands in index.html
+   without landing here is missing from an installed PWA launched with no server —
+   the machine does not fail loudly, it just runs without that subsystem.
+
+   js/crt.js shipped in that state: the chart and hazard overlay was loaded by the
+   page and absent from this list, so an offline launch had no CRT layers, no depth
+   overlay and no HAZARD LAYERS ABSENT badge to say so — a map with nothing on it and
+   nothing admitting why, in exactly the situation the offline card exists for.
+
+   Kept in index.html's own load order so the two can be read side by side. */
 const SHELL_ASSETS = [
   "./", "index.html", "origin.html", "manifest.json", "icon.svg", "css/styles.css",
   "js/config.js", "js/core.js", "js/wire.js", "js/store.js", "js/status.js", "js/recorder.js",
-  "js/video.js", "js/net.js", "js/commands.js", "js/input.js", "js/controls.js",
-  "js/render.js", "js/camera.js", "js/tiles.js", "js/map.js", "js/navui.js",
-  "js/logview.js", "js/main.js",
+  "js/logview.js", "js/video.js", "js/net.js", "js/commands.js", "js/input.js",
+  "js/controls.js", "js/render.js", "js/camera.js", "js/tiles.js", "js/crt.js",
+  "js/map.js", "js/navui.js", "js/main.js",
 ];
 
 self.addEventListener("install", (e) => {

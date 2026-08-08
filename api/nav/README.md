@@ -21,9 +21,12 @@ nav/
 ├── divelog.py        # GeoJSON dive log (§8) — raw kept, adjustment applied on output only (§4.5)
 ├── areas.py          # offline area mgmt + pmtiles extract runner (§6.4) — bootstrap-only, graceful offline
 ├── sensors.py        # sensor source: sim (default) | real (BNO085/MS5837/encoder stub)
+├── crt.py            # ⇩ BOOTSTRAP-ONLY: CRT hazard layers → data/crt/<area>/*.geojson
+├── soundings.py      # dive journals → LOWER BOUNDS on bed depth, binned along the centreline
+├── nominal.py        # published draught GUIDANCE per waterway section — never a survey
 ├── service.py        # NavService + APIRouter (origin, dive, areas, readiness, /ws/nav)
 ├── app.py            # standalone app + mount helper
-└── cli.py            # sim runner, speed-cal, magnetometer-cal (§10.5)
+└── cli.py            # sim runner, speed-cal, magnetometer-cal (§10.5), crt-fetch, soundings
 ```
 
 ## Two phases (§3)
