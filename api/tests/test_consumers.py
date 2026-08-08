@@ -807,7 +807,16 @@ class CleanBootTest(unittest.TestCase):
         out = []
         if self.hw_is_mock:
             out.append("neptune.hw")          # no GPIO on a bench: the fallback IS the news
-        if self.camera_kind in ("none", "mock"):
+        # "synthetic" belongs here for exactly the reason the other two do: SyntheticCamera
+        # is the animated bench pattern, chosen by get_camera() only when there is NO real
+        # camera to open. Its two warnings — picamera2 absent, and the WOLFANG CGI not
+        # answering — are the console saying WHY you are looking at a test card, which is
+        # news worth having once. Leaving it off this list failed every bench boot on the
+        # dev machine, where NEPTUNE_CAM=auto plus an installed Pillow lands on synthetic:
+        # a permanently red check, which is the same defect this test exists to prevent,
+        # one level up. A warning that always fires gets read past; so does a test that
+        # always fails.
+        if self.camera_kind in ("none", "mock", "synthetic"):
             out.append("neptune.cam")         # no camera on this network, and it said so
         return tuple(out)
 
