@@ -288,7 +288,28 @@ const HUD_GROUPS = [
    STATE — the single live state object the whole app reads/writes.
    ============================================================================ */
 const state = {
+  // ---- THE VEHICLE: the Pi on the end of the tether ----
+  // Thrusters, ballast, telemetry, the camera plane, the leak probes. An empty host
+  // means NO SUB IS ADDRESSED — the simulator is flying this — and every honesty rule
+  // on the console keys off that. See resolveHost().
   host:'', httpBase:'', wsBase:'',
+  demo:false,                   // ?sim=1 — the SIMULATOR flies the sub. About the VEHICLE
+                                // only: it says nothing about the map (see dataBase).
+  // ---- THE MAP: wherever this console's chart data lives ----
+  // Satellite imagery, the Trust's hazard layers, the canal centreline, depth surveys,
+  // the offline areas. A DIFFERENT BACKEND from the vehicle and resolved separately,
+  // because on this system it is a different machine: the handheld holds the map, the
+  // Pi holds the sub. '' means SAME ORIGIN (fetch relatively) — the normal answer, and
+  // not the same as "nowhere", which is dataFrom:'none'.
+  dataBase:'', dataHost:'', dataFrom:'none',   // none | origin | launcher | override | config | vehicle
+  // WHY there is no map backend, in the words of whoever knows — the launcher says
+  // "no python on this handheld" or "port 8000 is held by <x>", and that sentence is
+  // worth more than any diagnosis this console could invent. '' when there IS one.
+  dataWhy:'',
+  // Resolves once the map backend has been settled (the launcher has been asked, or
+  // there was nobody to ask). Consumers that fetch chart data at boot should await it
+  // rather than racing it — the first answer is a provisional same-origin guess.
+  dataReady:null,
   ws:null, wsStatus:'offline', /* offline | connecting | online */
   linkMs:null, lastPingAt:0,
   reconnectDelay:CONFIG.reconnect.baseMs, reconnectTimer:null,
@@ -826,29 +847,80 @@ function headingFlag(){
 }
 
 /* ============================================================================
-   HOST RESOLUTION — default same origin; override via ?host=IP:PORT (persisted
-   in localStorage). WS base is derived from the same host (ws/wss to match).
+   HOST RESOLUTION — TWO BACKENDS, BECAUSE THERE ARE TWO QUESTIONS
+
+   THE VEHICLE and THE MAP are not the same machine, and on this system they never
+   were:
+
+     THE VEHICLE   the Pi on the end of the tether — thrusters, ballast, telemetry,
+                   the camera plane, the leak probes.   host / httpBase / wsBase,
+                   and `demo` when the simulator is flying instead of a hull.
+     THE MAP       satellite imagery, the Trust's hazard layers, the canal centreline,
+                   depth surveys, the offline areas and the chart index.   dataBase.
+
+   THEY USED TO BE ONE FIELD, AND THAT IS THE FAULT THIS SECTION EXISTS TO NAME.
+   `?sim=1` returned from here immediately with no host at all — "pure sim" — and
+   every chart, area and download endpoint hangs off the same base, so a simulated
+   VEHICLE silently took the MAP down with it. On a handheld that was SERVING THE
+   DASHBOARD ITSELF, and could have answered every one of those requests from its own
+   disk, the chart panel reported "no chart data downloaded". True, useless, and the
+   operator's own machine was holding the data.
+
+   SIMULATED IS A CLAIM ABOUT THE SUB, NOT ABOUT THE WATER. There being no vehicle
+   does not make the canal imaginary. Those layers were downloaded from real services
+   and describe real water; they are exactly as true with nothing on the tether as
+   with a hull on it, and a chart layer must NEVER be marked simulated because the
+   vehicle is. So the two questions are answered separately and neither answer is
+   allowed to decide the other:
+
+     the vehicle may be absent (demo, no host, unplugged) while the map is present
+     the map may be absent (opened from file://) while a real vehicle is flying
+
+   NOTHING HERE CHANGES WHAT THE VEHICLE SIDE MEANS. `state.demo` still means the
+   simulator is flying the sub; `wsBase` still means "there is an address we intend to
+   drive a vehicle at", and its emptiness is still what the SIM badge, the red robot,
+   the mock flagging and commandsBlocked() all read. They go on reading exactly the
+   same thing. The only thing that changed is that the MAP stopped reading it.
    ============================================================================ */
-function resolveHost(){
-  // §1: the backend is SAME ORIGIN by default (served by nginx on the Pi). ?host=IP:PORT is an
-  // explicit override only — it no longer acts as the primary discovery path, and a stale stored
-  // host never shadows same-origin when served.
+
+/* THE MAP'S BASE, for every consumer that wants chart data. Use this rather than
+   reaching for httpBase: httpBase is the SUB, and asking the sub for the map is what
+   left the panel blank. '' is a normal, working answer — it means "fetch relatively,
+   from whoever served this page" — so callers must not test it for truthiness to
+   decide whether a backend exists. That question is hasDataBackend(). */
+function dataUrl(path){ return (state.dataBase||'') + (path||''); }
+
+/* IS THERE ANYWHERE AT ALL TO ASK FOR CHART DATA? Not "did it answer" and not "is a
+   vehicle there" — just whether a request would reach a server. It is false in
+   exactly one situation: the dashboard opened from a file:// path with no data host
+   configured, where a relative fetch cannot reach anything. A console served over
+   http(s) always has somewhere to ask, INCLUDING the ?sim=1 demo, because the thing
+   that served the page is a server. */
+function hasDataBackend(){ return state.dataFrom !== 'none'; }
+
+/* WHERE THE VEHICLE IS, if anywhere. Unchanged in meaning from the day it was
+   written: same origin by default (nginx on the Pi serving this console), ?host=
+   as an explicit override, and a stale stored host never shadows same-origin when
+   served. The only change is that returning early for the demo now abandons the
+   VEHICLE only — the map is resolved after this, from its own evidence. */
+function resolveVehicleHost(params){
   const served = location.protocol==='http:'||location.protocol==='https:';
   let host=null, secureParam=null;
   try{
-    const params=new URLSearchParams(location.search);
     // ?sim=1 — DEMO MODE. There is deliberately no vehicle to look for, so the
     // simulator takes over immediately instead of spending three seconds failing to
     // reach a Pi that was never there. This is what the public demo is served with;
-    // everything on screen is honest about being simulated (red robot, SIM badge).
-    if(params.get('sim')==='1'){
+    // everything the VEHICLE says on screen is honest about being simulated (red
+    // robot, SIM badge). The map is not the vehicle and is not affected.
+    if(params && params.get('sim')==='1'){
       state.demo = true;
-      LOG.state('DEMO MODE (?sim=1) — no vehicle, everything is the simulator');
-      return;                                             // no host, no ws: pure sim
+      LOG.state('DEMO MODE (?sim=1) — the SIMULATOR is flying the sub. The map is a '
+              + 'separate backend and is resolved on its own.');
+      return;                                             // no host, no ws: no vehicle
     }
-    const p=params.get('host');
+    const p=params && params.get('host');
     if(p){ host=p; localStorage.setItem('rov_host', p); } // explicit override wins (and is remembered)
-    secureParam=params.get('secure');                     // ?secure=0 forces plain http/ws (dev against a mock)
+    secureParam=params && params.get('secure');           // ?secure=0 forces plain http/ws (dev against a mock)
   }catch(e){}
   if(!host && served) host=location.host;                  // default: same origin
   if(!host){                                               // disk fallback only: last override / configured
@@ -866,4 +938,167 @@ function resolveHost(){
   state.host = host;
   state.httpBase = host ? (secure?'https':'http')+'://'+host : '';
   state.wsBase   = host ? (secure?'wss':'ws')+'://'+host : '';
+}
+
+/* Normalise "127.0.0.1:8000", "http://127.0.0.1:8000/" or a bare host into one base
+   with no trailing slash. Plain http unless a scheme was spelled out: every map API
+   this console talks to is either loopback on the handheld or the Pi on a sealed
+   tether, and neither has TLS. */
+function _dataBaseFrom(raw){
+  let url = /^https?:\/\//i.test(raw) ? raw : ('http://'+raw);
+  return url.replace(/\/+$/,'');
+}
+/* MIXED CONTENT FAILS SILENTLY AND LOOKS EXACTLY LIKE "not downloaded" — an https
+   page may not fetch plain http, and the browser drops it with nothing on screen but
+   an empty chart panel. Say which of the two is wrong, here, once. */
+function _dataMixedContentCheck(url){
+  if(location.protocol==='https:' && /^http:\/\//i.test(url))
+    LOG.warn('the map data host "'+url+'" is plain http but this page is https — the browser will '
+           + 'block those requests as mixed content, and every chart layer will read as though '
+           + 'nothing had ever been downloaded. Serve the map API over https, or the console over '
+           + 'plain http.');
+}
+
+/* WHERE THE MAP'S DATA IS. ONE ANSWER: THIS HANDHELD.
+
+   The maps are not an accessory to the vehicle, they are how the thing is navigated,
+   and they matter in every mode — flying a real sub, flying the simulator, or sitting
+   on a bench at home planning a run. So they live on the machine that is always
+   present and is by far the most capable one in the system: the handheld. The Pi is a
+   vehicle. It is a 3B+ on the end of a cable, it has a job, and serving charts is not
+   it.
+
+   This used to resolve through five candidates — an override, a config host, the
+   launcher, same-origin, and THE VEHICLE — with a "none" at the bottom. That chain was
+   the bug wearing a design's clothes: it made the map's existence contingent on which
+   backend happened to answer first, so unplugging the sub took the canal away with it,
+   and ?sim=1 (which deliberately has no vehicle) had no map at all. There is nothing
+   to negotiate. The map is local.
+
+   Two ways to reach the local API, and they are the same machine either way:
+     the launcher   neptune.ps1 starts the map backend and publishes its address on
+                    /__api. It is on a DIFFERENT PORT from the static file server, with
+                    no proxy between them, so asking is the only way to know.
+     same origin    the page was served by the API itself — `uvicorn main:app` opened
+                    by hand, which is how the suites and a dev box run it.
+   If neither answers there is no map backend running, and that is a fault to REPORT,
+   not a reason to go asking the vehicle. `?data=HOST:PORT` overrides both, for pointing
+   a dev console at another machine's API; it is deliberately not remembered, because a
+   stored one outlives the port it named and then shadows a working backend. */
+function resolveDataBase(params){
+  const served = location.protocol==='http:'||location.protocol==='https:';
+  let raw='';
+  try{ raw = (params && params.get('data')) || ''; }catch(e){}
+  raw = String(raw||'').trim();
+  if(raw && !(served && raw===location.host)){
+    const url = _dataBaseFrom(raw);
+    state.dataBase = url;
+    state.dataHost = url.replace(/^https?:\/\//i,'');
+    state.dataFrom = 'override';
+    state.dataWhy  = '';
+    _dataMixedContentCheck(url);
+    state.dataReady = Promise.resolve(state.dataBase);
+    return;
+  }
+  if(served){
+    // Same origin is the PROVISIONAL answer and the launcher's is the real one. Both
+    // are "an http server that sent us this page" and nothing synchronous can tell
+    // them apart; a wrong provisional costs one 404 on an early chart request, whereas
+    // waiting would delay every consumer at boot.
+    state.dataBase=''; state.dataHost=location.host; state.dataFrom='origin'; state.dataWhy='';
+    state.dataReady = askLauncherForData();
+    return;
+  }
+  // file://. There is no local server to ask, and the vehicle is not an answer.
+  state.dataBase=''; state.dataHost=''; state.dataFrom='none';
+  state.dataWhy = 'this console was opened from a file:// path, so there is no local map '
+                + 'backend to ask. Launch it with Neptune.bat, which starts one.';
+  state.dataReady = Promise.resolve('');
+}
+
+/* ASK THE LAUNCHER WHERE THE MAP BACKEND IS (neptune.ps1 /__api).
+
+   The launcher is the only thing that knows: it starts uvicorn itself, on a port of its
+   own choosing, and it is also the only thing that knows WHY there is no backend when
+   there isn't one — no python on this handheld, the port held by something else, the
+   process exited in 300 ms. That sentence is worth more than anything this console
+   could infer, so it is carried through to `state.dataWhy` verbatim and the chart panel
+   can repeat it instead of saying "no chart data downloaded" at a machine whose problem
+   was never a download.
+
+   /__api NOT ANSWERING IS NOT BAD NEWS. Served from the Pi, from a hand-run uvicorn, from
+   the test runner or from GitHub Pages there is no launcher on this origin at all, the
+   fetch 404s or fails, and the same-origin answer already in place is the right one.
+   Exactly the shape of startCamApPoll()'s /__net handling, for the same reason.
+
+   NOTHING HERE IS EVIDENCE ABOUT A VEHICLE. The backend it names runs with NEPTUNE_HW=mock
+   and reports `vehicle:false`; it serves the MAP. state.host, state.wsBase, state.demo and
+   every SIM rule that reads them are untouched by this function on purpose. */
+let _dataRetryTimer = null;
+async function askLauncherForData(){
+  try{
+    const r = await fetch('/__api', {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const j = await r.json();
+    if(j && j.ok && j.url){
+      const url = _dataBaseFrom(String(j.url).trim());
+      state.dataBase = url;
+      state.dataHost = url.replace(/^https?:\/\//i,'');
+      state.dataFrom = 'launcher';
+      state.dataWhy  = '';
+      _dataMixedContentCheck(url);
+      LOG.map('map data comes from the launcher’s own backend at ' + url
+            + (typeof j.areas==='number' && j.areas>=0
+                 ? ' (' + j.areas + ' offline area' + (j.areas===1?'':'s') + ' on this handheld)'
+                 : '')
+            + ' — this handheld holds the charts, and it needs no sub to serve them');
+    } else {
+      // The launcher is here and says there is no backend. That is a REAL absence with a
+      // REAL reason, and it is a better answer than the same-origin guess: the static
+      // server does not answer /api/ and never did, so leaving the guess in place would
+      // only turn a known cause into a 404 nobody can explain.
+      state.dataBase=''; state.dataHost=''; state.dataFrom='none';
+      state.dataWhy = (j && j.why) ? String(j.why)
+                                   : 'the launcher did not start a map backend on this handheld';
+      LOG.warn('NO MAP BACKEND on this handheld: ' + state.dataWhy
+             + ' — areas, chart layers, depth and downloads have nowhere to come from. The '
+             + 'console still flies; only the map has no data source.');
+      // Keep asking, but only while there is nothing: an operator who starts `uvicorn
+      // main:app` by hand gets a map without reloading the console, and a backend that is
+      // already found is never moved under a consumer that is using it.
+      if(!_dataRetryTimer) _dataRetryTimer = setInterval(()=>{
+        if(hasDataBackend()){ clearInterval(_dataRetryTimer); _dataRetryTimer=null; return; }
+        askLauncherForData();
+      }, 15000);
+    }
+  }catch(e){
+    // No launcher on this origin. The page came from somewhere, and that somewhere is
+    // the only candidate there is, so the same-origin answer stands.
+    LOG.state('no launcher on this origin (' + ((e&&e.message)||'no answer') + ') — map data '
+            + 'will be read from the server that sent this page, "' + location.host + '"');
+  }
+  return state.dataBase;
+}
+
+function resolveHost(){
+  let params=null;
+  try{ params=new URLSearchParams(location.search); }catch(e){}
+  // VEHICLE FIRST, because the map's last-resort fallback (file:// with a Pi
+  // configured) borrows its host. Nothing else flows between them, and in
+  // particular the demo's "no vehicle" never reaches the map.
+  resolveVehicleHost(params);
+  resolveDataBase(params);
+  LOG.state('backends — VEHICLE '
+          + (state.host ? '"'+state.host+'"'
+                        : (state.demo ? '(none: ?sim=1, the simulator is flying it)'
+                                      : '(none configured)'))
+          + '   ·   MAP DATA '
+          + (state.dataFrom==='none'
+               ? '(nowhere to ask: '+state.dataWhy+')'
+               : (state.dataFrom==='origin'
+                    ? 'same origin "'+state.dataHost+'" for now — asking the launcher whether '
+                      + 'it has a backend of its own'
+                    : '"'+state.dataHost+'" ('+state.dataFrom+')'))
+          + ' — chart layers are REAL data and are never marked simulated, whether or not '
+          + 'a sub is on the tether');
 }

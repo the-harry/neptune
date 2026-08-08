@@ -190,8 +190,76 @@
   BODIES['depth_surveyed'] = SURVEYED;
   BODIES['depth_nominal']  = NOMINAL;
 
-  const CALLS = {index:0, layer:{}, urls:[]};
+  /* ---------------------------------------------------------------------------
+     THE NATIONAL STORE — THE ORDINARY CASE AFTER THIS ROUND.
+
+     The whole Canal & River Trust network is fetched ONCE, nationally, on launch,
+     and lives on the handheld. There is NO AREA IN ITS PATHS, which is the entire
+     point: a console with no launch point, no offline area and no Pi still has a
+     map, because the map is how this thing is navigated in every mode — on the
+     water, in the simulator, and on a bench at home planning a run.
+
+     The wire names are the real shape: api/nav/crt.py names a file after the ArcGIS
+     SERVICE plus that service's layer number (`locks-0`, `tunnel-portals-0`), never
+     after a row in this console's table. Building them that way here means crtBind()
+     is exercised for every single layer rather than side-stepped by a suite that
+     helpfully used the console's own ids.
+     --------------------------------------------------------------------------- */
+  const wireOf = id=>String(id).replace(/_/g,'-')+'-0';
+  // A layer the national store looked for and does not hold. Deliberately one the
+  // console has a ROW for: ABSENT has to survive this round intact, and a store that
+  // answers about a layer it does not have is the one case a 404 may be read as
+  // "that file is not on the disk".
+  const NET_MISSING = 'water_points';
+  const ring=(lon,lat,r,n)=>{ const p=[]; for(let k=0;k<n;k++){ const a=2*Math.PI*k/n;
+      p.push([lon+r*Math.cos(a), lat+r*Math.sin(a)]); } p.push(p[0]); return p; };
+  const NET_BODIES = {};
+  const NET_COUNT  = {};
+  function netBuild(){
+    Object.keys(NET_BODIES).forEach(k=>delete NET_BODIES[k]);
+    crtAll().forEach(e=>{
+      if(e.kind==='depth' || e.id===NET_MISSING) return;      // depth is per-area BY NATURE
+      const w = wireOf(e.id);
+      // THE TWO HEAVY POLYGON LAYERS AND THE CENTRELINE get their real shapes. The
+      // planning buffer is 82,880 B/feature nationally and is the thing most likely
+      // to be drawn over the top of a weir; a suite that gave every layer a point
+      // could not see that happen.
+      if(e.id==='planning_buffer')
+        NET_BODIES[w] = fc([{type:'Feature', properties:{OBJECTID:1, probe:'PB'},
+          geometry:{type:'Polygon', coordinates:[ring(LONO, LATO, 0.0045, 96)]}}]);
+      else if(e.id==='canals')
+        NET_BODIES[w] = fc([{type:'Feature', properties:{OBJECTID:1, probe:'CN'},
+          geometry:{type:'LineString',
+                    coordinates:[[LONO-0.004,LATO-0.001],[LONO,LATO],[LONO+0.004,LATO+0.001]]}}]);
+      else NET_BODIES[w] = fc([pt(1), pt(2)]);
+      NET_COUNT[w] = (NET_BODIES[w].features||[]).length;
+    });
+  }
+  function netIndexBody(){
+    const rows = Object.keys(NET_BODIES).map(w=>({
+      layer:w, title:w, status:'present', present:true, count:NET_COUNT[w],
+      url:'/api/crt/'+w}));
+    // The absent row travels IN the same array, as the backend sends it: the index
+    // answering is what earns the console the right to say ABSENT at all, so it has
+    // to say what is missing and not only what is there.
+    rows.push({layer:wireOf(NET_MISSING), title:wireOf(NET_MISSING), status:'absent',
+               present:false, count:null,
+               why:'the Canal & River Trust publishes no service of this kind, so the '
+                 + 'national fetch had nothing to ask for'});
+    return {scope:'national', status:'present', attribution:CRT_ATTRIB_NET,
+            total:rows.length, layers:rows};
+  }
+  const CRT_ATTRIB_NET = 'Contains Canal & River Trust data (c) Canal & River Trust, '
+                       + 'licensed under the Open Government Licence v3.0';
+
+  const CALLS = {index:0, layer:{}, urls:[], net:0, netLayer:{}, dl:0};
   let INDEX_MODE = 'ok';          // 'ok' | 'dead' | 'noservice'
+  /* The national store, as this suite plays it. 'nothing' — a 404, the backend saying
+     it holds nothing — is the DEFAULT for sections 0 to 8, because those sections are
+     about the per-area card and that is exactly what the test server answers for
+     /api/crt anyway. Section 9 is where the store comes up. */
+  let NET_MODE = 'nothing';       // 'ok' | 'nothing' | 'dead'
+  let DL = null;                  // the once-only download's progress, or null for a 404
 
   function bodyFor(id){
     if(Object.prototype.hasOwnProperty.call(BODIES, id)) return BODIES[id];
@@ -215,6 +283,34 @@
   const realFetch = window.fetch.bind(window);
   function stub(url, opts){
     const u = String((url && url.url) || url || '');
+    const path = u.split('?')[0];
+    /* ---- THE NATIONAL STORE. Matched on a path with NO AREA IN IT, deliberately:
+       if this console ever goes back to addressing its chart layers through an area,
+       these requests stop arriving here and section 9 fails rather than passing on a
+       fallback nobody noticed. */
+    if(/\/api\/crt(\/|$)/.test(path)){
+      CALLS.urls.push(u);
+      const sub = decodeURIComponent((path.split('/api/crt')[1] || '').replace(/^\//, ''));
+      if(sub === 'fetch'){
+        CALLS.dl++;
+        return DL ? Promise.resolve(json(DL))
+                  : Promise.resolve(json({detail:'no national download has been started'}, 404));
+      }
+      if(!sub){
+        CALLS.net++;
+        if(NET_MODE==='dead') return Promise.reject(new TypeError('Failed to fetch'));
+        if(NET_MODE==='nothing')
+          return Promise.resolve(json({detail:'the national chart store has not been '
+                                              +'downloaded on this handheld'}, 404));
+        return Promise.resolve(json(netIndexBody()));
+      }
+      CALLS.netLayer[sub] = (CALLS.netLayer[sub]||0) + 1;
+      if(NET_MODE!=='ok') return Promise.reject(new TypeError('Failed to fetch'));
+      const b = NET_BODIES[sub];
+      if(b===undefined || b===null)
+        return Promise.resolve(json({detail:'the national store does not hold that layer'}, 404));
+      return Promise.resolve(json(b));
+    }
     const isCrt = /\/api\/areas\/[^/]*\/(crt|depth)(\/|$)/.test(u);
     if(!isCrt) return realFetch(url, opts);
     CALLS.urls.push(u);
@@ -343,7 +439,12 @@
     const cv=document.createElement('canvas');
     cv.width=Math.max(2, w|0); cv.height=Math.max(2, h|0);
     const ctx=cv.getContext('2d');
-    const st={subs:[], cur:null, fills:[], texts:[]};
+    /* `ops` is every paint IN THE ORDER IT WAS ISSUED, which `fills` is not: a
+       polygon ring is stroked with no fill in front of it, so it lands on whichever
+       fill came before — fine for measuring a depth cell, useless for asking which
+       layer went down first. Draw ORDER is a safety property (a weir must never end
+       up under a planning buffer) and the only way to check it is the sequence. */
+    const st={subs:[], cur:null, fills:[], texts:[], ops:[]};
     const dev=(x,y)=>{ const m=ctx.getTransform(); return [m.a*x+m.c*y+m.e, m.b*x+m.d*y+m.f]; };
     const raw={};
     ['beginPath','moveTo','lineTo','closePath','rect','fill','stroke','fillText']
@@ -358,12 +459,16 @@
                                   st.subs.push(st.cur); raw.rect(x,y,rw,rh); };
     ctx.fill=function(){ st.fills.push({area:pathArea(st.subs), alpha:ctx.globalAlpha,
                                         fill:styleOf(ctx.fillStyle), stroke:null});
+                         st.ops.push({kind:'fill', style:styleOf(ctx.fillStyle),
+                                      alpha:ctx.globalAlpha, area:pathArea(st.subs)});
                          raw.fill(); };
     // The edge belongs to the fill it was drawn around: every depth cell on this
     // console is fill-then-stroke, and the outline is half of what says "measured".
     ctx.stroke=function(){ const f=st.fills[st.fills.length-1];
       if(f && !f.stroke) f.stroke={alpha:ctx.globalAlpha, style:styleOf(ctx.strokeStyle),
                                    width:ctx.lineWidth, dash:(ctx.getLineDash()||[]).join(',')};
+      st.ops.push({kind:'stroke', style:styleOf(ctx.strokeStyle), alpha:ctx.globalAlpha,
+                   width:ctx.lineWidth, area:pathArea(st.subs)});
       raw.stroke(); };
     ctx.fillText=function(t,x,y){ st.texts.push(String(t)); raw.fillText(t,x,y); };
     return {ctx:ctx, st:st};
@@ -457,9 +562,16 @@
     // anybody, so nothing may be reported missing — and above all the loudest mark on
     // this map must not be lit by a console that has simply not started yet.
     const b0 = badgeLook();
-    ok('a fresh console with no map area raises NO map-level hazard alarm',
-       CRT.area===null && !b0.on && !b0.shown,
-       'CRT.area='+CRT.area+'  '+badgeSay(b0));
+    /* QUIET, NOT SILENT — and that is a change this round made on purpose. A console
+       that holds none of the national store IS missing its map data, so a mark saying
+       so is right; what must not happen is that mark being the ALARM, which means a
+       hazard layer that was being served has gone. isAlarm() is the operator's eye:
+       the tier-1 class, the error colour, and the three words this map shouts with. */
+    ok('a fresh console with nothing downloaded raises NO map-level hazard alarm',
+       CRT.area===null && !isAlarm(b0),
+       'CRT.area='+CRT.area+'  '+badgeSay(b0)+' — a quiet mark here is right; the '+
+       'loudest mark this map has is not, because nothing has failed and nobody has '+
+       'been asked anything yet');
     const t1boot = crtTierList(1);
     const mute0 = t1boot.filter(e=>liveOf(row(e.id)).length < 20);
     ok('...and the panel is not blank about it either — every hazard row still explains itself',
@@ -522,62 +634,111 @@
        crtIsOn('locks')===true,
        'crtIsOn("locks")='+crtIsOn('locks')+' after crtSetOn("locks", false)');
 
-    const t2off = t2.filter(e=>!crtIsOn(e.id));
-    ok('operations layers are ON by default', t2off.length===0,
-       t2off.length ? ('off: '+t2off.map(e=>e.id).join(', ')) : t2.map(e=>e.id).join(', '));
-    const t3on = t3.filter(e=>crtIsOn(e.id));
-    ok('extras are OFF by default', t3on.length===0,
-       t3on.length ? ('on: '+t3on.map(e=>e.id).join(', ')) : t3.length+' extras, all off');
+    /* NOTHING SHIPS SWITCHED OFF, AND THAT IS THE CHANGE THIS ROUND MADE.
 
-    // OFF MUST NOT LOOK LIKE ABSENT. This is the same doctrine one step earlier:
-    // the console has not asked, so it may not report anything about what is there.
-    const t3sample = t3.find(e=>!e.adopted) || t3[0];
-    ok('an extra that is off says NOT ASKED, never anything that reads as "nothing there"',
-       status(t3sample.id)==='off' && /NOT ASKED/i.test(pillText(t3sample.id)),
-       t3sample.id+': status='+status(t3sample.id)+' pill="'+pillText(t3sample.id)+'"');
-    ok('...and it was genuinely not requested, rather than requested and hidden',
-       !CALLS.layer[t3sample.id],
-       t3sample.id+' was fetched '+(CALLS.layer[t3sample.id]||0)+' time(s)');
+       This block used to assert the opposite of its second half: extras were OFF by
+       default. The console therefore held data about the water and drew none of it,
+       and a layer that is present and invisible is a layer nobody knows they have —
+       which on a canal means a planning buffer, a canal centreline and an aqueduct
+       the operator could have been looking at and never saw offered.
 
-    // ================= 2. THE CHOICE IS REMEMBERED =================
-    ok('the handheld has somewhere to remember a choice (the premise of the next three)',
+       The tiers survive, and they still do real work: they decide what is drawn LAST
+       and LOUDEST (section 9) and how the panel is grouped. What they no longer do is
+       decide what is drawn AT ALL. The toggles stay, because pruning a busy map is a
+       decision to make with the thing in front of you — it is simply not one to be
+       made for the operator before they have ever seen it. */
+    const allOff = crtAll().filter(e=>!crtIsOn(e.id));
+    ok('every layer ships ON — hazards, operations and EXTRAS alike',
+       allOff.length===0,
+       allOff.length ? ('shipped switched off: '+allOff.map(e=>e.id+' (tier '+e.tier+')').join(', '))
+                     : ('all '+crtAll().length+' layers on: tier1='+t1.length+' tier2='+
+                        t2.length+' tier3='+t3.length+'. A layer that is held and hidden '+
+                        'might as well not be held'));
+    ok('...and the default is a rule, not a list somebody has to remember to extend',
+       typeof crtDefaultOn==='function' && crtAll().every(e=>crtDefaultOn(e)===true),
+       'crtDefaultOn says '+JSON.stringify(crtAll().slice(0,6).map(e=>e.id+'='+crtDefaultOn(e)))+
+       ' — a per-tier default is how the next layer added gets shipped invisible');
+    const t3asked = t3.filter(e=>e.id!==ABSENT_ID && !(CALLS.layer[e.id]>0));
+    ok('...and the extras were genuinely ASKED FOR, not merely marked on in the panel',
+       t3asked.length===0,
+       t3asked.length ? ('never requested: '+t3asked.map(e=>e.id).join(', '))
+                      : (t3.length+' extras, each fetched, e.g. '+t3[0].id+' = "'+
+                         pillText(t3[0].id)+'"'));
+    ok('...and every one of them still has a switch, so the operator can prune what they do not want',
+       t3.every(e=>!!btn(e.id)) && t2.every(e=>!!btn(e.id)),
+       'tier 2 and 3 rows with a toggle: '+
+       (t2.filter(e=>btn(e.id)).length+t3.filter(e=>btn(e.id)).length)+' of '+
+       (t2.length+t3.length)+' — on by default is not the same as forced on');
+
+    // ================= 2. THE OPERATOR'S DECISION IS THE ONLY WAY OFF =========
+    /* And it has to OUTLIVE the default. The whole risk of shipping everything on is
+       that a console which resets to "on" every launch makes the operator prune the
+       same map every single time, which is how a panel of toggles becomes a panel
+       nobody touches. Their decision persists; the default does not override it. */
+    ok('the handheld has somewhere to remember a choice (the premise of the next five)',
        STORE.ready===true, 'STORE.ready='+STORE.ready+
        ' — without IndexedDB nothing below is testable and nothing is remembered');
 
     const T3='mileposts';
-    const before = crtIsOn(T3);
+    ok('the layer starts ON and loaded, so the only thing that can switch it off is the operator',
+       crtIsOn(T3)===true && (CALLS.layer[T3]||0)>0,
+       T3+': on='+crtIsOn(T3)+' fetched '+(CALLS.layer[T3]||0)+' time(s), status='+
+       status(T3)+' pill="'+pillText(T3)+'"');
     btn(T3).click();                            // the real control, the real listener
-    await waitFor(()=>crtIsOn(T3)!==before, 3000);
+    await waitFor(()=>!crtIsOn(T3), 3000);
     await sleep(400);                           // crtSavePrefs is fire-and-forget
     const saved = await STORE.get('crt.layers', null);
-    ok('switching an extra on writes the choice to the handheld\'s own storage',
-       crtIsOn(T3)===true && !!saved && saved[T3]===true,
+    ok('switching a layer OFF writes that decision to the handheld\'s own storage',
+       crtIsOn(T3)===false && !!saved && saved[T3]===false,
        'crtIsOn="'+crtIsOn(T3)+'" stored='+JSON.stringify(saved));
-    ok('...and switching it on is what makes the console finally ask for it',
-       (CALLS.layer[T3]||0) > 0 && status(T3)==='present',
-       T3+' fetched '+(CALLS.layer[T3]||0)+' time(s), status='+status(T3)+
-       ' pill="'+pillText(T3)+'"');
+    /* OFF MUST NOT LOOK LIKE ABSENT, and there are now two honest ways to say it
+       depending on whether the body is already in hand. Immediately after the switch
+       the console HAS the layer and says so — "HERE, held but switched off" — and
+       after the next ingest it stops asking and says NOT ASKED. Both are true, and
+       what neither may ever be is a word about the WATER: ABSENT, NONE MAPPED and
+       NOT DOWNLOADED are findings, and the operator flicking a switch is not one. */
+    const offSay = pillText(T3)+' — '+liveOf(row(T3));
+    ok('...and OFF reads as the OPERATOR\'S decision, never as anything about the water',
+       /switched off|NOT ASKED/i.test(offSay) &&
+       !/\bABSENT\b|NONE MAPPED|NOT DOWNLOADED/i.test(pillText(T3)),
+       T3+': status='+status(T3)+' pill="'+pillText(T3)+'" says "'+
+       liveOf(row(T3)).slice(0,130)+'"');
 
     // Read it back through the console's own loader, which is what a fresh boot does.
+    const askedBefore = CALLS.layer[T3]||0;
     CRT.prefs = null;
     await crtLoadPrefs();
-    ok('...and the console reads it back rather than starting from the default again',
-       crtIsOn(T3)===true,
+    ok('...and the console reads the decision back rather than starting from the default again',
+       crtIsOn(T3)===false,
        'after crtLoadPrefs(): crtIsOn("'+T3+'")='+crtIsOn(T3)+' prefs='+JSON.stringify(CRT.prefs));
 
-    await reingest('suite: re-ingest with a layer switched on');
-    ok('re-asking the Pi does not quietly undo the operator\'s choice',
-       crtIsOn(T3)===true && status(T3)==='present',
-       'crtIsOn="'+crtIsOn(T3)+'" status='+status(T3)+
-       ' — a refresh that resets the panel is a refresh nobody can trust');
+    await reingest('suite: re-ingest with a layer the operator switched off');
+    // The sentence has to carry two things: that this was the OPERATOR'S doing (now
+    // the only way a layer is ever off) and that it is not a claim about the water.
+    ok('...and once the console stops asking for it, the row says NOT ASKED, and whose choice it was',
+       status(T3)==='off' && /NOT ASKED/i.test(pillText(T3)) &&
+       /you switched|your choice/i.test(liveOf(row(T3))) &&
+       /not a claim that the layer is missing/i.test(liveOf(row(T3))),
+       T3+': status='+status(T3)+' pill="'+pillText(T3)+'" says "'+
+       liveOf(row(T3)).slice(0,130)+'"');
+    ok('a refresh does not quietly switch it back on, and does not fetch it behind their back',
+       crtIsOn(T3)===false && status(T3)==='off' && (CALLS.layer[T3]||0)===askedBefore,
+       'crtIsOn='+crtIsOn(T3)+' status='+status(T3)+' fetched '+(CALLS.layer[T3]||0)+
+       ' time(s) (was '+askedBefore+') — a refresh that resets the panel is a refresh '+
+       'nobody can trust, and it is worse now that the default is ON');
 
+    btn(T3).click();
+    await waitFor(()=>crtIsOn(T3), 3000);
+    await sleep(400);
+    const saved2 = await STORE.get('crt.layers', null);
+    ok('switching it back on is remembered too, rather than only the "off" being saved',
+       crtIsOn(T3)===true && !!saved2 && saved2[T3]===true && status(T3)==='present',
+       'crtIsOn='+crtIsOn(T3)+' status='+status(T3)+' stored='+JSON.stringify(saved2));
+    // Left OFF on purpose: section 7 boots a REAL page in an iframe, off the same
+    // IndexedDB, and asks it whether the operator's decision survived the reload.
     btn(T3).click();
     await waitFor(()=>!crtIsOn(T3), 3000);
     await sleep(400);
-    const saved2 = await STORE.get('crt.layers', null);
-    ok('switching it back off is remembered too, rather than only the "on" being saved',
-       crtIsOn(T3)===false && !!saved2 && saved2[T3]===false,
-       'crtIsOn='+crtIsOn(T3)+' stored='+JSON.stringify(saved2));
 
     // ================= 3. EVERY MARK EXPLAINS ITSELF =================
     const described = el=>{ const t=(el.getAttribute('title')||'').trim();
@@ -1179,7 +1340,253 @@
                              dLies.map(e=>e.id).join(', '))
                           : ('all '+dw.crtAll().length+' layers read "'+dPill(dRows[0].id)+'"'))
           : 'NOT RUN');
+
+    /* THE OPERATOR'S DECISION, ACROSS A REAL RELOAD. This is not the same check as
+       section 2's crtLoadPrefs() call: that reloads the preferences into a console
+       that is already running, and this is a WHOLE PAGE booting from nothing, off the
+       same IndexedDB, running its own crtInit(). Everything ships on now, so the one
+       thing that has to survive a launch is the operator having said no — a console
+       that comes back with the layer they pruned switched on again has quietly made
+       their decision for them, and it will do it every single launch. */
+    let dPref = null;
+    if(dw){
+      await waitFor(()=>{ try{ return typeof dw.crtIsOn==='function'
+                                   && dw.crtIsOn(T3)===false; }catch(e){ return false; } }, 8000);
+      try{ dPref = {off:dw.crtIsOn(T3), locks:dw.crtIsOn('locks'),
+                    others:dw.crtTierList(3).filter(e=>dw.crtIsOn(e.id)).length,
+                    of:dw.crtTierList(3).length}; }catch(e){ dPref = {err:String(e)}; }
+    }
+    ok('a layer the operator switched off is STILL off on a console that has just booted',
+       !!dPref && dPref.off===false,
+       dPref ? ('after a real page load: crtIsOn("'+T3+'")='+dPref.off+
+                ' while '+dPref.others+' of '+dPref.of+' other extras came back ON and '+
+                'locks='+dPref.locks+' — their decision persists, the default does not '+
+                'override it') : 'NOT RUN');
+    ok('...and it is the ONLY one that came back off, so the default is still on for everything else',
+       !!dPref && dPref.others === (dPref.of - 1) && dPref.locks===true,
+       dPref ? (dPref.others+' of '+dPref.of+' extras on in the fresh console — one '+
+                'pruned layer must not be read as permission to ship the rest hidden')
+             : 'NOT RUN');
     if(IFR.parentNode) IFR.parentNode.removeChild(IFR);
+
+    // ================= 9. THE NATIONAL STORE IS THE ORDINARY CASE ============
+    /* EVERYTHING ABOVE THIS LINE IS THE PER-AREA CARD, which still exists and is
+       still read — a console that downloaded one under the old scheme holds real data
+       about real water. But it is no longer how the map is got. The whole Trust
+       network is fetched once, nationally, on launch, and lives on the handheld; the
+       area decides which stretch of imagery is cached and which dive journals the
+       surveyed depth is built from, and NOTHING ELSE.
+
+       So this section takes the areas away — every one of them — and asserts the map
+       is still there. That is the reported defect stated as a check: a handheld
+       holding the Trust's entire published network drew nothing at all until somebody
+       tapped a launch point on it.
+
+       THE THREE SENTENCES ABOUT A LAYER THAT IS NOT ON THE GLASS, in one place,
+       because the whole value of this round is that the first of them stops being
+       the everyday state:
+         HERE / NONE MAPPED   the store answered and this is what it holds
+         DOWNLOADING          the once-only launch fetch is running. Nothing is wrong
+         NOT DOWNLOADED       nothing holds it and nothing is fetching it. LAST RESORT
+         ABSENT               a store that looked and does not have this layer
+       (a) and (c) and (d) are asserted here in the same page state, one after the
+       other, because the risk in making NOT DOWNLOADED rare is that somebody buys the
+       quiet by softening ABSENT, and that trade would be a worse defect than the one
+       being fixed. */
+    netBuild();
+    NET_MODE = 'ok';
+    try{ await STORE.areaDelete(AREA); }catch(e){}
+    try{ await STORE.areaDelete(BENCH); }catch(e){}
+    MAP.activeArea = null;
+    if(typeof crtSetArea==='function') crtSetArea(null);
+    await waitFor(()=>CRT.area===null && !CRT._busy, 10000);
+    await reingest('suite: the national store, on a console with no area at all');
+    if(typeof crtTogglePanel==='function') crtTogglePanel(true);
+    await sleep(200);
+
+    const netUrls = CALLS.urls.filter(u=>/\/api\/crt(\/|\?|$)/.test(u.split('?')[0]+'?'));
+    ok('the national store answered a console with NO AREA (the premise of this section)',
+       CRT.area===null && CRT.net && CRT.net.ok===true && CALLS.net>0,
+       'CRT.area='+CRT.area+' CRT.net.ok='+(CRT.net&&CRT.net.ok)+' after '+CALLS.net+
+       ' index request(s), most recently "'+(netUrls[netUrls.length-1]||'(none)')+'"');
+    const areaInPath = netUrls.filter(u=>/\/areas\//.test(u));
+    ok('...and it was addressed without an area in the path, which is the whole point of it',
+       netUrls.length>0 && areaInPath.length===0,
+       areaInPath.length ? ('area-scoped chart requests: '+areaInPath.slice(0,3).join('  '))
+                         : (netUrls.length+' national request(s), e.g. "'+netUrls[0]+'"'));
+
+    // T3 is excluded by name: the operator switched it off in section 2 and that
+    // decision is the one thing allowed to keep a layer off this list.
+    const netRows = crtAll().filter(e=>e.kind!=='depth' && e.id!==NET_MISSING && e.id!==T3);
+    const HOLDS = ['present','empty','held'];
+    const notDrawn = netRows.filter(e=>HOLDS.indexOf(status(e.id))<0);
+    ok('with the network held, EVERY layer is loaded on a console with no area, no launch point and no Pi',
+       netRows.length>0 && notDrawn.length===0,
+       notDrawn.length ? ('not loaded: '+notDrawn.map(e=>e.id+'='+status(e.id)+' ("'+
+                          pillText(e.id)+'")').slice(0,5).join(', '))
+                       : (netRows.length+' layers loaded with CRT.area=null, e.g. '+
+                          netRows.slice(0,3).map(e=>e.id+'="'+pillText(e.id)+'"').join('  ')));
+    const netOff = netRows.filter(e=>!crtIsOn(e.id));
+    ok('...and not one of them is switched off, so nothing is held and hidden',
+       netOff.length===0,
+       netOff.length ? ('held but not drawn: '+netOff.map(e=>e.id).join(', '))
+                     : (netRows.length+' layers on ('+T3+' is excluded because the operator '+
+                        'switched it off in section 2, and that is the only way off there is)'));
+    const stillOff = crtIsOn(T3)===false && status(T3)==='off';
+    ok('...including that the operator\'s own pruning survived the store coming up',
+       stillOff, T3+': on='+crtIsOn(T3)+' status='+status(T3)+' pill="'+pillText(T3)+
+       '" — a new source of data is not a reason to undo somebody\'s decision');
+
+    /* NOT DOWNLOADED IS NOT THE STATE OF A CONSOLE THAT HAS THE DATA. This is the
+       sentence a fresh console used to show as a matter of course, which is the wrong
+       way round: it should be what you see when something has gone wrong. */
+    const undownloaded = crtAll().filter(e=>e.kind!=='depth' &&
+                                            ['not-downloaded','no-area'].indexOf(status(e.id))>=0);
+    ok('NOT DOWNLOADED is not what a console that simply HAS the data says',
+       undownloaded.length===0,
+       undownloaded.length ? ('still reporting an absence over a store that answered: '+
+                              undownloaded.map(e=>e.id+'='+status(e.id)).join(', '))
+                           : ('0 of '+crtAll().length+' layers read NOT DOWNLOADED or NO AREA'));
+    // ...AND THE HONESTY RULE IS NOT WHAT BOUGHT THE QUIET.
+    ok('a layer the national store looked for and does not hold STILL says ABSENT',
+       status(NET_MISSING)==='absent' && /ABSENT/i.test(pillText(NET_MISSING)) &&
+       /NO DATA/i.test(liveOf(row(NET_MISSING))),
+       NET_MISSING+': status='+status(NET_MISSING)+' pill="'+pillText(NET_MISSING)+
+       '" says "'+liveOf(row(NET_MISSING)).slice(0,140)+'"');
+    // The depth pair is per-area BY NATURE — one of the two is built from this area's
+    // own dive journals — so with no area it has nothing to report, and it has to say
+    // that rather than being quietly folded into the national good news.
+    const depthRows = crtAll().filter(e=>e.kind==='depth');
+    const depthSays = depthRows.filter(e=>/NO AREA/i.test(pillText(e.id)) &&
+                                          /area/i.test(liveOf(row(e.id))));
+    ok('...and the depth pair, which really does need an area, says so instead of being lumped in',
+       depthRows.length>0 && depthSays.length===depthRows.length,
+       depthRows.map(e=>e.id+'="'+pillText(e.id)+'": '+liveOf(row(e.id)).slice(0,80))
+                .join('  |  '));
+
+    // ---- (c) THE FIRST LAUNCH: DOWNLOADING, NOT NOT-DOWNLOADED ----
+    /* A brand new handheld on its first launch holds nothing and nothing is wrong.
+       Saying NOT DOWNLOADED over a download in flight teaches the operator to read
+       the absence marks as noise, and the mark it teaches them to ignore is the one
+       that means they are missing hazard data for the water they are in. */
+    NET_MODE = 'nothing';
+    DL = {state:'running', running:true, done:6, total:27, layer:'culverts-0',
+          why:'the once-only national chart download is running'};
+    await reingest('suite: a brand new handheld, mid launch-download');
+    const dlRows = crtAll().filter(e=>e.kind!=='depth');
+    const saidDl = dlRows.filter(e=>status(e.id)==='downloading' &&
+                                    /DOWNLOADING/i.test(pillText(e.id)));
+    const saidNd = dlRows.filter(e=>status(e.id)==='not-downloaded');
+    const bDl = badgeLook();
+    ok('while the once-only download is running the layers say DOWNLOADING, not NOT DOWNLOADED',
+       saidDl.length===dlRows.length && saidNd.length===0,
+       saidDl.length+' of '+dlRows.length+' say DOWNLOADING, '+saidNd.length+
+       ' say NOT DOWNLOADED. locks reads "'+pillText('locks')+'" — "'+
+       liveOf(row('locks')).slice(0,130)+'"');
+    ok('...and a download in flight is never drawn as the map\'s loudest mark',
+       !isAlarm(bDl),
+       badgeSay(bDl)+' — this is the EXPECTED state of a new handheld exactly once, '+
+       'and spending the hazard alarm on the expected state is how the hazard alarm '+
+       'stops meaning anything');
+
+    /* ---- (d) AND THE QUIET WAS NOT BOUGHT BY GOING QUIET ----
+       The download stops answering and so does the store — on a console where BOTH
+       have answered already, in this session. That is not "nothing has been
+       downloaded yet": it is data that was on this handheld a minute ago and is not
+       there now, which is the one thing the loudest mark on this map exists for. The
+       contrast with (c) is the whole point — same empty store, same 404, and the
+       console says two different things because two different things happened.
+
+       The never-had-anything case is section 7's: a real ?sim=1 page, booted from
+       nothing, which says NOT DOWNLOADED quietly and is asserted there. It cannot be
+       reached from here, and a suite that faked it by clearing a variable would be
+       testing its own reset rather than the console.
+
+       The wait is crt.js's own two-second progress poll noticing the download has
+       settled and re-reading the store, rather than this suite reaching in. */
+    DL = null;
+    await sleep(CRT_API.dlPollMs + 900);
+    await waitFor(()=>!CRT._busy && !crtDownloading(), 8000);
+    await reingest('suite: the store that was answering has stopped');
+    const lost = crtAll().filter(e=>e.kind!=='depth' && status(e.id)==='unavailable');
+    const bLost2 = badgeLook();
+    ok('a store that HAS answered here and then holds nothing is LOUD — CANNOT TELL, not a shrug',
+       lost.length>0 && /CANNOT TELL/i.test(pillText('locks')) && isAlarm(bLost2),
+       lost.length+' of '+crtAll().length+' layers read "'+pillText('locks')+'"; '+
+       badgeSay(bLost2)+' — making NOT DOWNLOADED the last resort must never turn a '+
+       'real gap into a quiet one, and this console HAS been served this data');
+    ok('...and nothing is reported ABSENT off the back of it, because nobody looked at any disk',
+       crtAll().filter(e=>status(e.id)==='absent').length===0,
+       'absent: '+(crtAll().filter(e=>status(e.id)==='absent').map(e=>e.id).join(', ')||'none')+
+       ' — a store that could not be read has not told this console that anything is missing');
+
+    // ---- (e) THE PICTURE, WITH EVERY LAYER ON IT ----
+    /* THE RISK THIS ROUND CREATED, AND IT IS A REAL ONE. Drawing every layer at once
+       can turn the map into soup, and an unreadable map is its own kind of dishonesty.
+       The answer is DRAWING — order, weight, size — and never hiding, so the order is
+       what gets checked: a weir must never end up underneath a planning buffer.
+
+       Read off the paint stream in the order it was issued, and classified by the
+       console's OWN palette rather than by colours typed into this file, so a restyle
+       cannot turn this into a comparison of two literals nobody kept up to date. */
+    NET_MODE = 'ok';
+    await reingest('suite: the whole network on the glass at once');
+    if(!MAP.expanded && typeof expandMap==='function') expandMap();
+    await sleep(500);
+    const canon = (c)=>{ const g=document.createElement('canvas').getContext('2d');
+                         g.fillStyle=c; return String(g.fillStyle); };
+    const GROUP = {};
+    GROUP[canon(CRT_C.hazard)]=1; GROUP[canon(CRT_C.hazardDim)]=1;
+    GROUP[canon(CRT_C.ops)]=2;    GROUP[canon(CRT_C.opsDim)]=2;
+    GROUP[canon(CRT_C.extra)]=3;
+    const DT = tapCtx((MAP.canvas&&MAP.canvas.width)||800, (MAP.canvas&&MAP.canvas.height)||600);
+    let drawErr=null;
+    try{ crtDraw(DT.ctx, MAP.dpr||1); }catch(e){ drawErr=(e&&e.message)||String(e); }
+    const ops = DT.st.ops;
+    const at = {1:[], 2:[], 3:[]};
+    ops.forEach((o,i)=>{ const g=GROUP[o.style]; if(g) at[g].push(i); });
+    const span = g=>at[g].length ? (at[g][0]+'..'+at[g][at[g].length-1]) : 'none';
+    const sawAll = at[1].length>0 && at[2].length>0 && at[3].length>0;
+    ok('the map has a projection and every tier reached the glass (the premise of the order checks)',
+       !drawErr && sawAll,
+       drawErr ? ('crtDraw threw: '+drawErr)
+               : ('projection='+((typeof TILES!=='undefined'&&TILES.last)?'ready':'ABSENT')+
+                  ', '+ops.length+' paints: hazard ops at '+span(1)+', operations at '+
+                  span(2)+', extras at '+span(3)));
+    const lastOf = g=>at[g].length ? at[g][at[g].length-1] : -1;
+    const firstOf = g=>at[g].length ? at[g][0] : Infinity;
+    ok('HAZARDS ARE PAINTED LAST, so a mooring or a planning buffer can never sit on top of a weir',
+       sawAll && lastOf(3) < firstOf(2) && lastOf(2) < firstOf(1),
+       'extras '+span(3)+'  ->  operations '+span(2)+'  ->  hazards '+span(1)+
+       ' out of '+ops.length+' paints. Every layer is drawn now, so the ORDER is the '+
+       'whole of what keeps the map readable — and it is the safety order: the thing '+
+       'that stops the sub is the thing that must still be visible');
+    const hazFills  = ops.filter(o=>o.kind==='fill' && GROUP[o.style]===1);
+    const extraFill = ops.filter(o=>o.kind==='fill' && GROUP[o.style]===3);
+    ok('...and hazards are the loudest thing on it: their marks are FILLED, extras only outlined',
+       hazFills.length>0 && extraFill.length===0,
+       hazFills.length+' filled hazard marks, '+extraFill.length+' filled extras — '+
+       'drawn most prominently is the other half of "nothing is hidden": everything '+
+       'is on the map and the map still says what will stop the vehicle');
+    /* AND THE BIG FILLS ARE UNDERNEATH. A planning buffer is an AREA — 1,296 polygons
+       at 82 kB each nationally — and an area fill laid down after a weir's mark covers
+       it completely whatever colour it is. This is measured off the geometry rather
+       than off a layer name: anything filled that is several times the size of a
+       hazard mark is an area fill, whoever drew it and whatever it is called. The
+       count of them is reported either way, so a build that stopped filling areas
+       altogether cannot leave this check quietly proving nothing. */
+    const hazArea = hazFills.length ? Math.max.apply(null, hazFills.map(o=>o.area)) : 0;
+    const bigAll  = ops.filter(o=>o.kind==='fill' && hazArea>0 && o.area > hazArea*4);
+    const buried  = ops.filter((o,i)=>o.kind==='fill' && hazArea>0 && o.area > hazArea*4
+                                      && i > firstOf(1));
+    ok('...and every large AREA fill is laid down before them, so a weir is never buried under one',
+       buried.length===0,
+       buried.length ? (buried.length+' of '+bigAll.length+' area fill(s) painted AFTER the '+
+                        'first hazard mark: '+buried.slice(0,3).map(o=>o.style+' '+
+                        Math.round(o.area)+'px2').join(', '))
+                     : (bigAll.length+' area fill(s) bigger than '+Math.round(hazArea*4)+
+                        ' px2 on this frame, all of them before paint '+firstOf(1)+
+                        ' (the largest hazard mark is '+Math.round(hazArea)+' px2)'));
 
     // ================= NOTHING ELSE BROKEN =================
     // Put the fake Pi back the way the rest of the file found it before the parting
@@ -1187,6 +1594,8 @@
     // half-emptied one section 8 needed.
     BODIES['depth_nominal'] = NOMINAL;
     BODIES['depth_surveyed'] = SURVEYED;
+    btn(T3).click();                       // give the operator their layer back
+    await sleep(300);
     await reingest('suite: the fake Pi restored for the parting picture');
     if(!MAP.expanded && typeof expandMap==='function') expandMap();
     await sleep(400);

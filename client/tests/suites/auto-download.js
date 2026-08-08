@@ -23,10 +23,17 @@
      imagery failed" tells them what they will and will not have at the water. The three
      sources are separately named, separately stated, and separately able to fail.
 
-     TAKING CREDIT FOR THE PI'S WORK. This handheld downloads its OWN imagery and only
-     WATCHES the other two — the Pi fills its own card. A row that reported the Pi's
-     download as though this console were doing it would be claiming an ability it does
-     not have, and would go on claiming it after the tether was unplugged.
+     A ROW THAT MISREPORTS WHOSE WORK IT IS, in either direction. `drives` is the
+     honest half of this panel and both ways of getting it wrong are on the same footing.
+     A row that reported the PI's download as though this console were doing it would be
+     claiming an ability it does not have, and would go on claiming it after the tether
+     was unplugged. A row that left a download THIS HANDHELD performs attributed to the
+     Pi is the same lie the other way round: it sends an operator off to plug in a tether
+     for data that is already on the machine in their hands, and it is the exact shape of
+     the defect this round fixed — the map's data treated as the vehicle's property when
+     the vehicle has nothing to do with it. So every row is checked against its flag, in
+     the table AND in the sentence it renders, and the flag is checked against what this
+     console can actually start.
 
    NO INTERNET IS NOT A FAULT. At the water it is the normal condition, and a surface
    that raises an alarm about it is a surface the operator learns to ignore before the
@@ -115,12 +122,60 @@
       ? BOOTFETCH.order.map(id=>BOOTFETCH.jobs[id].where) : [];
     ok('...and each says WHOSE card it is filling', whose.every(w=>w && w.length),
        whose.join(' / '));
-    // The console drives one and watches two. Claiming otherwise would be claiming an
-    // ability it loses the moment the tether is unplugged.
-    const drives = (typeof BOOTFETCH!=='undefined')
-      ? BOOTFETCH.order.filter(id=>BOOTFETCH.jobs[id].drives) : [];
-    ok('this handheld claims only the download it actually performs', drives.length===1 && drives[0]==='imagery',
-       'drives=['+drives.join(',')+'] — the Pi fills its own card and this console watches');
+    /* WHO DOES THE WORK, ROW BY ROW.
+
+       THE HANDHELD DRIVES MORE THAN THE PICTURES NOW, and that is the whole point of
+       the round that changed this file: the map data lives on this machine. Imagery was
+       once the only thing it fetched for itself and everything else was the Pi's, which
+       is why a console with no vehicle showed a blank map and said, truthfully and
+       uselessly, that no chart data had been downloaded. A panel that still reported one
+       driven source would be describing a handheld that cannot hold its own map. */
+    const jobs = (typeof BOOTFETCH!=='undefined') ? BOOTFETCH.order.map(id=>BOOTFETCH.jobs[id]) : [];
+    const drives  = jobs.filter(j=>j.drives);
+    const watches = jobs.filter(j=>!j.drives);
+    const say = js=>js.map(j=>j.id+' → '+j.where).join(', ') || '(none)';
+    ok('this handheld drives more than the imagery — the map data is held here, not only the pictures',
+       drives.length>=2 && drives.some(j=>j.id!=='imagery'),
+       'driven from this console: '+say(drives)+'   |   watched only: '+say(watches));
+    // A driven row is filling THIS handheld's card, by definition. One that names
+    // somebody else's while claiming to drive it is a row that cannot be believed in
+    // either half of what it says.
+    const misplaced = drives.filter(j=>!/this handheld|this console/i.test(j.where||''));
+    ok('...and every source it drives is one it is filling on this handheld', misplaced.length===0,
+       misplaced.length ? ('driven but filed elsewhere: '+say(misplaced))
+                        : (drives.length+' driven row(s), all of them writing to this handheld'));
+    // ...and the Pi's own card is still the Pi's. This is the original check and it does
+    // not relax: the vehicle fills its card and this console reports what it finds.
+    const stolen = drives.filter(j=>/\bpi\b/i.test(j.where||''));
+    ok('the Pi\'s own card is never reported as this console\'s doing', stolen.length===0,
+       stolen.length ? ('claiming the Pi\'s work: '+say(stolen))
+                     : (watches.length+' watched row(s): '+say(watches)+
+                        ' — the Pi fills its own card and this console reports what it holds'));
+
+    /* THE SENTENCE ON THE ROW HAS TO AGREE WITH THE FLAG, because the sentence is what
+       an operator reads and the flag is only what the code believes. crtRenderFetch
+       writes one of two clauses onto every row from `drives`, and a source that moved
+       onto this handheld while keeping the watching clause would be telling somebody to
+       go and connect a tether for a file that is already here. */
+    // The ROW'S OWN SENTENCE, which is the title crtRenderFetch writes (and mirrors into
+    // aria-label): the row's text is a name and a pill, and the claim lives in the help.
+    const said = id=>String((($('crt-fetch-row-'+id))||{}).title||'').replace(/[ \s]+/g,' ').trim();
+    // The clause is crtRenderFetch's, and these match the CLAIM rather than a phrasing:
+    // a driven row names this console as the one that runs it, a watched row carries a
+    // disclaimer that it does not. A row carrying both, or neither, is a row an operator
+    // cannot use to decide whether pressing DOWNLOAD will do anything for it.
+    const DRIVEN_CLAUSE  = /this (handheld|console) (starts|downloads|fetches|runs|gets|performs|does)/i;
+    const WATCHED_CLAUSE = /not driven from this console|reports what|watching it, not driving/i;
+    const disagree = jobs.filter(j=>{
+      const s = said(j.id);
+      return j.drives ? (!DRIVEN_CLAUSE.test(s) || WATCHED_CLAUSE.test(s))
+                      : (!WATCHED_CLAUSE.test(s) || DRIVEN_CLAUSE.test(s));
+    });
+    ok('...and each row SAYS which of the two it is, in the words the operator reads',
+       jobs.length>0 && disagree.length===0,
+       disagree.length ? disagree.map(j=>j.id+' (drives='+j.drives+') says "'+said(j.id).slice(0,90)+'"').join('  |  ')
+                       : jobs.map(j=>j.id+'='+(j.drives?'driven':'watched')).join(' ')+
+                         '; e.g. '+jobs[0].id+' says "'+said(jobs[0].id).slice(0,90)+'"');
 
     // ---------- 3. DOWNLOADING IS ITS OWN STATE ----------
     const seen={};
@@ -159,6 +214,13 @@
     ok('a finished download stops saying it is downloading',
        rowPill('pi') !== '' && !/DOWNLOADING/i.test(rowPill('pi')),
        'the pi row went "'+seen.running.pill+'"-era DOWNLOADING to "'+rowPill('pi')+'"');
+    // AND IT STILL SAYS WHOSE DOWNLOAD IT WAS. A progress bar filling on this screen is
+    // the most persuasive thing on the panel; the row it fills has to keep saying that
+    // the work happened on the other card, or the console has taken the credit by
+    // simply animating.
+    ok('a watched source that ran and finished never reads as this console\'s own work',
+       BOOTFETCH.jobs.pi.drives!==true && WATCHED_CLAUSE.test(said('pi')) && !DRIVEN_CLAUSE.test(said('pi')),
+       'pi row (drives='+BOOTFETCH.jobs.pi.drives+') says "'+said('pi').slice(0,130)+'"');
     ok('...and the source that finished says so in words', (()=>{
         const j=(typeof BOOTFETCH!=='undefined') ? BOOTFETCH.jobs.pi : null;
         return !!j && j.state!=='running' && (j.why||'').length>20;
@@ -199,6 +261,50 @@
          'bootConsider not reachable: '+((quiet&&quiet.err)||'undefined'));
       ok('...and it says what to DO about it rather than only what is wrong', false, 'same');
     }
+
+    /* ---------- 6b. NO VEHICLE BLOCKS ONLY THE VEHICLE'S OWN ROWS ----------
+       bootLookAtPi is what runs when this console goes to read the Pi's half and finds
+       nothing on the link — the canal-side normal case, and the state a handheld sits in
+       all the way from the car park to the water. It is entitled to say the PI's rows
+       cannot be read. It is not entitled to touch a row this handheld fills itself:
+       "there is no Pi answering, so nothing can be downloaded" over a source that never
+       needed one is how a complete map ends up reported as an impossible one, which is
+       the defect this round came from. */
+    const before6b = {};
+    jobs.forEach(j=>{ before6b[j.id]=j.state; });
+    if(typeof bootLookAtPi==='function'){
+      try{ await bootLookAtPi(true); }catch(e){ errs.push('bootLookAtPi threw: '+((e&&e.message)||e)); }
+    }
+    await sleep(200);
+    const blocked = drives.filter(j=>j.state==='no-pi' || /no Pi|not on the tether|until it is on the tether/i.test(j.why||''));
+    ok('a missing vehicle never blocks a source this handheld fills itself',
+       blocked.length===0,
+       blocked.length ? ('blamed the absent Pi for work this console does: '+
+                         blocked.map(j=>j.id+' → "'+String(j.why||'').slice(0,90)+'"').join('  |  '))
+                      : ('with no Pi on the link the driven row(s) '+drives.map(j=>j.id+'='+j.state).join(', ')+
+                         ' are untouched by it; the watched row(s) '+watches.map(j=>j.id+'='+j.state).join(', ')+
+                         ' report it, which is their job (was: '+
+                         jobs.map(j=>j.id+'='+before6b[j.id]).join(', ')+')'));
+
+    /* ---------- 6c. THE CHART LAYERS ROW, WHICH IS THE ONE THIS ROUND MOVED ----------
+       The hazard layers were the Pi's: fetched by a bootstrap command typed on it, with
+       no endpoint to start them from here, and the row said exactly that — correctly,
+       because a button that pretended otherwise would have done nothing. Wherever that
+       row sits now, its words have to be the words of the side it is on. Driven from
+       here, it must not still be sending the operator to a command line on a vehicle
+       that is not part of this at all; watched from here, it must still name the card it
+       is on. What is not allowed either way is a row that says nothing. */
+    const charts = (typeof BOOTFETCH!=='undefined') ? BOOTFETCH.jobs.charts : {};
+    const cWords = (said('charts')+'  '+String(charts.why||'')).trim();
+    const NEEDS_A_PI = /cannot start that fetch|no endpoint to trigger it from here|until it is on the tether|on the Pi itself/i;
+    const NAMES_A_CARD = /\bcard\b|\bPi\b|this handheld|this console/i;
+    const chartsSaid = cWords.length>20;
+    ok('the chart-layer row describes the side of the tether it is actually on',
+       chartsSaid && (charts.drives ? !NEEDS_A_PI.test(cWords) : NAMES_A_CARD.test(cWords)),
+       (charts.drives
+         ? 'this console DRIVES the chart layers, so the row may not disown the fetch: '
+         : 'this console WATCHES the chart layers, so the row must name whose card holds them: ')
+       + '"'+cWords.slice(0, 190)+'"');
 
     // ---------- 7. THE OPERATOR IS NOT TRAPPED ----------
     // Automatic is a convenience. On a metered hotspot it has to be refusable, and a

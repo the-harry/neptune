@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlencode as _urlencode
 
 from fastapi import APIRouter, Body, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import (FileResponse, JSONResponse, RedirectResponse, Response,
+                               StreamingResponse)
 
 from . import areas as areamod
 from . import nominal as nominalmod
@@ -104,6 +105,16 @@ class NavService:
         self._fetch_task: asyncio.Task | None = None
         self._autofetch_task: asyncio.Task | None = None
         self.last_fetch: dict | None = None     # the last FINISHED job's snapshot
+        # ---- and the NATIONAL fetch, which belongs to no area at all ----
+        # Its own job, on its own task, because it is not per-area and must not wait
+        # for one: the whole Trust network is fetched ONCE on launch and every area
+        # afterwards draws from it. One handle, so the launch hook, the console's
+        # button and an area fetch that finds the set incomplete all drive the SAME
+        # download rather than three racing each other at a rate limit built for one.
+        self.national: NationalFetch | None = None
+        self._national_task: asyncio.Task | None = None   # the DOWNLOAD
+        self._national_boot: asyncio.Task | None = None   # the launch-time decision
+        self.last_national: dict | None = None
         # Until when each area is left alone after a no-internet verdict. The
         # console re-POSTs the stored origin on every page load (navui.js does it in
         # autoRequestOrigin, and again from the location watch), so without this a
@@ -132,6 +143,27 @@ class NavService:
         log.info("nav service started (source=%s, simulated=%s, filter=%s, autolog=%s)",
                  type(self.sensors).__name__, self.sensors.is_sim,
                  settings.filter_backend, settings.autolog)
+        # ---- THE WHOLE CANAL & RIVER TRUST NETWORK, FETCHED ON LAUNCH ----
+        # This line is the decision. The maps are how this thing is navigated — real
+        # sub, simulator, or a bench at home planning a run — so they are not something
+        # to go and get once a destination has been chosen. They are simply present, and
+        # the moment to make that true is when the map backend starts.
+        #
+        # IT DOES NOT BLOCK ANYTHING. A task, created after the dead-reckoning loop is
+        # already running, that reads the disk first and touches the network only if
+        # something is actually missing. Every request inside crt.py goes through
+        # asyncio.to_thread and sleeps between calls, so the 10 Hz tick keeps its slot
+        # for the whole 140 MB — and the download resumes across launches, so being
+        # killed half way costs nothing but the page that was in flight.
+        if settings.crt_national_auto:
+            # Held on the service and not dropped on the floor: asyncio keeps only a
+            # weak reference to a task, and a fire-and-forget one can be collected
+            # mid-await — which would look exactly like a bootstrap that decided to do
+            # nothing and said nothing about why.
+            self._national_boot = asyncio.create_task(self._national_bootstrap())
+        else:
+            log.info("the national Canal & River Trust fetch is switched off "
+                     "(NAV_CRT_NATIONAL_AUTO=0) — what is on this card is what there is")
 
     def _recover_orphans(self) -> None:
         """Turn journals with no finished GeoJSON into readable dives.
@@ -163,6 +195,16 @@ class NavService:
         # metadata on the way out — so a Pi shut down mid-download says so next
         # boot instead of leaving a record that reads as a download still running.
         await self.cancel_fetch()
+        # The national fetch goes next, and it is CANCELLED rather than waited for: it
+        # is resumable by construction, so a shutdown costs the page in flight and
+        # nothing else. crt.download_national stamps its index "interrupted" on the way
+        # out so the next launch says so instead of showing a download that is not
+        # running.
+        for t in (self._national_boot, self._national_task):
+            if t is not None and not t.done():
+                t.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await t
         if self._task:
             self._task.cancel()
             try:
@@ -490,6 +532,7 @@ class NavService:
         if self.last_fetch is not None:
             return {**self.last_fetch, "running": False}
         return {
+            "scope": "area",
             "state": "idle", "running": False, "area": None, "sources": {},
             "title": ("No offline-data fetch has run in this session. That does not mean "
                       "the card is empty and it does not mean it is full — ask "
@@ -562,6 +605,150 @@ class NavService:
         # data that is already sitting on the disk.
         if self.active_area == job.area:
             self.activate_area(job.area)
+
+    # ---- the national fetch: one job, three ways in -------------------------
+    #
+    # WHO STARTS IT. The launch hook (start(), above), the console's own button
+    # (POST /api/crt/fetch), and an area fetch that finds the national set incomplete.
+    # All three go through ensure_national(), which starts one job or hands back the
+    # one already running, because these are rate-limited public services and two jobs
+    # would halve the rate each while doubling the chance neither finishes.
+
+    def national_state(self) -> dict:
+        """What the national fetch is doing, or what is on the card. Never None-shaped.
+
+        One document whether or not anything is running, for the same reason
+        fetch_state() is: the console binds a panel to this, and a missing key is a
+        panel that renders blank — which looks like "nothing is wrong" and is
+        indistinguishable from "nobody asked".
+        """
+        crt = _crt_mod()
+        card = _national_layers()
+        live = self.national.snapshot() if self.national is not None else None
+        if live is not None and self.national.is_running:
+            return {**live, "running": True, "card": _national_summary(card)}
+        base = live or self.last_national
+        if base is not None:
+            return {**base, "running": False, "card": _national_summary(card)}
+        stale, why = (crt.national_is_stale() if crt else
+                      (True, "api/nav/crt.py is not in this build"))
+        return {
+            "scope": "national", "state": "idle", "running": False, "area": None,
+            "sources": {}, "order": [],
+            "stale": stale, "why": why,
+            "card": _national_summary(card),
+            "title": (f"No national download has run in this session. "
+                      f"{'The whole Trust network is on this handheld. ' if not stale else ''}"
+                      f"{why}"),
+            "aria_label": (f"No national Canal and River Trust download has run since "
+                           f"this service started. {why}"),
+        }
+
+    async def _national_changed(self, snap: dict) -> None:
+        """One progress step, out on the channel the area fetch already uses.
+
+        THE SAME FRAME TYPE ON PURPOSE — {"type": "area_fetch", …} — so the panel the
+        console already has renders this without a second mechanism being invented for
+        it. `scope` is what tells the two apart: "national" here, "area" on the
+        per-area job. Nothing is written into an area's metadata, because this download
+        belongs to no area; crt.py rewrites the national index after every layer, which
+        is what the NEXT process reads.
+        """
+        await self._broadcast(json.dumps({"type": "area_fetch", **snap}))
+
+    async def ensure_national(self, *, reason: str = "", refresh: bool = False,
+                              net: tuple[bool, str] | None = None) -> dict:
+        """Start the national fetch, or hand back the one already running."""
+        if self.national is not None and self.national.is_running:
+            return {**self.national.snapshot(), "running": True, "started": False,
+                    "why": ("the national fetch is already running — it is one download "
+                            "for the whole country and every area draws from it")}
+        job = NationalFetch(reason=reason, refresh=refresh, on_change=self._national_changed)
+        self.national = job
+        self._national_task = asyncio.create_task(job.run(net=net))
+        self._national_task.add_done_callback(self._national_ended)
+        return {**job.snapshot(), "running": True, "started": True}
+
+    async def await_national(self) -> dict | None:
+        """Wait for the running national fetch, whoever started it.
+
+        This is how an area fetch gets its hazard layers without starting a second
+        download: it joins the one in flight rather than racing it.
+        """
+        task = self._national_task
+        if task is None:
+            return None
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await asyncio.shield(task)
+        return self.national.snapshot() if self.national else None
+
+    def _national_ended(self, task: asyncio.Task) -> None:
+        """The national download is over, however it ended. Same reasoning as
+        _fetch_ended: nobody awaits this task, so an exception in it would be swallowed
+        and the job would sit at "running" for the life of the process."""
+        job = self.national
+        if job is None:
+            return
+        if not task.cancelled():
+            exc = task.exception()
+            if exc is not None:
+                job.crash(exc)
+                log.error("the national CRT fetch DIED: %s", exc, exc_info=exc)
+        elif job.is_running:
+            job.stopped()
+        self.last_national = job.snapshot()
+
+    async def _national_bootstrap(self) -> None:
+        """Is the whole Trust network on this handheld? If not, get it. On launch.
+
+        DISK FIRST, ALWAYS. The steady state — a complete card — must cost nothing at
+        all: not a socket, not a DNS lookup, not the four seconds a dead resolver takes
+        to admit it. Only a card that is actually missing something buys the probe.
+
+        AND IT KEEPS ASKING, because a handheld is switched on in a car park with no
+        bars far more often than it is switched on at a desk. One probe at startup would
+        mean the country stays unfetched for the whole of a session that walked into
+        signal ten minutes later, and the operator would find that out at the water.
+        A TCP connect every ten minutes is nothing; the alternative is NOT DOWNLOADED
+        being what you see because nothing has gone right yet.
+        """
+        crt = _crt_mod()
+        if crt is None:
+            return
+        said: str | None = None
+        while True:
+            try:
+                stale, why = crt.national_is_stale()
+                if not stale:
+                    log.info("national CRT layers: %s", why)
+                    return
+                if why != said:
+                    log.info("national CRT layers need fetching: %s", why)
+                    said = why
+                ok, net_why = await internet_available()
+                if ok:
+                    await self.ensure_national(
+                        reason="the map backend started and the national layers "
+                               "were incomplete",
+                        net=(ok, net_why))
+                    snap = await self.await_national()
+                    if (snap or {}).get("state") == "done":
+                        return
+                else:
+                    # THE NORMAL CANAL-SIDE OUTCOME AND NOT A FAILURE. Nothing was
+                    # attempted, so nothing failed. What IS on the card is drawn exactly
+                    # as it is, dated; what is missing stays missing until there is a
+                    # connection, and this comes back to ask again.
+                    rec = _national_offline_record(why, net_why)
+                    if self.last_national is None or not self.national:
+                        self.last_national = rec
+                    await self._broadcast(json.dumps({"type": "area_fetch", **rec}))
+                    log.info("national CRT fetch not started: %s", net_why)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — a service start must never fail here
+                log.warning("the national CRT bootstrap failed: %s", exc, exc_info=True)
+            await asyncio.sleep(_NATIONAL_RETRY_GAP_S)
 
     async def cancel_fetch(self) -> dict | None:
         """Stop the running job and wait for it to write down that it was stopped."""
@@ -783,14 +970,26 @@ class NavService:
         # drew a clear channel. _crt_layers now parses each layer (once per version of
         # the file — see the cache above it) and reports the three states apart, and
         # this reads all three.
+        # NO AREA IS REQUIRED TO ANSWER THIS ANY MORE. The Trust's layers are national
+        # and held once, so "are the hazards on this handheld" is a question with an
+        # answer whether or not a launch point has ever been set. It used to fail with
+        # "no area is activated", which taught the operator that the gate was about
+        # paperwork rather than about sluices.
         crt_block = _crt_layers(self.active_area or "")
         failed = crt_block.get("failed") or []
         corrupt = crt_block.get("unreadable") or []
-        if not self.active_area:
-            hz_ok, hz_why = False, "no area is activated, so no hazard layer can be checked"
-        elif crt_block["status"] != "present":
+        part = [p.get("layer_key") for p in crt_block.get("partial") or []]
+        if crt_block["status"] != "present":
             hz_ok, hz_why = False, (crt_block.get("why", "not fetched")
                                     + " — an absent hazard layer is NOT a clear channel")
+        elif part:
+            # STILL COMING IS NOT A PASS AND IT IS NOT A FAILURE EITHER. It is "not
+            # yet", and diving on a half-downloaded card is exactly what this gate is
+            # written against: what has not landed draws as clear water.
+            hz_ok = False
+            hz_why = (f"{len(part)} layer(s) are still downloading "
+                      f"({', '.join(part[:4])}) — the map draws what has landed and "
+                      f"blanks the rest, which is missing data and not empty water")
         elif failed or corrupt:
             # BOTH sentences, when both apply. They send the operator to two different
             # jobs — one to the internet, one to the card — and a gate that reports
@@ -810,10 +1009,12 @@ class NavService:
         else:
             n = len(crt_block.get("layers") or [])
             hz_ok = True
-            hz_why = (f"{n} layer(s) cached and PARSED (not merely present on disk), "
-                      f"fetched {crt_block.get('fetched')}; "
+            hz_why = (f"{n} layer(s) held "
+                      f"{'NATIONALLY' if crt_block.get('scope') == 'national' else 'for this area'} "
+                      f"and certified (not merely present on disk), fetched "
+                      f"{crt_block.get('fetched')}; "
                       f"{len(crt_block.get('skipped') or [])} skipped on purpose")
-        add("CRT hazard layers cached AND readable (absent is not 'no hazards', "
+        add("CRT hazard layers held AND readable (absent is not 'no hazards', "
             "and neither is corrupt)", hz_ok, hz_why)
         # 2c IS THIS AREA ACTUALLY FINISHED? The three items above each answer about
         # ONE source, and an operator reading three greens still has to work out
@@ -1272,8 +1473,292 @@ def _read_layer(path: Path) -> tuple[str, str | None, int | None, int | None]:
     return state, err, n, st.st_size
 
 
+# ==========================================================================
+# THE NATIONAL CARD, SERVED — one copy, every area, no area required
+# ==========================================================================
+#
+# WHAT CHANGED AND WHY EVERY READER BELOW HAS TO KNOW IT. The Trust's vectors used to
+# arrive clipped to an area, which meant the console could only ever show hazards for
+# water somebody had already chosen. So a fresh console showed NOT DOWNLOADED as a
+# matter of course — it was the everyday state rather than the last resort — and the
+# operator was told to go and fetch something for a place they had not been to yet.
+# Now the whole network is on the handheld, fetched once on launch, and an AREA is an
+# optimisation for what to DRAW. Nothing here may require one to exist.
+#
+# THE ORDER OF PREFERENCE, and it is deliberate: the national card first, the area's
+# clipped copy second. The national file is the whole layer and cannot be short; the
+# clip is a convenience for a renderer that would rather draw 40 features than 7,691,
+# and it is offered BESIDE each row (`clipped`) rather than instead of it.
+_NATIONAL_CMD = "python -m nav.cli crt-fetch --national"
+
+# WHAT A NATIONAL LAYER FILE IS, verified. Cached against (mtime, size) exactly like
+# _layer_cache and for the same reason — this is on the readiness poll — with one
+# difference stated in config.crt_parse_max_mb: over the ceiling the file is checked by
+# its recorded size and its closing bracket rather than by a full parse, because
+# re-decoding 100 MB of polygons on every poll is a fault of its own. Every answer
+# carries `verified` saying which check it got.
+_national_cache: dict[str, tuple[tuple, dict]] = {}
+
+# And the CARD itself, which is 27 small provenance reads. One readiness poll asks for
+# it three times over (the gate, the completeness roll-up inside it, and the index the
+# console renders beside them), and the readiness endpoint is polled — that is eighty
+# file reads a second on a board with an SD card for a disk.
+#
+# A SIGNATURE, NEVER A TIMER, for the reason _layer_cache gives: a timer has to choose
+# between re-reading files nobody has touched and certifying the card as it was ten
+# minutes ago. The index is rewritten atomically after EVERY layer of a fetch, and
+# os.replace moves the directory's own mtime, so any change to this card moves one of
+# the two numbers below before the next question is asked.
+_national_card_cache: tuple[tuple, dict] | None = None
+
+
+def _national_card_sig(crt) -> tuple:
+    def stamp(p: Path):
+        try:
+            st = p.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+    d = crt.national_dir()
+    return (stamp(d), stamp(d / "provenance.json"))
+
+
+def _national_card_cached(crt) -> dict:
+    global _national_card_cache
+    sig = _national_card_sig(crt)
+    if _national_card_cache is not None and _national_card_cache[0] == sig:
+        return _national_card_cache[1]
+    card = crt.national_card()
+    _national_card_cache = (sig, card)
+    return card
+
+
+def _verify_national(path: Path, rec: dict) -> dict:
+    """{status, features, bytes, check, verified, error} for one national layer file.
+
+    `check` is a bare token and `verified` is the sentence. Both, because the token
+    goes in an HTTP header and a header is latin-1: the first version put the sentence
+    there and every request for a layer answered HTTP 500 on the em-dash in it, which is
+    a 140 MB card serving nothing at all over a punctuation mark.
+    """
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return {"status": "absent", "features": None, "bytes": None,
+                "check": "absent", "verified": "not on the card", "error": None}
+    except OSError as exc:
+        return {"status": "unreadable", "features": None, "bytes": None,
+                "check": "unopenable", "verified": "could not be opened",
+                "error": f"{type(exc).__name__}: {exc}"}
+    sig = (st.st_mtime_ns, st.st_size, rec.get("bytes"), rec.get("features"))
+    hit = _national_cache.get(str(path))
+    if hit is not None and hit[0] == sig:
+        return hit[1]
+    claimed_bytes, claimed_n = rec.get("bytes"), rec.get("features")
+    out: dict
+    if claimed_bytes is not None and st.st_size != claimed_bytes:
+        out = {"status": "unreadable", "features": None, "bytes": st.st_size,
+               "check": "size", "verified": "size against the fetch's own record",
+               "error": (f"the file is {st.st_size} bytes and the fetch recorded writing "
+                         f"{claimed_bytes} — it is not the file that was downloaded")}
+    elif st.st_size <= settings.crt_parse_max_mb * 1e6:
+        state, err, n, size = _read_layer(path)
+        out = {"status": state, "features": n, "bytes": size,
+               "check": "parsed", "verified": "parsed in full", "error": err}
+        if state == "present" and claimed_n is not None and n != claimed_n:
+            out = {"status": "unreadable", "features": n, "bytes": size,
+                   "check": "parsed", "verified": "parsed in full",
+                   "error": (f"this file holds {n} feature(s) and the fetch recorded "
+                             f"writing {claimed_n}")}
+    else:
+        # THE TAIL IS THE CHECK A TRUNCATED DOWNLOAD CANNOT PASS. crt.py closes every
+        # collection with "]}" through an atomic rename, so a file that is the recorded
+        # size AND ends in those two characters is the file that was written. It is a
+        # weaker claim than a parse and it is reported as one.
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(max(0, st.st_size - 64))
+                tail = fh.read().strip()
+            ok = tail.endswith(b"]}")
+        except OSError as exc:
+            ok, tail = False, str(exc).encode()
+        out = {"status": "present" if ok else "unreadable",
+               "features": claimed_n, "bytes": st.st_size,
+               "check": "size+terminator",
+               "verified": (f"recorded size and closing bracket — {st.st_size / 1e6:.0f} "
+                            f"MB is too large to re-parse on every check "
+                            f"(NAV_CRT_PARSE_MAX_MB={settings.crt_parse_max_mb:.0f})"),
+               "error": None if ok else ("the file does not end in a closing bracket, "
+                                         "which is exactly what a download killed "
+                                         "part-way loses")}
+    if out["status"] == "unreadable":
+        log.warning("national CRT layer %s could not be certified: %s — it is NOT being "
+                    "served as an empty layer", path, out["error"])
+    _national_cache[str(path)] = (sig, out)
+    return out
+
+
+def _national_layers(area: str | None = None) -> dict:
+    """The national card, in the same shape _crt_layers returns for an area.
+
+    One shape, because the console binds one table to it and a second document with
+    different key names is the way the two halves of this feature have already been
+    broken twice. `scope` is what tells them apart, never the shape.
+    """
+    crt = _crt_mod()
+    if crt is None:
+        return {"status": "absent", "scope": "national", "layers": [], "skipped": [],
+                "warnings": [], "failed": [], "unreadable": [], "complete": False,
+                "why": "api/nav/crt.py is not in this build",
+                "means": ("nothing on this handheld can have downloaded the Trust's "
+                          "layers, so no claim whatsoever is made about obstructions "
+                          "anywhere"),
+                "remedy": _NATIONAL_CMD}
+    try:
+        card = _national_card_cached(crt)
+    except Exception as exc:  # noqa: BLE001 — an unreadable card is an answer, never a 500
+        log.warning("the national CRT card could not be read: %s", exc)
+        return {"status": "unreadable", "scope": "national", "layers": [], "skipped": [],
+                "warnings": [], "failed": [], "unreadable": [], "complete": False,
+                "why": f"the national card could not be read ({exc})",
+                "means": "what is on this handheld cannot be accounted for",
+                "remedy": _NATIONAL_CMD}
+    if not card["layers"]:
+        return {"status": "absent", "scope": "national", "layers": [], "skipped": [],
+                "warnings": card.get("warnings") or [], "failed": [], "unreadable": [],
+                "complete": False, "dir": card["dir"],
+                "partial": card.get("partial") or [],
+                "why": ("the Canal & River Trust's layers have never been downloaded on "
+                        "this handheld"),
+                "means": ("nothing has been downloaded about sluices, weirs, culverts, "
+                          "stop-plank grooves, outfalls or safety gates ANYWHERE. That "
+                          "is NOT a clear channel — it is no information at all, and "
+                          "the two look identical on a map that draws an absent layer "
+                          "as an empty one"),
+                "remedy": _NATIONAL_CMD}
+    d = Path(card["dir"])
+    area_index = _crt_index(area) if area else None
+    area_rows = {r.get("layer_key"): r for r in (area_index or {}).get("layers") or []}
+    rows, missing, corrupt = [], [], []
+    for rec in card["layers"]:
+        key = rec.get("layer_key")
+        seen = _verify_national(d / f"{key}.geojson", rec)
+        row = {"layer": key, "title": rec.get("title"),
+               "scope": "national",
+               "features": seen["features"],
+               "features_recorded": rec.get("features"),
+               "national_features": rec.get("national_features"),
+               "geometry_type": rec.get("geometry_type"),
+               "attribution": rec.get("attribution"),
+               "licence": rec.get("licence"), "licence_class": rec.get("licence_class"),
+               "redistributable": rec.get("redistributable"),
+               "count_check": rec.get("count_check"), "fetched": rec.get("fetched"),
+               "bytes": seen["bytes"], "verified": seen["verified"],
+               "check": seen["check"],
+               "currency": rec.get("currency"),
+               "url": f"/api/crt/{key}"}
+        if seen["status"] == "present":
+            row["status"] = "present"
+        elif seen["status"] == "unreadable":
+            row.update(status="unreadable", error=seen["error"],
+                       why="the file is on this handheld and could not be certified",
+                       means=_UNREADABLE_MEANS, remedy=_UNREADABLE_REMEDY)
+            corrupt.append(key)
+        else:
+            row.update(status="absent",
+                       why="the fetch recorded writing this layer and the file is gone",
+                       means=("this layer's file has been removed since the fetch. "
+                              "Nothing is known about its hazards, anywhere"),
+                       remedy=_NATIONAL_CMD)
+            missing.append(key)
+        # THE AREA IS AN OPTIMISATION, OFFERED BESIDE THE DATA AND NEVER INSTEAD OF IT.
+        # A clipped copy is a smaller thing for a renderer to draw over one pound of
+        # canal; the national file above is the answer to "do we have this layer".
+        clip = area_rows.get(key)
+        if clip is not None and area:
+            row["clipped"] = {"area": area, "features": clip.get("features"),
+                              "url": f"/api/areas/{area}/crt/{key}",
+                              "fetched": clip.get("fetched"),
+                              "means": ("the same layer cut to this area — fewer "
+                                        "features to draw, and not a different claim "
+                                        "about the water")}
+        rows.append(row)
+    partial = card.get("partial") or []
+    return {
+        "status": "present",
+        "scope": "national",
+        "complete": bool(card.get("complete")) and not missing and not corrupt,
+        "fetched": card.get("finished"),
+        "state": card.get("state"),
+        "bbox": None,
+        "clip_rule": ("none — these are the whole national layers. An area clips a copy "
+                      "for drawing and is never a precondition for having the data"),
+        "attribution": card.get("attribution"),
+        "dir": card["dir"],
+        "layers": rows,
+        "skipped": [{"layer": s.get("layer_key"), "title": s.get("title"),
+                     "status": "absent", "skipped": s.get("skipped"),
+                     "why": s.get("why"),
+                     "deliberate": s.get("skipped") in _DELIBERATE_SKIPS,
+                     "scope": "national",
+                     "means": ("left out on purpose — nothing was lost"
+                               if s.get("skipped") in _DELIBERATE_SKIPS else
+                               "THIS LAYER IS MISSING AND SHOULD NOT BE. The fetch could "
+                               "not complete it and wrote no file rather than a partial "
+                               "one, because a truncated hazard layer reads exactly like "
+                               "an empty canal"),
+                     "remedy": _NATIONAL_CMD}
+                    for s in card.get("skipped") or []],
+        "failed": [s.get("layer_key") for s in card.get("skipped") or []
+                   if s.get("skipped") not in _DELIBERATE_SKIPS] + missing,
+        "unreadable": corrupt,
+        "partial": partial,
+        "expected_layers": card.get("expected_layers"),
+        "warnings": card.get("warnings") or [],
+        "features": sum(r.get("features") or 0 for r in rows),
+        "bytes": card.get("bytes"),
+    }
+
+
 def _crt_layers(area: str) -> dict:
-    """Everything the CRT fetch did for this area: what landed, and what did not."""
+    """What Canal & River Trust data this console holds for `area` — and what it does not.
+
+    THE NATIONAL CARD ANSWERS FIRST, and an area is not required to ask. Every caller
+    below — the readiness gate, the completeness roll-up, the console's layer index —
+    used to get "not downloaded" for any area whose own clip had not been fetched, even
+    with the whole country sitting on the handheld. That made NOT DOWNLOADED the
+    everyday state instead of the last resort, which is the wrong way round: it should
+    be what you see when something has gone wrong, not what you see because nothing has
+    gone right yet.
+
+    The per-area clip is still read, and still preferred when there is no national card
+    — a handheld that fetched gas-street last month and has not run the national fetch
+    yet must not be told it has nothing. `scope` says which of the two answered.
+    """
+    national = _national_layers(area)
+    if national["status"] == "present":
+        return national
+    area_block = _area_crt_layers(area)
+    area_block.setdefault("scope", "area")
+    for row in (area_block.get("layers") or []) + (area_block.get("skipped") or []):
+        row.setdefault("scope", "area")
+    if area_block["status"] == "present":
+        # The national set is not here yet and this area's clip is. Said out loud on
+        # the block, because "we have the hazards for this pound" and "we have the
+        # hazards" are different claims and only one of them survives moving the van.
+        area_block["national"] = {"status": national["status"],
+                                  "why": national.get("why"),
+                                  "means": national.get("means"),
+                                  "remedy": _NATIONAL_CMD}
+        return area_block
+    # Neither. Prefer the NATIONAL sentence: it is the one an operator can act on
+    # anywhere, and it does not send them to fetch data for a place they have not
+    # chosen yet.
+    return national
+
+
+def _area_crt_layers(area: str) -> dict:
+    """Everything the CRT fetch did for this area's own clipped copy."""
     crt = _crt_mod()
     remedy = _FETCH_CMD.format(area=area)
     if crt is None:
@@ -1609,6 +2094,17 @@ _JOB_LIVE = ("queued", "checking", "running")
 # explicit request pays it every time.
 _OFFLINE_RETRY_GAP_S = 60.0
 
+# How often the launch-time national fetch re-asks whether there is internet yet.
+#
+# LONGER THAN THE AREA GAP ABOVE, AND FOR A DIFFERENT REASON. That one is defensive: it
+# stops a console re-probing on every origin POST the console makes, which is several a
+# minute. This one is nobody's hot path — it is one background task, one TCP connect,
+# and the thing it is waiting for is an operator driving from a car park to somewhere
+# with a signal. Ten minutes is short enough that walking into coverage is noticed
+# within a session and long enough that a handheld left on overnight with no bars costs
+# 144 connects and nothing else.
+_NATIONAL_RETRY_GAP_S = 600.0
+
 # How long the imagery download may go without a single tile arriving before the
 # link is declared gone. See AreaFetch._imagery for the measurement that set it.
 _IMAGERY_STALL_S = 15.0
@@ -1845,35 +2341,46 @@ def area_completeness(name: str) -> dict:
                 have=have, want=want)
 
     # --- charts (CRT) --------------------------------------------------------
+    # NO LONGER A PER-AREA QUESTION. The Trust's vectors are national and held once, so
+    # what this asks is "does this handheld hold them", and the answer is the same for
+    # every area on the card. `scope` says which card answered — an older handheld with
+    # a clipped copy and no national fetch yet is still reported as having its charts.
     crt_block = _crt_layers(name)
+    scope = crt_block.get("scope", "area")
+    where = ("this handheld, nationally" if scope == "national"
+             else f"this card, clipped to {name}")
     failed = list(crt_block.get("failed") or [])
     corrupt = list(crt_block.get("unreadable") or [])
+    part = [p.get("layer_key") for p in crt_block.get("partial") or []]
     n_layers = len(crt_block.get("layers") or [])
     if crt_block["status"] != "present":
         sources["charts"] = _src(
             "absent",
-            f"No Canal & River Trust hazard layer has been downloaded for {name}. "
+            f"No Canal & River Trust layer has been downloaded onto this handheld. "
             f"{crt_block.get('means', '')}",
-            f"No hazard charts are downloaded for area {name}. This is missing data, "
-            f"not a clear channel.",
-            why=crt_block.get("why"), layers=0, failed=[], unreadable=[])
-    elif failed or corrupt:
+            "No hazard charts are downloaded. This is missing data, not a clear "
+            "channel.",
+            why=crt_block.get("why"), scope=scope, layers=0, failed=[], unreadable=[],
+            remedy=crt_block.get("remedy"))
+    elif failed or corrupt or part:
         sources["charts"] = _src(
             "partial",
-            f"{n_layers} hazard layer(s) are on the card for {name}, and "
-            f"{len(failed)} did not download while {len(corrupt)} cannot be read. "
-            f"Nothing is known about the hazards those would have shown.",
-            f"Hazard charts for area {name} are incomplete: {len(failed)} missing, "
-            f"{len(corrupt)} unreadable.",
-            layers=n_layers, failed=failed, unreadable=corrupt)
+            f"{n_layers} Trust layer(s) are on {where}; {len(failed)} did not download, "
+            f"{len(corrupt)} cannot be read and {len(part)} are still coming. Nothing is "
+            f"known about the hazards those would have shown.",
+            f"The hazard charts are incomplete: {len(failed)} missing, {len(corrupt)} "
+            f"unreadable, {len(part)} still downloading.",
+            scope=scope, layers=n_layers, failed=failed, unreadable=corrupt,
+            partial=part)
     else:
         sources["charts"] = _src(
             "present",
-            f"{n_layers} hazard layer(s) are on this card for {name} and every one of "
-            f"them was parsed, not merely found. Fetched {crt_block.get('fetched')}.",
-            f"All {n_layers} hazard chart layers for area {name} are downloaded and "
-            f"readable.",
-            layers=n_layers, failed=[], unreadable=[], fetched=crt_block.get("fetched"))
+            f"{n_layers} Trust layer(s) are on {where}, {crt_block.get('features')} "
+            f"feature(s), and every one of them was certified rather than merely found. "
+            f"Fetched {crt_block.get('fetched')}.",
+            f"All {n_layers} hazard chart layers are downloaded and readable.",
+            scope=scope, layers=n_layers, failed=[], unreadable=[],
+            features=crt_block.get("features"), fetched=crt_block.get("fetched"))
 
     # --- centreline ----------------------------------------------------------
     cl = settings.areas_dir / f"{name}.geojson"
@@ -1967,6 +2474,7 @@ def _offline_record(area: str, why: str, reason: str = "") -> dict:
     that way or the operator learns to dismiss it.
     """
     return {
+        "scope": "area",
         "area": area, "state": "offline", "reason": reason,
         "started": _iso(), "finished": _iso(), "pid": os.getpid(),
         "net": {"ok": False, "why": why},
@@ -1981,6 +2489,414 @@ def _offline_record(area: str, why: str, reason: str = "") -> dict:
         "aria_label": (f"No download was started for area {area} because there is no "
                        f"internet connection. {why}"),
     }
+
+
+# ---- serving a WINDOW of a national layer ---------------------------------------
+#
+# WHY A WHOLE LAYER IS SOMETIMES THE WRONG ANSWER. The national planning-buffer layer
+# is 100 MB of consultation-zone polygons. The console cannot parse that — JSON.parse
+# stalls the browser's only thread for seconds and leaves hundreds of megabytes of heap
+# behind, on the machine an operator is steering with — so client/js/crt.js asks for the
+# part around where the map is looking (?bbox=W,S,E,N) and, for anything handed back
+# whole and over its ceiling, reports the layer as HELD BUT NOT DRAWN. Held and not
+# drawn is the failure this whole round is against, arriving by the back door: the data
+# is on the handheld, correct and complete, and never once appears on the glass.
+#
+# So the window is served HERE, where the file is, using the byte-offset index crt.py
+# wrote beside it. No parse of the layer at any size: a small JSON load, a seek and a
+# copy. What comes back says what it is — `windowed`, the box it is a window ON, and the
+# national total it is a window OF — because "12 features" out of 6,916 is a window and
+# would otherwise read as a store that has lost nearly all of it.
+#
+# THIS IS PAGING, NOT PRUNING. Nothing is withheld: the index rows still report the
+# whole layer, every layer stays switched on, and what is outside the window is outside
+# the screen as well.
+
+
+def _window_box(raw: str) -> list[float] | None:
+    try:
+        w, s, e, n = (float(v) for v in raw.replace(" ", "").split(","))
+    except (TypeError, ValueError):
+        return None
+    if not (-180 <= w < e <= 180 and -90 <= s < n <= 90):
+        return None
+    return [w, s, e, n]
+
+
+def _window_response(crt, layer: str, path: Path, rec: dict, box: list[float],
+                     seen: dict):
+    """A FeatureCollection of just the features overlapping `box`, or None.
+
+    None means "no index beside this layer", and the caller then hands back the whole
+    file — which is the honest fallback: the console says HELD and explains that this
+    backend did not window it, rather than either of us pretending a partial answer is
+    the layer.
+    """
+    idx_path = crt.national_index_path(layer)
+    try:
+        idx = json.loads(idx_path.read_text(encoding="utf-8"))
+        entries = idx["entries"]
+    except Exception as exc:  # noqa: BLE001 — an older card has no index; say so once
+        log.info("no window index beside %s (%s) — the whole layer will be served",
+                 path.name, exc)
+        return None
+    w, s, e, n = box
+    picks = [(int(row[0]), int(row[1])) for row in entries
+             # A feature with no box could not be placed at all, so it can never be
+             # windowed OUT: excluding it would be this file deciding not to show
+             # something on the strength of not understanding it.
+             if len(row) < 6 or not (row[4] < w or row[2] > e or row[5] < s or row[3] > n)]
+    total = rec.get("features")
+    head = {
+        "type": "FeatureCollection",
+        "attribution": rec.get("attribution"),
+        "scope": "national", "status": "present", "layer": layer,
+        "windowed": True, "window": box,
+        "features_in_window": len(picks), "features_total": total,
+        "fetched": rec.get("fetched"),
+        "title": (f"{layer}: {len(picks)} of the {total} feature(s) this handheld holds "
+                  f"nationally, being the ones inside the box the map is looking at. "
+                  f"This is PAGING and not pruning — the whole layer is on this "
+                  f"machine, and what is outside this box is outside the screen too."),
+        "aria_label": (f"National layer {layer}, windowed: {len(picks)} of {total} "
+                       f"features, being those inside the current map view. The whole "
+                       f"layer is held on this handheld."),
+    }
+    prefix = (json.dumps(head)[:-1] + ',"features":[').encode("utf-8")
+
+    def body():
+        yield prefix
+        try:
+            with open(path, "rb") as fh:
+                first = True
+                for off, ln in picks:
+                    fh.seek(off)
+                    raw = fh.read(ln)
+                    if not first:
+                        yield b","
+                    yield raw
+                    first = False
+        except OSError as exc:
+            # THE FILE WENT AWAY MID-STREAM. Nothing can be un-sent, so the collection
+            # is closed and the truncation is left to fail at the client's JSON parse —
+            # which draws nothing and claims nothing. A silently short list would be the
+            # empty-canal lie with a 200 in front of it.
+            log.warning("windowed read of %s failed part-way: %s", path, exc)
+        yield b"]}"
+
+    return StreamingResponse(
+        body(), media_type="application/geo+json",
+        headers={"X-Neptune-Scope": "national",
+                 "X-Neptune-Windowed": "true",
+                 "X-Neptune-Features": f"{len(picks)}/{total}",
+                 "X-Neptune-Verified": seen["check"],
+                 "Cache-Control": "no-cache"})
+
+
+def _national_document(svc, block: dict) -> dict:
+    """GET /api/crt — what Trust data this handheld holds, and what it does not.
+
+    THE SAME SHAPE AS THE PER-AREA INDEX, on purpose: one array of layers carrying the
+    absent rows as well as the present ones, each with `present` and `count`, because
+    the console binds one table to whatever the wire calls a layer and then needs to
+    know, per layer, whether to draw it or to say ABSENT. Two documents with different
+    key names is how the two halves of this feature have already been broken twice.
+    """
+    # `path` beside `url`, same value. The console reads `meta.path || meta.url`, and
+    # publishing both costs a key and removes the whole class of bug where one half of
+    # this feature spells an endpoint one way and the other half spells it another.
+    rows = [{**row, "present": row.get("status") == "present",
+             "count": row.get("features"), "path": row.get("url")}
+            for row in block.get("layers") or []]
+    rows += [{**row, "present": False, "count": None,
+              "url": f"/api/crt/{row['layer']}", "path": f"/api/crt/{row['layer']}"}
+             for row in block.get("skipped") or []]
+    n_absent = ((1 if block["status"] != "present" else 0)
+                + len(block.get("failed") or []))
+    n_corrupt = len(block.get("unreadable") or [])
+    n_part = len(block.get("partial") or [])
+    bits = ([f"{n_absent} layer(s) are MISSING"] if n_absent else []) + \
+           ([f"{n_corrupt} are on this handheld and UNREADABLE"] if n_corrupt else []) + \
+           ([f"{n_part} are still downloading"] if n_part else [])
+    summary = (" and ".join(bits) + " — absent is not empty, unreadable is not empty "
+               "either, and nothing here claims any water is clear."
+               if bits else
+               f"Every layer the Canal & River Trust publishes is on this handheld: "
+               f"{len(rows)} layer(s), {block.get('features')} feature(s). No area is "
+               f"needed to have them and none was used to get them.")
+    return {
+        "scope": "national",
+        "status": block["status"],
+        "complete": bool(block.get("complete")),
+        "fetched": block.get("fetched"),
+        "state": block.get("state"),
+        "clip_rule": block.get("clip_rule"),
+        "attribution": block.get("attribution"),
+        "dir": block.get("dir"),
+        "features": block.get("features"),
+        "bytes": block.get("bytes"),
+        # How many layers the Trust offered the last time anybody could ask. The console
+        # renders "N of TOTAL" while the first download is running, and without this it
+        # has to fall back to a constant of its own that goes stale silently.
+        "total": block.get("expected_layers") or len(rows),
+        "layers": rows,
+        "failed": block.get("failed") or [],
+        "unreadable": block.get("unreadable") or [],
+        "partial": block.get("partial") or [],
+        "warnings": block.get("warnings") or [],
+        "why": block.get("why"), "means": block.get("means"),
+        "remedy": block.get("remedy") or _NATIONAL_CMD,
+        # WHAT IS HAPPENING ABOUT IT, in the same document. An operator looking at a
+        # missing layer's row has exactly one next question, and making them poll a
+        # second endpoint for it is how a download in progress gets read as a failure.
+        "fetch": svc.national_state() if svc is not None else None,
+        # The active area, offered as what it now is: a hint for DRAWING. Null is a
+        # perfectly good answer and nothing above depends on it.
+        "area": svc.active_area if svc is not None else None,
+        "title": f"Canal & River Trust data on this handheld. {summary}",
+        "aria_label": (f"National Canal and River Trust layers. {summary}"),
+    }
+
+
+def _national_summary(block: dict) -> dict:
+    """The national card in the handful of numbers a panel actually renders."""
+    return {"status": block.get("status"), "complete": bool(block.get("complete")),
+            "layers": len(block.get("layers") or []),
+            "features": block.get("features"), "bytes": block.get("bytes"),
+            "fetched": block.get("fetched"),
+            "failed": block.get("failed") or [],
+            "unreadable": block.get("unreadable") or [],
+            "partial": block.get("partial") or [],
+            "why": block.get("why"), "means": block.get("means"),
+            "remedy": block.get("remedy")}
+
+
+def _national_offline_record(stale_why: str, net_why: str) -> dict:
+    """The record of a national fetch that never started because there is no internet.
+
+    A REAL ANSWER AND NOT AN ERROR, and it is the same shape as an area fetch's so the
+    one panel can render it. What is on the handheld is still on the handheld and is
+    still drawn; what is missing stays missing until there is a connection.
+    """
+    return {
+        "scope": "national", "area": None, "state": "offline",
+        "started": _iso(), "finished": _iso(), "pid": os.getpid(),
+        "net": {"ok": False, "why": net_why}, "sources": {}, "order": [],
+        "title": (f"The Canal & River Trust's national layers are not complete on this "
+                  f"handheld and there is no internet here to finish them: {net_why}. "
+                  f"{stale_why}. What IS on the card is drawn exactly as it is — this "
+                  f"is the normal state at the water's edge and not a fault."),
+        "aria_label": (f"No national download was started because there is no internet "
+                       f"connection. {net_why}"),
+    }
+
+
+class NationalFetch:
+    """One background job that brings the WHOLE Trust network onto this handheld.
+
+    NOT AN AREA JOB WITH A DIFFERENT NAME. It has no bbox, no imagery and no area: it
+    is 27 layers, ~140 MB, fetched once and resumed across launches, and every area on
+    this card draws from the one copy.
+
+    IT REPORTS PER LAYER, on the channel the area fetch already broadcasts on, in the
+    same snapshot shape — `sources` keyed by layer instead of by source kind, `order`
+    saying what order they come in. A console that can render one can render the other,
+    and `scope` says which it has.
+
+    IT DOES NOT RAISE, for the reason AreaFetch does not: this runs beside a control
+    loop that is flying a sub.
+    """
+
+    def __init__(self, *, reason: str = "", refresh: bool = False, on_change=None) -> None:
+        self.reason = reason
+        self.refresh = bool(refresh)
+        self._on_change = on_change
+        self.state = "queued"
+        self.started: str | None = None
+        self.finished: str | None = None
+        self.error: str | None = None
+        self.net: dict | None = None
+        self.result: dict | None = None
+        self.sources: dict[str, dict] = {}
+        self.order: list[str] = []
+
+    @property
+    def is_running(self) -> bool:
+        return self.state in _JOB_LIVE
+
+    def _set(self, key: str, **fields) -> None:
+        if key not in self.sources:
+            self.sources[key] = {"status": "pending", "label": key, "done": 0,
+                                 "total": None, "why": "", "detail": ""}
+            self.order.append(key)
+        status = fields.get("status")
+        if status is not None and status not in _SRC_STATES:
+            log.warning("national fetch layer %s given an unknown status %r (not one "
+                        "of %s)", key, status, list(_SRC_STATES))
+        self.sources[key].update(fields)
+
+    def snapshot(self) -> dict:
+        done = [k for k, s in self.sources.items() if s["status"] in ("done", "skipped")]
+        failed = [k for k, s in self.sources.items() if s["status"] == "failed"]
+        running = [k for k, s in self.sources.items() if s["status"] == "running"]
+        return {
+            # `area` is null and stays null. This download belongs to no area, and a
+            # panel that showed one would be telling the operator that the country's
+            # worth of layers is a property of the pound they happen to be on.
+            "scope": "national", "area": None, "state": self.state,
+            "reason": self.reason, "refresh": self.refresh,
+            "started": self.started, "finished": self.finished,
+            "error": self.error, "net": self.net, "pid": os.getpid(),
+            "sources": {k: dict(v) for k, v in self.sources.items()},
+            "order": list(self.order),
+            # `done` AND `total` ARE NUMBERS HERE, and that is deliberate rather than
+            # sloppy. This document is read by the console's national-download panel,
+            # which renders "N of 27 layers" and needs two integers; the per-area job's
+            # snapshot answers a different question with the same word (WHICH sources
+            # finished) and keeps its list. The names are kept apart —`done_layers` is
+            # the list — because one of them being quietly the other is precisely how
+            # the two halves of this feature have been broken before.
+            "done": len(done), "total": len(self.sources),
+            "done_layers": done, "failed": failed,
+            "layer": (running[0] if running else None),
+            "why": (self.sources[running[0]]["detail"] if running else (self.error or "")),
+            "features": self.result.get("features") if self.result else None,
+            "bytes": self.result.get("bytes") if self.result else None,
+            "title": self._title(done, failed, running),
+            "aria_label": self._aria(done, failed),
+        }
+
+    def _title(self, done, failed, running) -> str:
+        if self.state == "offline":
+            return (f"Nothing was downloaded: there is no internet here. "
+                    f"{(self.net or {}).get('why', '')}")
+        if self.state == "cancelled":
+            return ("The national download was stopped. Every layer that finished is on "
+                    "this handheld and the part-downloaded one continues from where it "
+                    "stopped the next time this starts.")
+        if self.state in _JOB_LIVE:
+            what = ", ".join(f"{k} ({self.sources[k]['detail']})" for k in running) \
+                or "asking the Trust what it publishes"
+            return (f"Downloading the Canal & River Trust's whole network: {what}. "
+                    f"{len(done)} of {len(self.sources)} layer(s) finished. This is a "
+                    f"one-time ~140 MB download, it resumes if it is interrupted, and "
+                    f"the console stays flyable throughout.")
+        if failed:
+            return (f"The national layers: {len(done)} finished, {len(failed)} did not "
+                    f"({', '.join(failed[:4])}). What failed was not written, so the map "
+                    f"is missing it rather than drawing it as empty water — and the "
+                    f"pages that did arrive are kept for the next run.")
+        return (f"The Canal & River Trust's whole network is on this handheld: "
+                f"{len(done)} layer(s). Nothing about it needs the internet again.")
+
+    def _aria(self, done, failed) -> str:
+        if self.state in _JOB_LIVE:
+            return (f"Downloading the national Canal and River Trust layers. "
+                    f"{len(done)} of {len(self.sources)} finished.")
+        if self.state == "offline":
+            return "No national download was started: there is no internet."
+        if failed:
+            return (f"The national download finished with failures. Completed: "
+                    f"{len(done)}. Failed: {', '.join(failed)}.")
+        return f"The national Canal and River Trust layers are complete: {len(done)}."
+
+    def crash(self, exc: BaseException) -> None:
+        self.state = "failed"
+        self.error = f"{type(exc).__name__}: {exc}"
+        self.finished = self.finished or _iso()
+        for s in self.sources.values():
+            if s["status"] in ("pending", "running"):
+                s["status"] = "failed"
+                s["why"] = f"the fetch job itself died: {self.error}"
+
+    def stopped(self) -> None:
+        """Cancelled — the process is going down, or the operator said stop."""
+        self.state = "cancelled"
+        self.finished = self.finished or _iso()
+        for s in self.sources.values():
+            if s["status"] in ("pending", "running"):
+                s["status"] = "failed"
+                s["why"] = ("the download was stopped before this layer finished; the "
+                            "pages that arrived are kept and it continues from there")
+
+    async def _emit(self) -> None:
+        if self._on_change is None:
+            return
+        try:
+            await self._on_change(self.snapshot())
+        except Exception as exc:  # noqa: BLE001 — a watcher must not stop a download
+            log.warning("national fetch progress callback failed: %s", exc)
+
+    async def run(self, net: tuple[bool, str] | None = None) -> dict:
+        crt = _crt_mod()
+        self.started = _iso()
+        try:
+            if crt is None:
+                self.state = "failed"
+                self.error = ("api/nav/crt.py is not in this build, so nothing here can "
+                              "download the Trust's layers at all")
+                return self.snapshot()
+            self.state = "checking"
+            await self._emit()
+            ok, why = net if net is not None else await internet_available()
+            self.net = {"ok": ok, "why": why}
+            if not ok:
+                self.state = "offline"
+                return self.snapshot()
+            self.state = "running"
+            await self._emit()
+            res = await crt.download_national(progress=self._progress, refresh=self.refresh)
+            self.result = res
+            self.finished = _iso()
+            if res.get("ok"):
+                self.state = "done"
+            else:
+                self.state = "failed"
+                self.error = res.get("error")
+            await self._emit()
+            return self.snapshot()
+        except asyncio.CancelledError:
+            self.stopped()
+            raise
+        except Exception:
+            self.state = "failed"
+            self.error = self.error or "the national fetch died"
+            raise
+        finally:
+            self.finished = self.finished or _iso()
+
+    async def _progress(self, msg: dict) -> None:
+        """crt.py's per-layer messages → the per-layer table the console renders."""
+        st = msg.get("state")
+        key = msg.get("layer")
+        if st == "layer" and key:
+            self._set(key, status="running", done=0, total=msg.get("expect"),
+                      label=msg.get("title") or key,
+                      detail=f"layer {msg.get('n')} of {msg.get('of')}")
+        elif st in ("paging", "resumed") and key:
+            self._set(key, status="running", done=msg.get("features"),
+                      total=msg.get("of"),
+                      detail=(f"{msg.get('features')} of {msg.get('of')} feature(s)"
+                              + (" — continuing where the last run stopped"
+                                 if st == "resumed" else "")))
+        elif st == "current" and key:
+            # SKIPPED, NOT DONE, and the difference is the whole of "incremental": this
+            # layer was already whole on the handheld and not one byte was re-requested.
+            self._set(key, status="skipped", done=msg.get("features"),
+                      total=msg.get("features"),
+                      detail=f"already here, fetched {msg.get('fetched')}",
+                      why=msg.get("why") or "")
+        elif st == "wrote" and key:
+            self._set(key, status="done", done=msg.get("features"),
+                      total=msg.get("features"), why="",
+                      detail=(f"{msg.get('features')} feature(s), "
+                              f"{(msg.get('bytes') or 0) / 1e6:.1f} MB in "
+                              f"{msg.get('seconds')}s"))
+        elif st == "failed" and key:
+            self._set(key, status="failed", done=msg.get("kept"),
+                      why=(f"{msg.get('why')} — the {msg.get('kept', 0)} feature(s) that "
+                           f"did arrive are kept and the next run continues from there"))
+        await self._emit()
 
 
 class AreaFetch:
@@ -2031,6 +2947,13 @@ class AreaFetch:
         done = [k for k, s in self.sources.items() if s["status"] in ("done", "skipped")]
         failed = [k for k, s in self.sources.items() if s["status"] == "failed"]
         return {
+            # `scope` ON EVERY SNAPSHOT, because two different jobs now broadcast on one
+            # socket as {"type": "area_fetch", …} — this one and the national fetch —
+            # and a console that cannot tell them apart renders a country-wide download
+            # into the panel for one pound of canal. The word, not the shape, is what
+            # separates them: the shape is deliberately identical so one panel renders
+            # both.
+            "scope": "area",
             "area": self.area, "state": self.state, "reason": self.reason,
             "started": self.started, "finished": self.finished,
             "error": self.error, "net": self.net, "pid": os.getpid(),
@@ -2273,7 +3196,21 @@ class AreaFetch:
                   detail=f"{n} way(s) written", why="")
         await self._emit()
 
-    # ---- source 2: the CRT hazard layers --------------------------------
+    # ---- source 2: this area's CLIPPED COPY of the CRT layers ------------
+    #
+    # WHAT THIS SOURCE IS NOW, AND WHAT IT IS NOT. It is the drawing optimisation: the
+    # same national layers cut to this area's box, so a renderer over one pound of canal
+    # draws 40 bridges instead of 6,916. IT IS NOT WHERE THE DATA COMES FROM ANY MORE.
+    # The whole network is fetched nationally when the map backend starts
+    # (NavService._national_bootstrap) and again the moment a launch point is set with a
+    # connection behind it, and the serving side answers out of that card whether or not
+    # this clip ever lands — _crt_layers reads the national card first, so a failure
+    # here no longer means the console has nothing to draw. It means it will draw the
+    # national file.
+    #
+    # THE CLIP IS READ THROUGH _area_crt_layers, NOT _crt_layers, on purpose: _crt_layers
+    # prefers the national card, and asking it here would report this area's copy as
+    # already present because the country's is, and the clip would never be cut at all.
     async def _charts(self) -> None:
         key = "charts"
         crt = _crt_mod()
@@ -2283,7 +3220,7 @@ class AreaFetch:
                           "download hazard data at all")
             await self._emit()
             return
-        block = _crt_layers(self.area)
+        block = _area_crt_layers(self.area)
         if (block["status"] == "present" and not block.get("failed")
                 and not block.get("unreadable") and not self.refresh):
             self._set(key, status="skipped", done=1, total=1,
@@ -2315,14 +3252,27 @@ class AreaFetch:
         # BELIEVE THE DISK, NOT THE RETURN VALUE — the same rule nav/cli.py's
         # crt-fetch already follows. download_hazards reports failure by returning,
         # and a layer that did not land leaves no file on purpose.
-        after = _crt_layers(self.area)
+        after = _area_crt_layers(self.area)
         n = len(after.get("layers") or [])
         bad = list(after.get("failed") or []) + list(after.get("unreadable") or [])
+        held = _national_layers()
+        # WHAT A FAILED CLIP COSTS, SAID IN THE SAME BREATH AS THE FAILURE. It used to
+        # cost the operator every hazard in this water. With the national card complete
+        # it costs a smaller file to draw, and the sentence has to say which — an alarm
+        # that no longer means what it used to is an alarm people learn to ignore.
+        fallback = (f" The whole national set IS on this handheld "
+                    f"({len(held.get('layers') or [])} layer(s), "
+                    f"{held.get('features')} feature(s)), so the console draws those "
+                    f"instead; this clip is a smaller file and not a different claim."
+                    if held.get("complete") else
+                    f" The national set is NOT complete either ({held.get('why') or ''}) "
+                    f"— so nothing is known about the hazards these would have shown.")
         if after["status"] != "present" or bad:
             self._set(key, status="failed", done=n, total=n + len(bad),
-                      detail=f"{n} layer(s) on the card",
-                      why=(res.get("error") or after.get("why")
-                           or f"{len(bad)} layer(s) missing or unreadable: {', '.join(bad[:6])}"))
+                      detail=f"{n} layer(s) clipped to this area",
+                      why=((res.get("error") or after.get("why")
+                            or f"{len(bad)} layer(s) missing or unreadable: "
+                               f"{', '.join(bad[:6])}") + fallback))
         else:
             self._set(key, status="done", done=n, total=n,
                       detail=f"{n} layer(s), {res.get('features', '?')} feature(s)", why="")
@@ -2594,8 +3544,131 @@ def build_router(svc: NavService) -> APIRouter:
 
     @r.get("/api/areas/fetch")
     async def fetch_status():
-        """The running job, or the last one, or a plainly-idle document."""
-        return svc.fetch_state()
+        """The running area job, or the last one, or a plainly-idle document.
+
+        `national` rides along because the two downloads are watched from one panel and
+        an operator asking "is anything downloading" means either of them. It is the
+        same document GET /api/crt/fetch returns.
+        """
+        return {**svc.fetch_state(), "national": svc.national_state()}
+
+    # ---- THE NATIONAL CARD: no area anywhere in these three paths -------------
+    #
+    # WHY THEY ARE NOT UNDER /api/areas/. Because an area is not a precondition for
+    # having this data and never will be again. A console at a kitchen table with no
+    # launch point set, no imagery and no idea where it is going still holds every lock,
+    # sluice, culvert and stop-plank groove in England and Wales, and it must be able to
+    # ask for them without inventing a place first.
+
+    @r.get("/api/crt")
+    async def national_index():
+        """Every Trust layer on this handheld, INCLUDING the ones that are not here."""
+        return _national_document(svc, _national_layers(svc.active_area))
+
+    @r.get("/api/crt/fetch")
+    async def national_fetch_status():
+        """What the national download is doing, or what is on the card."""
+        return svc.national_state()
+
+    @r.post("/api/crt/fetch")
+    async def national_fetch_start(payload: dict = Body(default={})):
+        """Fetch, or finish fetching, the national set. Returns AT ONCE.
+
+        DOES NO NETWORK WORK OF ITS OWN, not even a name lookup: this answers in
+        milliseconds and the job it starts does the asking, so a POST at the canal comes
+        back "checking" and settles to "offline" a few seconds later on the socket.
+        """
+        payload = payload or {}
+        return await svc.ensure_national(
+            reason=payload.get("reason") or "asked for by the console",
+            refresh=bool(payload.get("refresh")))
+
+    @r.get("/api/crt/{layer}")
+    async def national_layer(layer: str, bbox: str | None = None):
+        """One national Trust layer — whole, or the part around ?bbox=W,S,E,N.
+
+        SERVED AS THE FILE ON DISK rather than parsed and re-emitted, which is what the
+        per-area endpoint does. The biggest of these is 100 MB of planning-buffer
+        polygons; decoding and re-encoding that per request would cost seconds and a
+        gigabyte on a machine that is flying a sub. crt.py writes `status`, `layer`,
+        `scope`, `attribution` and `bbox` INTO the collection when it writes it, exactly
+        so this can be a file handed straight out — and a truncated file fails to parse
+        at the client, which is the correct outcome: nothing drawn, nothing claimed.
+
+        WITH A bbox, the answer is a WINDOW on that layer, assembled by seeking to the
+        bytes of the features that overlap it (see _window_response). That exists because
+        the console genuinely cannot hold the biggest layer in a browser heap: without a
+        window it reports the layer HELD-but-not-drawn, which is a hazard layer this
+        handheld owns and never puts on the glass. Paging, not pruning — the index rows
+        still report the whole layer and the response says what it is a window of.
+        """
+        if not _NAME_OK.match(layer or ""):
+            raise HTTPException(400, "bad layer name")
+        crt = _crt_mod()
+        if crt is None:
+            return _absent("national", layer,
+                           why="api/nav/crt.py is not in this build",
+                           means="nothing here can have downloaded the Trust's layers",
+                           remedy=_NATIONAL_CMD)
+        path = crt.national_dir() / f"{layer}.geojson"
+        rec = crt.national_layer_record(layer) or {}
+        seen = _verify_national(path, rec)
+        if seen["status"] == "absent":
+            card = crt.national_card()
+            skip = next((s for s in card.get("skipped") or []
+                         if s.get("layer_key") == layer), None)
+            part = next((p for p in card.get("partial") or []
+                         if p.get("layer_key") == layer), None)
+            if part is not None:
+                return _absent(
+                    "national", layer,
+                    why=(f"this layer is part-downloaded — {part.get('features')} "
+                         f"feature(s) have arrived and it is not finished"),
+                    means=("no file is written until the whole layer is here, because a "
+                           "truncated layer draws exactly like an empty one. The pages "
+                           "that arrived are kept and the next run continues from them"),
+                    remedy=_NATIONAL_CMD)
+            if skip is not None:
+                deliberate = skip.get("skipped") in _DELIBERATE_SKIPS
+                return _absent(
+                    "national", layer,
+                    why=f"the fetch skipped it ({skip.get('skipped')}): {skip.get('why')}",
+                    means=("left out on purpose, and nothing was lost" if deliberate else
+                           "the fetch could not complete this layer and wrote no file "
+                           "rather than a partial one. Nothing is known about this kind "
+                           "of feature anywhere"),
+                    remedy=_NATIONAL_CMD)
+            return _absent(
+                "national", layer,
+                why=("this handheld has no national layer by that name — "
+                     + ("the national fetch has never run" if not card.get("layers")
+                        else "the fetch ran and produced no such layer")),
+                means="nothing is known about features of this kind, anywhere",
+                remedy=_NATIONAL_CMD)
+        if seen["status"] != "present":
+            return _unreadable("national", layer, path,
+                               ValueError(seen["error"] or _UNREADABLE_MEANS))
+        if bbox:
+            box = _window_box(bbox)
+            if box is None:
+                raise HTTPException(400, "bbox must be W,S,E,N in degrees")
+            windowed = _window_response(crt, layer, path, rec, box, seen)
+            if windowed is not None:
+                return windowed
+        return FileResponse(
+            path, media_type="application/geo+json",
+            headers={
+                # The provenance a renderer needs before it draws, without a second
+                # request and without decoding 100 MB to find it. BARE TOKENS ONLY:
+                # a header is latin-1, and the first version of this put the prose
+                # sentence in X-Neptune-Verified and answered HTTP 500 on the em-dash
+                # inside it — a complete national card serving nothing over a dash.
+                "X-Neptune-Scope": "national",
+                "X-Neptune-Features": str(rec.get("features")),
+                "X-Neptune-Fetched": str(rec.get("fetched")),
+                "X-Neptune-Verified": seen["check"],
+                "Cache-Control": "no-cache",
+            })
 
     @r.post("/api/areas/fetch")
     async def fetch_start(payload: dict = Body(default={})):
@@ -2854,11 +3927,19 @@ def build_router(svc: NavService) -> APIRouter:
         n_corrupt = len(crt_block.get("unreadable") or [])
         bits = ([f"{n_absent} hazard layer(s) are MISSING"] if n_absent else []) + \
                ([f"{n_corrupt} are on this card and UNREADABLE"] if n_corrupt else [])
+        # WHICH CARD ANSWERED. "Every hazard layer is here" means something different
+        # when the layers are national — it means they are here for everywhere, whether
+        # or not this area was ever downloaded — and an operator reading a green line
+        # about an area that does not exist yet is entitled to know which of the two
+        # they are being told.
+        held = ("held NATIONALLY on this handheld, so they cover this area and every "
+                "other" if crt_block.get("scope") == "national" else
+                "clipped to this area by an earlier fetch")
         summary = (" and ".join(bits) + " — absent is not empty, unreadable is not empty "
                    "either, and nothing here claims this water is clear."
                    if bits else
-                   "Every hazard layer the fetch produced is here, and every one of them "
-                   "was read.")
+                   f"Every hazard layer the Trust publishes is here and every one of "
+                   f"them was certified: {held}.")
         aria_summary = (" and ".join(bits) + "; no claim is made about the hazards they "
                         "would have shown."
                         if bits else
@@ -2904,6 +3985,15 @@ def build_router(svc: NavService) -> APIRouter:
                            remedy=remedy)
         p = crt.area_dir(safe) / f"{layer}.geojson"
         if not p.exists():
+            # NO CLIP FOR THIS AREA — WHICH IS NOT THE SAME AS NOT HAVING THE LAYER.
+            # The Trust's vectors are national now and an area's cut-down copy is an
+            # optimisation for drawing; if the whole layer is on this handheld, that is
+            # the honest answer to "give me this layer", and it is redirected rather
+            # than copied so there is one file and one set of bytes. An operator whose
+            # console asked for a hazard layer must never be told ABSENT while it sits
+            # in the national card three directories away.
+            if (crt.national_dir() / f"{layer}.geojson").exists():
+                return RedirectResponse(f"/api/crt/{layer}", status_code=307)
             # WHY it is not there, when the fetch's own record can say. A layer that
             # was skipped on purpose and a layer whose fetch failed part-way are
             # different facts, and the second is the one worth interrupting somebody

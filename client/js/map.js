@@ -74,7 +74,23 @@ function meColor(){
   return s==='mock' ? C.meMock : s==='stale' ? C.meStale : C.meLive;
 }
 
+/* TWO BASES, BECAUSE THERE ARE TWO BACKENDS AND THIS FILE TALKS TO BOTH.
+
+   navFetch goes to the VEHICLE: anything about the sub, its dive, its sensors.
+   mapFetch goes to the MAP DATA backend (crt.js mapDataBase), which on this handheld
+   is a service running on the handheld itself — areas, chart layers, depth, and the
+   canal centreline below. They were one function addressing one host, which is why
+   the centreline vanished with the Pi: a canal does not stop existing because the sub
+   is unplugged, and the line down the middle of it is real data about real water that
+   this handheld is perfectly capable of holding.
+
+   The fallback inside mapDataBase() is the vehicle host, so a console with no map
+   service of its own behaves exactly as it always did. */
 function navFetch(path, opts){ return fetch((state.httpBase||'') + path, opts); }
+function mapFetch(path, opts){
+  const base = (typeof mapDataBase==='function') ? mapDataBase() : (state.httpBase||'');
+  return fetch(base + path, opts);
+}
 
 /* THE ONLY WAY A BEARING GETS ONTO THIS MAP.
 
@@ -465,11 +481,19 @@ async function refreshBootstrap(){
         MAP.activeArea = newest.name; MAP.viewLat=(newest.bbox[1]+newest.bbox[3])/2; MAP.viewLon=(newest.bbox[0]+newest.bbox[2])/2;
       }
       MAP.hasArea = areas.some(a=>a.name===MAP.activeArea) || areas.length>0;
-      if(MAP.activeArea && MAP._clArea!==MAP.activeArea){ MAP._clArea=MAP.activeArea; loadCentreline(MAP.activeArea); }   // Pi-side overlay if reachable
-      // The chart layers are per-area too, and crtSetArea is a no-op when the name
-      // has not changed — including the null case, so an area being CLEARED resets
-      // every layer to "no area" rather than leaving the last area's hazards drawn
-      // over somewhere else entirely.
+      // The centreline is MAP data, so it is read from the map backend — which on this
+      // handheld is this handheld. It used to be fetched off the vehicle and described
+      // in this comment as a "Pi-side overlay", which is what made the canal itself
+      // disappear from a console with no sub attached.
+      if(MAP.activeArea && MAP._clArea!==MAP.activeArea){ MAP._clArea=MAP.activeArea; loadCentreline(MAP.activeArea); }
+      // THE CHART LAYERS ARE NO LONGER PER-AREA, and this call no longer decides
+      // whether there are any. The Canal & River Trust network is held nationally on
+      // this handheld and crt.js reads it with no area whatsoever; what an area still
+      // decides is the DEPTH pair (one of the two is built from this area's own dive
+      // journals) and which per-area card is read second. crtSetArea is still a no-op
+      // when the name has not changed — including the null case — and clearing the
+      // area now reloads rather than blanking the panel, so a console that loses its
+      // area keeps every national layer it was drawing.
       if(typeof crtSetArea==='function') crtSetArea(MAP.activeArea);
     }
   }catch(e){ MAP.hasArea=false; }
@@ -494,7 +518,7 @@ async function refreshBootstrap(){
 async function loadCentreline(name){
   MAP.centreline=null; if(!name) return;
   try{
-    const r=await navFetch('/api/areas/'+encodeURIComponent(name)+'/centreline');
+    const r=await mapFetch('/api/areas/'+encodeURIComponent(name)+'/centreline');
     if(!r.ok) return; const gj=await r.json();
     const lines=[];
     const walk=(g)=>{ if(!g) return; const t=g.type;
@@ -550,7 +574,11 @@ function updateEmptyState(){
     // DOWNLOAD" over a map that is at that moment downloading itself tells the
     // operator to go and start the thing that is already running, and the button
     // opens a manager that says nothing about it. Say which of the two it is.
-    const busy = (typeof BOOTFETCH!=='undefined') && BOOTFETCH.state==='running';
+    // The IMAGERY job, not the panel's top line: the top line also goes DOWNLOADING for
+    // the chart layers now, and "DOWNLOADING THIS LAUNCH POINT — 0%" with a percentage
+    // taken from an imagery run that has not started would be a progress bar about the
+    // wrong download.
+    const busy = (typeof BOOTFETCH!=='undefined') && BOOTFETCH.jobs.imagery.state==='running';
     if(!MAP.hasArea && busy){
       const pc = (typeof bootPct==='function') ? bootPct(BOOTFETCH.jobs.imagery) : 0;
       if(msg)msg.textContent='DOWNLOADING THIS LAUNCH POINT — '+pc+'%';
@@ -664,7 +692,9 @@ function setMapLibreArea(name){
     MAP.ml.addSource('base', { type:'vector', url:'pmtiles://areas/'+name+'.pmtiles' });
     // TODO(vendor): add basemap fill/line layers per the PMTiles schema. Collapsed style is
     // simplified (water + major ways + centreline only, no labels, §4); full labels on expand.
-    MAP.ml.addSource('centreline', { type:'geojson', data:(state.httpBase||'')+'/areas/'+name+'.geojson' });
+    // Map data, so the map base — same reason as loadCentreline above.
+    MAP.ml.addSource('centreline', { type:'geojson',
+      data:((typeof mapDataBase==='function') ? mapDataBase() : (state.httpBase||''))+'/areas/'+name+'.geojson' });
     MAP.ml.addLayer({ id:'centreline', type:'line', source:'centreline',
       paint:{ 'line-color':'#1f9dff', 'line-width':2 } });
     MAP.ml.addSource('track', { type:'geojson', data:{type:'FeatureCollection',features:[]} });

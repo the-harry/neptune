@@ -229,6 +229,69 @@ class NavSettings:
     # NOT inside areas_dir: areas.list_areas() globs areas/*.json and reads every hit as an
     # area, so a provenance file landing there would invent areas that do not exist.
     crt_dir: Path = field(default_factory=lambda: Path(_s("NAV_CRT_DIR", str(_ROOT / "data" / "crt"))))
+    # ---- THE NATIONAL SET: data/crt/national/, fetched ONCE and never per-area ----
+    #
+    # WHY THE WHOLE COUNTRY IS ON THE HANDHELD. A marker that is not held cannot be
+    # got at the waterside — there is no internet there, and the Trust's vectors are
+    # how this thing is navigated in every mode: real sub, simulator, or a bench at
+    # home planning next weekend. Clipping them to an area made the maps a
+    # consequence of having already chosen where to go, which is backwards.
+    #
+    # ~150 MB nationally, dominated by two polygon layers (planning buffer 1296
+    # features at ~83 kB each, canals-by-navigation 193 at ~46 kB each; every point
+    # layer is 270-350 B a feature). That is a one-time download onto a handheld with
+    # hundreds of gigabytes free, so NOTHING is excluded for size and nothing is
+    # excluded for tier. Satellite IMAGERY stays per-area: it is tiles, it is far
+    # bigger, and it is genuinely bounded by where you are going.
+    #
+    # The directory name is RESERVED — crt.safe_area_name refuses it, so no operator
+    # area can ever be created on top of the national card.
+    crt_national_name: str = field(default_factory=lambda: _s("NAV_CRT_NATIONAL", "national"))
+    # WHAT "CURRENT" MEANS, and it is two things, both recorded in the provenance.
+    #
+    # COUNT: the layer file holds exactly as many features as the service says the
+    # layer has nationally, right now. That is the test that catches the Trust adding
+    # twelve culverts, and it is free — the count query is one request and discovery
+    # already makes it.
+    # AGE: and it was fetched within this many days. A count can agree while the
+    # geometry underneath has been re-surveyed, and a card that has been right for a
+    # year has not been CHECKED for a year. 90 days is a season: long enough that a
+    # weekly bootstrap re-downloads nothing, short enough that a card carried through
+    # a winter is refreshed before the spring.
+    #
+    # Both must hold, or the layer is re-fetched — from where it got to, never from
+    # scratch. Neither can be tested with no internet, and with no internet nothing is
+    # re-fetched anyway: what is on the card is served, dated, exactly as it is.
+    crt_national_max_age_days: float = field(
+        default_factory=lambda: _f("NAV_CRT_NATIONAL_MAX_AGE_DAYS", 90.0))
+    # Fetch the national set in the background when the map backend starts, if it is
+    # missing or incomplete. Off (0) for a bench that must touch no network at all;
+    # the fetch is still one CLI command away, and the console can still ask for it.
+    crt_national_auto: bool = field(default_factory=lambda: _b("NAV_CRT_NATIONAL_AUTO", True))
+    # HOW BIG ONE HTTP RESPONSE IS ALLOWED TO GET. The servers advertise
+    # maxRecordCount 2000, and 2000 planning-buffer polygons at ~83 kB each is a
+    # 160 MB JSON document that has to be parsed whole — fine on the Ally, fatal on a
+    # Pi 3B+ with a gigabyte of RAM, and a request that size times out on a hotspot
+    # long before it arrives. So the page size is derived from this budget and the
+    # bytes-per-feature actually measured on the first page, never from the record
+    # count alone. resultOffset is a FEATURE offset, so a smaller page changes only
+    # how many requests it takes and nothing about what lands.
+    crt_page_bytes: float = field(default_factory=lambda: _f("NAV_CRT_PAGE_BYTES", 8e6))
+    # HOW BIG A LAYER MAY BE BEFORE THE SERVING SIDE STOPS RE-PARSING IT TO CHECK IT.
+    #
+    # The rule in nav/service.py is that a layer is PRESENT WHEN IT HAS BEEN READ, not
+    # when it has a size — a download killed part-way leaves a file with a size and no
+    # closing brace, and a stat() certifies it. That rule was written when the biggest
+    # file on a card was 2 MB. The national planning-buffer layer is over 100 MB, the
+    # readiness check is POLLED, and re-parsing that on a Pi 3B+ would be a new fault
+    # rather than a fix for an old one.
+    #
+    # So: under this ceiling a layer is parsed, exactly as before. Over it, the check is
+    # the recorded byte count against the size on disk PLUS the closing bracket at the
+    # end of the file — which is precisely what a truncated download loses, and what a
+    # partial write cannot fake. Every answer says which of the two it used, because a
+    # weaker check reported as a stronger one is the thing this whole file is against.
+    crt_parse_max_mb: float = field(default_factory=lambda: _f("NAV_CRT_PARSE_MAX_MB", 8.0))
     # Skip a layer whose NATIONAL count is below this — Boat_Lifts has 1 feature and
     # Flow_Control_Structures has 3, and a toggle that can only ever be empty teaches the
     # pilot that empty means broken. Judged on the national count, never on the clipped one:

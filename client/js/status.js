@@ -45,7 +45,14 @@ const NAV_SILENT_MS = 5000;
 /* VEHICLE COMMANDS ONLY. Blocked when we INTEND to talk to a real Pi (a host is
    configured) but the control link is not up. In pure disk/SIM mode there is no
    vehicle to endanger, so the simulator's controls stay live.
-   Anything that is not a vehicle command must NOT consult this. */
+   Anything that is not a vehicle command must NOT consult this.
+
+   `state.wsBase` AND NOTHING ELSE. The handheld now runs a MAP backend of its own —
+   areas, chart layers, depth, downloads — and it answers on the same /api/ prefix the
+   Pi does. It is not a vehicle and must never widen this test: a console with a local
+   map API and nothing on the tether is still a console with no sub, and the moment
+   this starts reading `httpBase` or "an API answered", the simulator's controls stop
+   being simulated in the operator's eyes without a hull ever appearing. */
 function commandsBlocked(){ return !!state.wsBase && state.wsStatus !== 'online'; }
 
 /* Per-subsystem predicates — used by the UI gating and by each panel. */
@@ -60,6 +67,10 @@ STATUS.tick = function(){
   STATUS.internet = navigator.onLine !== false;
 
   // ---- ROV control link -------------------------------------------------
+  // 'sim' here means NO VEHICLE IS ADDRESSED, and it is decided by the vehicle base
+  // alone. The map's backend is deliberately not consulted: a handheld serving its own
+  // charts has no sub on the end of the tether, and this line is where that would first
+  // be blurred if anyone ever taught it to look at `dataBase`.
   if(!state.wsBase)                     STATUS.link = 'sim';
   else if(state.wsStatus === 'online')  STATUS.link = 'online';
   else if(state.wsStatus === 'connecting') STATUS.link = 'connecting';
@@ -151,6 +162,11 @@ STATUS.tick = function(){
                // here that sentence would only appear if something else happened to
                // change on the same tick.
                leakStage(),
+               // The map backend is settled ASYNCHRONOUSLY (core.js asks the launcher on
+               // /__api after boot), and the tether tooltip quotes it. Without it in the
+               // signature that sentence would only appear whenever something else
+               // happened to change on the same tick.
+               state.dataFrom,
                nwv.nic, nwv.up, nwv.internet, nwv.ssid, nev.nic, nev.up].join('|');
   if(sig !== STATUS._last){
     STATUS._last = sig;
@@ -253,6 +269,35 @@ const TETH_NONE = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentCol
 const EYE_LIVE_SVG  = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M1.8 12S5.8 5.5 12 5.5 22.2 12 22.2 12 18.2 18.5 12 18.5 1.8 12 1.8 12z"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/></svg>';
 const EYE_BLIND_SVG = '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M1.8 12S5.8 5.5 12 5.5 22.2 12 22.2 12 18.2 18.5 12 18.5 1.8 12 1.8 12z"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/><path stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M3.5 20.5 20.5 3.5"/></svg>';
 
+/* THE CLAUSE THAT STOPS "NO SUB" FROM BEING READ AS "NOTHING ON THIS SCREEN IS REAL".
+
+   The tether glyph is the loudest thing on the status row, and when it is the red robot
+   it says the simulator is flying this. That sentence is about the VEHICLE and always
+   was, but with the map now served from the handheld an operator can be looking at a
+   red robot and a fully drawn chart at the same time — and the natural reading of the
+   red robot is "so none of this is real". It is worth one clause to say which half is
+   which: the sub is a model, the water is not.
+
+   TWO THINGS HAVE TO BE TRUE BEFORE IT IS SAID, and both are about not swapping one
+   empty claim for another:
+
+     somebody NAMED the backend — the launcher on /__api, a ?data= override, config, or
+       the Pi in disk mode. `dataFrom:'origin'` is not that: it is the provisional guess
+       "whoever served this page probably has the charts", which is right on a Pi and
+       wrong on GitHub Pages, and a guess must not be quoted to the operator as a fact
+       about what this handheld is holding.
+     it is somewhere OTHER than the sub — served from the Pi the chart data is on the
+       Pi too, so a Pi that is not answering is not answering for maps either.  */
+const DATA_NAMED = ['launcher','override','config','vehicle'];
+function tetherMapNote(){
+  if(typeof hasDataBackend!=='function' || !hasDataBackend()) return '';
+  if(DATA_NAMED.indexOf(state.dataFrom) < 0) return '';
+  if(state.dataHost && state.host && state.dataHost === state.host) return '';
+  return '. The MAP is not simulated: its imagery, hazard layers and chart data are real, '
+       + 'they are served from ' + (state.dataHost || 'this handheld')
+       + ', and they do not need a sub';
+}
+
 STATUS.render = function(){
   const set = (id, cls, title)=>{ const el = $(id); if(!el) return;
     el.className = 'st-ic ' + cls; liveTitle(el, title); };
@@ -343,14 +388,16 @@ STATUS.render = function(){
     rTitle='cable adapter "' + (ne.name||'?') + '" is there, but nothing is answering on it';
   } else if(ne){
     rGlyph=TETH_NONE; rCls='down';
-    rTitle='no cable: this handheld has no ethernet-style adapter - the simulator is flying this';
+    rTitle='no cable: this handheld has no ethernet-style adapter - the simulator is flying this'
+         + tetherMapNote();
   } else {
     // No launcher, so the adapters cannot be checked at all. Say that, rather than
     // claiming a cable is missing on evidence we do not have.
     rGlyph=ROV_ROBOT; rCls='sim';
-    rTitle = !state.wsBase
+    rTitle = (!state.wsBase
       ? 'no sub configured - the simulator is flying this'
-      : 'nothing answering at ' + state.host + ' - the simulator is flying this';
+      : 'nothing answering at ' + state.host + ' - the simulator is flying this')
+      + tetherMapNote();
   }
   if(rov && rov.dataset.glyph !== rCls){ rov.dataset.glyph = rCls; rov.innerHTML = rGlyph; }
   // The old pulse keyed on STATUS.link==='connecting', which had the same problem.
@@ -364,16 +411,27 @@ STATUS.render = function(){
    answered, not that a socket has not given up yet. Runs ONLY while the control link
    is down — once it is online the answer cannot change anything — and its result
    expires, so a Pi that is unplugged goes red rather than sitting amber on the
-   strength of a probe from a minute ago. */
+   strength of a probe from a minute ago.
+
+   AN EXPLICIT VEHICLE ADDRESS, OR NO PROBE AT ALL. This used to fetch
+   `(state.httpBase||'') + '/api/healthz'`, and that `||''` is a RELATIVE url — it asks
+   whoever served this page whether the sub is there. That was inert while the launcher
+   served nothing but files and the request 404'd. It is not inert now: this handheld
+   runs a map backend of its own, /api/healthz is the same FastAPI health endpoint, and
+   it answers {"status":"ok","hardware":"mock"} in a few milliseconds. The console would
+   have read its own machine's reply as the sub answering and lit the amber plug — "the
+   sub answers, but the control link is not up yet" — with nothing whatsoever on the
+   tether. So the probe requires a host that was configured as a VEHICLE, and a local
+   map API is never allowed to stand in for one. */
 function startPiProbe(){
   const tick = async ()=>{
-    const wanted = !!state.wsBase && state.wsStatus !== 'online';
+    const wanted = !!state.wsBase && !!state.httpBase && state.wsStatus !== 'online';
     if(wanted){
       const t0 = performance.now();
       const ctl = (typeof AbortController!=='undefined') ? new AbortController() : null;
       const killer = ctl ? setTimeout(()=>{ try{ ctl.abort(); }catch(e){} }, 2500) : null;
       try{
-        const r = await fetch((state.httpBase||'') + '/api/healthz',
+        const r = await fetch(state.httpBase + '/api/healthz',
                               Object.assign({cache:'no-store'}, ctl ? {signal:ctl.signal} : {}));
         state.piProbe = { ok: r.ok, at: Date.now(), ms: Math.round(performance.now()-t0) };
       }catch(e){
@@ -442,16 +500,39 @@ function startCamApPoll(){
    Its own poll on its own schedule, deliberately separate from the control
    WebSocket: the Pi can be perfectly healthy while the ROV link is down, and the
    operator needs to see that difference. One request in flight at a time, hard
-   abort deadline, capped backoff — a black-holed Pi must not accumulate requests. */
-let _sysPolling = false, _sysBackoff = 0, _sysTimer = null;
+   abort deadline, capped backoff — a black-holed Pi must not accumulate requests.
+
+   IT ASKS THE VEHICLE OR IT ASKS NOBODY, and this one mattered more than the health
+   probe because it was not gated at all. With no vehicle configured it fetched
+   `/api/system` RELATIVE, which now lands on the map backend running on this handheld.
+   That answer is a truthful description of THE ROG — its CPU, its RAM, its free disk,
+   its adapters — and every one of those numbers would have been painted into the PI
+   HEALTH tiles as the sub's. Worse, `state.sys.deep.ssid` is read by STATUS.tick as
+   "the Pi can see the camera's radio", so the handheld's own Wi-Fi association would
+   have turned the camera eye amber for a camera nobody was talking to. A local map API
+   knows nothing about the sub and is never asked about it. */
+let _sysPolling = false, _sysBackoff = 0, _sysTimer = null, _sysBlanked = false;
 function startSystemPoll(){
   const tick = async ()=>{
     if(_sysPolling) return;
+    if(!state.httpBase){
+      // No vehicle addressed: the Pi's health is CANNOT-TELL, which renderSystem draws
+      // as dashes. Not zeroes, and emphatically not this handheld's own numbers.
+      if(!_sysBlanked){
+        _sysBlanked = true;
+        state.sys = null; state.sysAt = 0;
+        if(typeof renderSystem==='function') renderSystem(null);
+      }
+      clearTimeout(_sysTimer);
+      _sysTimer = setTimeout(tick, 5000);
+      return;
+    }
+    _sysBlanked = false;
     _sysPolling = true;
     const ctl = (typeof AbortController!=='undefined') ? new AbortController() : null;
     const killer = ctl ? setTimeout(()=>{ try{ ctl.abort(); }catch(e){} }, 4000) : null;
     try{
-      const r = await fetch((state.httpBase||'') + '/api/system', ctl ? {signal:ctl.signal} : undefined);
+      const r = await fetch(state.httpBase + '/api/system', ctl ? {signal:ctl.signal} : undefined);
       if(!r.ok) throw new Error('http '+r.status);
       state.sys = await r.json();
       state.sysAt = Date.now();

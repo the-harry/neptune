@@ -10,8 +10,13 @@
                                                       # for it — BOOTSTRAP, needs internet
   python -m nav.cli area-fetch gas-street [--refresh] [--radius-m 1000] [--detail high]
   python -m nav.cli area-fetch gas-street --dry-run   # what is on the card, fetch nothing
-  python -m nav.cli crt-fetch gas-street          # CRT hazards — BOOTSTRAP, needs internet
+  python -m nav.cli crt-fetch                    # THE WHOLE Canal & River Trust network,
+                                                 # nationally, once — BOOTSTRAP, resumable
+  python -m nav.cli crt-fetch --status           # what is on this handheld, no network
   python -m nav.cli crt-fetch --list             # what the Trust publishes (needs internet)
+  python -m nav.cli crt-fetch gas-street         # ALSO clip a copy for one area, which is
+                                                 # an optimisation for drawing and nothing
+                                                 # more — the national set is the data
   python -m nav.cli soundings data/dives/dive-*.jsonl [--area gas-street] [--dry-run]
   python -m nav.cli soundings --selftest
   python -m nav.cli mag-cal   [--base http://127.0.0.1:8000]   # guide IMU calibration
@@ -20,15 +25,24 @@
 
 WHICH OF THESE NEED THE INTERNET (§3, the two-phase rule). Exactly two, and both
 are BOOTSTRAP-time commands that say so before they do anything: `area-fetch`,
-which fills a whole offline area, and `crt-fetch`, which fills in the hazard
-layers alone. Everything else — including `soundings`, which reads a journal off
-the card and writes to a store on the same card — runs unchanged in the isolated
-canal-side segment, where there is no WAN and no hostname resolution.
+which fills a whole offline area, and `crt-fetch`, which fills in the Canal &
+River Trust's layers. Everything else — including `soundings`, which reads a
+journal off the card and writes to a store on the same card — runs unchanged in
+the isolated canal-side segment, where there is no WAN and no hostname resolution.
 
 `area-fetch` IS THE ONE TO RUN BEFORE A TRIP. It is the same job the console runs
 by itself when a launch point is set (nav/service.py, AreaFetch), driven from a
 terminal instead of a WebSocket, so a card filled at home and a card filled by
 tapping the map are the same card.
+
+AND `crt-fetch` WITH NO AREA IS THE ONE THAT MATTERS MOST, ONCE. It downloads the
+whole Trust network — every lock, sluice, culvert, stop-plank groove, outfall,
+safety gate, bridge, towpath access point and the two big polygon layers, ~140 MB
+— onto this handheld, for the country and not for a box. The console does it by
+itself when the map backend starts; this is the same job from a terminal, and it
+is resumable, so being interrupted costs the page that was in flight and nothing
+else. An area is an optimisation for what to DRAW, never a precondition for
+having the data.
 """
 from __future__ import annotations
 
@@ -788,8 +802,124 @@ def _print_crt_diff(before: dict[str, int], after: dict[str, int]) -> None:
             print(f"  {k:<44} unchanged  {a:>10,} bytes")
 
 
+def _national_files(crt) -> dict[str, int]:
+    """The national layer files on this handheld, by name and size."""
+    out: dict[str, int] = {}
+    d = crt.national_dir()
+    if not d.is_dir():
+        return out
+    for p in sorted(d.glob("*.geojson")):
+        try:
+            out[p.name] = p.stat().st_size
+        except OSError:
+            out[p.name] = -1
+    return out
+
+
+def _print_national_status(crt) -> int:
+    """What is on this handheld, read off the disk. NO NETWORK — this is the question
+    an operator asks at the water, and it may not touch a socket to answer it."""
+    card = crt.national_card()
+    stale, why = crt.national_is_stale()
+    print(f"store    : {card['dir']}")
+    if not card["layers"] and not card["partial"]:
+        print("\nnothing has ever been downloaded. That is NOT a claim that the canals")
+        print("are clear — it is the absence of one, and the two look identical on a map")
+        print("that draws an absent layer as an empty one.")
+    for r in card["layers"]:
+        mark = "ok  " if r.get("intact") else "BAD "
+        print(f"  {mark}{r.get('layer_key'):<34} {(r.get('features') or 0):>7,} feat "
+              f"{(r.get('bytes_on_disk') or 0):>13,} B  fetched {r.get('fetched')}")
+        if not r.get("intact"):
+            print(f"      {'':<34} {(r.get('currency') or {}).get('why', '')}")
+    for p in card["partial"]:
+        print(f"  ...  {p['layer_key']:<34} {(p.get('features') or 0):>7,} feat  "
+              f"PART-DOWNLOADED — the next run continues from there")
+    for s in card["skipped"]:
+        print(f"  --   {s.get('layer_key'):<34} skipped ({s.get('skipped')}): "
+              f"{s.get('why')}")
+    print(f"\ntotal    : {len(card['layers'])} layer(s), {card['features']:,} feature(s), "
+          f"{card['bytes'] / 1e6:.0f} MB")
+    print(f"verdict  : {'FETCH NEEDED — ' if stale else 'complete — '}{why}")
+    print(f"serve it : GET /api/crt   and   GET /api/crt/<layer>")
+    return 1 if stale else 0
+
+
+def _crt_national(args, crt) -> int:
+    """The whole Trust network onto this handheld. BOOTSTRAP-time: needs internet."""
+    print("crt-fetch: the WHOLE Canal & River Trust network, nationally, once")
+    print("  BOOTSTRAP-time (§3). It needs the internet and there is none in the")
+    print("  isolated canal-side segment, so run it before you go. Sluices, weirs,")
+    print("  stop-plank grooves and outfalls are invisible from the surface — and a")
+    print("  marker that is not held cannot be got at the waterside.")
+    print("  ~140 MB, one time, resumable: an interrupted run continues from the page")
+    print("  it stopped on, and a layer already here and current is not asked for.\n")
+
+    stale, why = crt.national_is_stale()
+    print(f"store    : {crt.national_dir()}")
+    print(f"on hand  : {'INCOMPLETE — ' if stale else 'complete — '}{why}")
+    if not stale and not args.refresh:
+        print("\nnothing was fetched, because there was nothing to fetch. Pass --refresh")
+        print("to download it all again anyway.")
+        return _print_national_status(crt)
+
+    online, net_why = _reachable(settings.crt_hub_search_url)
+    print(f"internet : "
+          f"{('available — ' + net_why) if online else ('UNAVAILABLE — ' + net_why)}")
+    if not online:
+        print("\nnothing was fetched. What is on this handheld is unchanged, and an")
+        print("ABSENT layer is not an empty one — nothing above claims any water is")
+        print("clear. Come back to this before you go isolated.\n")
+        return _print_national_status(crt)
+
+    before = _national_files(crt)
+
+    async def say(msg: dict) -> None:
+        print("  " + " ".join(f"{k}={v}" for k, v in msg.items() if k != "scope"),
+              flush=True)
+
+    print("\nfetching (sequential and rate-limited — this is somebody's free quota):")
+    t0 = time.monotonic()
+    try:
+        res = asyncio.run(crt.download_national(progress=say, refresh=bool(args.refresh)))
+    except KeyboardInterrupt:
+        print("\nstopped. Every layer that finished is on this handheld and the one that",
+              file=sys.stderr)
+        print("was in flight continues from where it stopped next time.", file=sys.stderr)
+        return _print_national_status(crt)
+    except Exception as exc:  # noqa: BLE001 — documented not to raise; believe the disk
+        print(f"\nerror: the fetch raised ({_brief(exc)}). Whatever landed before it "
+              f"stopped is listed below.", file=sys.stderr)
+        res = {"ok": False, "error": _brief(exc)}
+
+    after = _national_files(crt)
+    print(f"\nwhat is on this handheld now (read off the disk, not off the downloader's "
+          f"report), {time.monotonic() - t0:.0f}s:")
+    _print_crt_diff(before, after)
+    if res.get("ok"):
+        print(f"\nlayers   : {res.get('written')} downloaded, "
+              f"{res.get('already_current')} already current, "
+              f"{res.get('features'):,} features, {(res.get('bytes') or 0) / 1e6:.0f} MB")
+    else:
+        print(f"\nfailed   : {res.get('error')}", file=sys.stderr)
+    for w in res.get("warnings") or []:
+        # Every one of these is a claim about what the file is worth — a licence that
+        # refuses reuse, a count that disagrees with the server's own, a layer that was
+        # NOT written. Printed in full: a warning nobody reads is worth no warning.
+        print(f"  warn   : {w}")
+    print(f"provenance: {crt.national_provenance_path()}")
+    print(f"serve it : GET /api/crt   and   GET /api/crt/<layer>")
+    return 0 if res.get("ok") else 1
+
+
 def _crt_fetch(args) -> int:
-    """Download the CRT hazard layers for an area. BOOTSTRAP-time: needs internet."""
+    """Download the CRT layers. BOOTSTRAP-time: needs internet.
+
+    WITH NO AREA NAMED THIS IS THE NATIONAL FETCH, which is the one that matters and
+    the one the console runs by itself on launch. Naming an area additionally cuts a
+    copy of each layer to that area's box — an optimisation for what a renderer has to
+    draw, and never a precondition for holding the data.
+    """
     try:
         from . import crt
     except ImportError as exc:      # noqa: F841 — reported, not raised
@@ -797,10 +927,32 @@ def _crt_fetch(args) -> int:
               f"the repo can fetch CRT layers", file=sys.stderr)
         return 2
 
-    print("crt-fetch: the Canal & River Trust hazard layers for an offline area")
+    if args.status:
+        print("crt-fetch --status: what the Canal & River Trust layers on this handheld")
+        print("  are, read off the disk. No network is touched.\n")
+        return _print_national_status(crt)
+    if args.list:
+        online, why = _reachable(settings.crt_hub_search_url)
+        print(f"internet : "
+              f"{('available — ' + why) if online else ('UNAVAILABLE — ' + why)}")
+        if not online:
+            print("\nthe layer catalogue lives on the Trust's servers and cannot be "
+                  "listed from here. What is already downloaded is a different "
+                  "question: crt-fetch --status answers it off the disk.",
+                  file=sys.stderr)
+            return 2
+        print("\nlayers the Trust currently publishes (key, layer id, national count, "
+              "licence class):")
+        return asyncio.run(crt._main(["--list"]))
+    if args.national or not args.area:
+        return _crt_national(args, crt)
+
+    print("crt-fetch: a clipped COPY of the Trust's layers for one offline area")
     print("  BOOTSTRAP-time (§3). It needs the internet and there is none in the")
-    print("  isolated canal-side segment, so run it before you go. Sluices, weirs,")
-    print("  stop-plank grooves and outfalls are invisible from the surface.\n")
+    print("  isolated canal-side segment, so run it before you go.")
+    print("  THE DATA IS NATIONAL — `crt-fetch` with no area name holds the whole")
+    print("  network on this handheld. This cuts a smaller copy for one box, which")
+    print("  is a convenience for drawing and not a different claim about the water.\n")
 
     # PREFLIGHT — every reason this cannot work, gathered before anything is
     # tried, so one run tells the whole story. A command that reports the first
@@ -809,20 +961,12 @@ def _crt_fetch(args) -> int:
     online, why = _reachable(settings.crt_hub_search_url)
     print(f"internet : {('available — ' + why) if online else ('UNAVAILABLE — ' + why)}")
 
-    if args.list:
-        if not online:
-            print("\nthe layer catalogue lives on the Trust's servers and cannot be "
-                  "listed from here.", file=sys.stderr)
-            return 2
-        print("\nlayers the Trust currently publishes (key, layer id, national count, "
-              "licence class):")
-        return asyncio.run(crt._main(["--list"]))
-
     name = crt.safe_area_name(args.area or "")
     if not name:
         print(f"error: {args.area!r} is not a usable area name — it has to be plain "
               f"letters, digits, spaces, dot, dash or underscore, because it becomes a "
-              f"directory name.", file=sys.stderr)
+              f"directory name, and it may not be {settings.crt_national_name!r}, which "
+              f"is where the whole network lives.", file=sys.stderr)
         return 2
 
     if args.bbox:
@@ -1332,9 +1476,23 @@ def main(argv=None) -> int:
     af.add_argument("--dry-run", action="store_true",
                     help="report what is on the card and fetch nothing")
     cf = sub.add_parser("crt-fetch",
-                        help="download the CRT hazard layers for an area "
-                             "(BOOTSTRAP-time: needs internet)")
-    cf.add_argument("area", nargs="?", help="an area already on this card (see /api/areas)")
+                        help="download the Canal & River Trust's layers — the WHOLE "
+                             "national network by default (BOOTSTRAP-time: needs "
+                             "internet, ~140 MB, resumable)")
+    cf.add_argument("area", nargs="?",
+                    help="OPTIONAL. Name an area and a clipped COPY of each layer is "
+                         "cut for its box as well — an optimisation for drawing. With "
+                         "no name, the whole national network is fetched, which is the "
+                         "data itself and needs no area to exist")
+    cf.add_argument("--national", action="store_true",
+                    help="the whole network, explicitly (this is also the default when "
+                         "no area is named)")
+    cf.add_argument("--status", action="store_true",
+                    help="what is on this handheld already, read off the disk. Touches "
+                         "no network, so it answers at the water's edge")
+    cf.add_argument("--refresh", action="store_true",
+                    help="download layers again even when they are already here and "
+                         "current (by default nothing current is re-requested)")
     cf.add_argument("--bbox", default=None,
                     help="W,S,E,N in degrees, overriding the area's own bbox")
     cf.add_argument("--list", action="store_true",

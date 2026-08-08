@@ -557,6 +557,32 @@ body.map-blind #crt-panel.on{display:flex}
   border-radius:.3rem;border:1px solid rgba(180,107,255,.4);color:var(--on-surface-variant);
   background:transparent;cursor:pointer}
 .crt-btn:hover{border-color:var(--primary);color:var(--primary)}
+/* ---- THE NATIONAL STORE, ONE LINE, AT THE VERY TOP -------------------------
+   The first thing in the panel because it is the first question: is the map here.
+   The two ordinary answers are HERE and DOWNLOADING, and both of them are drawn in
+   the calm colours - the tertiary green for held, the primary purple for a download
+   in flight. Only the two that mean something is missing get an absence treatment,
+   and only ONE of them (a store that was here and cannot be read) gets an alarm
+   colour: a handheld that has simply not run the launch fetch yet has nothing wrong
+   with it, and spending the fault colour on it is how the fault colour stops
+   meaning anything. */
+.crt-net{flex:0 0 auto;padding:7px 10px 8px;border-bottom:1px solid rgba(255,255,255,.10)}
+.crt-net-line{display:flex;align-items:center;gap:6px}
+.crt-net-title{flex:1;font-family:var(--font-sans);font-size:9px;font-weight:800;letter-spacing:.14em;
+  color:var(--on-surface-variant)}
+.crt-net-pill{flex:0 0 auto;font-family:var(--font-sans);font-size:9px;font-weight:800;letter-spacing:.06em;
+  padding:2px 6px;border-radius:8px;white-space:nowrap;color:var(--on-surface-variant);
+  border:1px solid rgba(255,255,255,.14)}
+.crt-net-pill.n-here{color:var(--tertiary);border-color:color-mix(in srgb,var(--tertiary) 45%,transparent)}
+.crt-net-pill.n-busy{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 55%,transparent)}
+.crt-net-pill.n-none{color:rgba(185,169,214,.8);border-style:dashed;border-color:rgba(185,169,214,.45)}
+.crt-net-pill.n-lost{color:var(--hazard);border-color:var(--hazard)}
+.crt-net-bar{height:3px;margin-top:5px;border-radius:2px;background:rgba(255,255,255,.08);
+  overflow:hidden;opacity:0}
+.crt-net-bar.on{opacity:1}
+.crt-net-fill{display:block;height:100%;width:0;background:var(--primary);
+  transition:width .25s linear}
+.crt-net.n-here .crt-net-fill{background:var(--tertiary)}
 /* ---- OFFLINE DATA — the download block, above the layer list ----------------
    Above the list and not below it: an operator whose map is blank opens this panel
    to ask why, and "it has not been downloaded / it is downloading now" is the answer
@@ -596,13 +622,21 @@ body.map-blind #crt-panel.on{display:flex}
 .crt-fetch-rows{display:flex;flex-direction:column;gap:5px}
 .crt-fetch-row{display:flex;flex-direction:column;gap:3px}
 .crt-fetch-line{display:flex;align-items:center;gap:6px}
-.crt-fetch-src{font-family:var(--font-sans);font-size:9.5px;font-weight:800;letter-spacing:.06em;
-  color:var(--on-surface);white-space:nowrap}
+/* THE NAME WRAPS RATHER THAN SQUEEZING THE DESTINATION OFF THE ROW. It used to be
+   nowrap on a 330 px panel, which was fine while the longest name was "SATELLITE
+   IMAGERY" — and stopped being fine the moment the chart row became CANAL & RIVER
+   TRUST NETWORK: the name took the whole line and the "-> this handheld" beside it was
+   ellipsised down to an arrow and a full stop. A row that names a source and not its
+   destination is exactly the row this block exists to prevent, because "imagery on
+   this handheld" and "imagery on the Pi's card" are two different copies. */
+.crt-fetch-src{flex:0 1 auto;min-width:0;font-family:var(--font-sans);font-size:9.5px;font-weight:800;
+  letter-spacing:.06em;color:var(--on-surface);line-height:1.25}
 /* WHERE IT LANDS, on every row. "Imagery" downloaded to this handheld and "imagery"
    downloaded to the Pi's card are two different copies with two different uses, and a
    row that named only the source would let one stand in for the other. */
-.crt-fetch-dest{flex:1;font-family:var(--font-sans);font-size:9px;color:rgba(185,169,214,.7);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.crt-fetch-dest{flex:1 0 auto;font-family:var(--font-sans);font-size:9px;color:rgba(185,169,214,.7);
+  white-space:nowrap}
+.crt-fetch-line{flex-wrap:wrap}
 /* The bar is the "how far through" half of the requirement. It is drawn ONLY once
    there is real progress to draw (.on): an empty trough under a row that has not
    started looks like a download stalled at zero. */
@@ -652,6 +686,16 @@ body.map-blind #crt-panel.on{display:flex}
 .crt-state.s-not-downloaded{color:rgba(185,169,214,.8);border-style:dashed;
   border-color:rgba(185,169,214,.45)}
 .crt-state.s-loading{color:var(--primary)}
+/* DOWNLOADING is not an absence at all — it is a thing that is happening and will
+   finish, and it is the ordinary state of a new handheld exactly once. The download
+   colour, solid, the same purple the offline-data block uses for a running fetch: an
+   operator who sees it should wait, not go hunting for a fault. */
+.crt-state.s-downloading{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 55%,transparent)}
+/* HELD is HERE with the file not yet read into memory, which happens only on a console
+   that has no position to read a window around. The data is present, so it wears the
+   present colour, dashed to say the console is not drawing from it yet. */
+.crt-state.s-held{color:color-mix(in srgb,var(--tertiary) 80%,var(--on-surface-variant));
+  border-style:dashed;border-color:color-mix(in srgb,var(--tertiary) 40%,transparent)}
 .crt-state.s-off,.crt-state.s-no-area{color:rgba(185,169,214,.65)}
 /* A count with a +N on it is two facts in one pill: what the Pi has saved, and what
    this sub has measured since. Bordered so the compound reading is visibly compound. */
@@ -672,9 +716,27 @@ body.map-blind #crt-panel.on{display:flex}
 /* Dimmed, but less than the two that mean something is wrong — the mark is not being
    drawn, and the reason is that it has not arrived rather than that it is missing. */
 .crt-row.not-downloaded .crt-glyph{opacity:.55}
-.crt-credit{padding:7px 10px;border-top:1px solid rgba(255,255,255,.08);
+/* A layer on its way is not dimmed at all: it is going to be here in a moment and
+   dimming it would file it with the absences. */
+.crt-row.downloading .crt-glyph{opacity:.8}
+.crt-row.held .crt-glyph{opacity:.85}
+/* BOUNDED, AND IT HAS TO BE. With every layer drawn, the national store hands back
+   nine distinct licence statements instead of one, and an unbounded credit block grew
+   until it pushed the entire layer list off the bottom of a 330 px panel — the whole
+   surface lost to its own footnotes. Capped and scrollable: every word stays present
+   and reachable, which is what the licence asks, and none of them can displace the
+   thing the panel is for. */
+/* COLLAPSED BY DEFAULT, behind the (i) in the panel header. The licence has to be
+   available, not permanently on screen, and pinned open it was eating a quarter of the
+   panel and crushing the hazard list into a scroll strip. */
+.crt-credit.is-hidden{display:none}
+.crt-btn-i{font-size:13px;line-height:1;padding-left:7px;padding-right:7px}
+.crt-btn-i[aria-expanded="true"]{color:var(--primary);border-color:var(--primary)}
+.crt-credit{flex:0 0 auto;padding:7px 10px;border-top:1px solid rgba(255,255,255,.08);
   font-family:var(--font-sans);font-size:9px;line-height:1.35;color:rgba(185,169,214,.85);
-  -webkit-user-select:text;user-select:text}
+  max-height:64px;overflow-y:auto;-webkit-user-select:text;user-select:text}
+.crt-credit-line + .crt-credit-line{margin-top:3px;padding-top:3px;
+  border-top:1px solid rgba(255,255,255,.06)}
 /* Row glyphs: the SAME shapes the canvas draws (octagon / rounded square / dot), so
    the key and the map are one vocabulary and not two. */
 .crt-g.t1 polygon{fill:var(--hazard);stroke:#0c0118;stroke-width:1.4}

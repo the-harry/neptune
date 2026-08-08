@@ -5,10 +5,26 @@
     1. finds the Pi (probes the tether IP, neptune.local, then the saved address)
     2. creates a Desktop shortcut with the trident icon (first run only)
     3. starts a small CONCURRENT local static server for the dashboard (127.0.0.1)
-    4. opens Chrome / Edge FULLSCREEN, pointed at the Pi
+    4. starts the MAP BACKEND on this handheld, so the chart layers, the offline
+       areas, the downloader and the readiness check all work with no Pi attached
+    5. opens Chrome / Edge FULLSCREEN, pointed at the Pi
        ...then serves until you close the window, then stops and cleans up after itself.
 
   The Pi is backend-only and plain HTTP (sealed tether, no TLS) - no certificate to deal with.
+
+  THE MAP AND THE VEHICLE ARE DIFFERENT BACKENDS (step 4, and the reason it exists).
+    Sim mode means THERE IS NO SUB: the physics is a model, and every reading taken off
+    it is flagged as simulated, which this project enforces everywhere. It has never
+    meant the MAP is fake. Satellite imagery, the Trust's hazard layers, the canal
+    centreline and the offline area are real data about real water, downloaded from real
+    services, and they are exactly as true with nothing on the end of the tether as with
+    a sub on it.
+    Conflating the two is what left the map blank on a handheld perfectly capable of
+    holding it: every chart layer is an API endpoint, this launcher served the client's
+    FILES and started no backend at all, and so the chart panel said "no chart data
+    downloaded" - which was true, and useless. Step 4 gives the Ally a MAP. It does not
+    give it a sub: NEPTUNE_HW lands on the bench mock and the console goes on flagging
+    the simulated vehicle exactly as it does now.
 
   SAFETY / RECOVERY (why this is not a kiosk):
     The Ally has no physical keyboard, so a locked --kiosk window cannot be closed by the
@@ -19,9 +35,11 @@
   Options:
     -PiHost 192.168.42.1   skip discovery, use this address
     -Port 8080             local static-server port (auto-advances if busy)
+    -ApiPort 8000          local MAP backend port (FIXED, not auto-advanced - see step 4)
+    -NoApi                 do not start the map backend (dashboard files only)
     -Kiosk                 locked kiosk window (NOT recommended on the handheld)
     -Setup                 steps 1-2 only, don't launch
-    -Stop                  kill any running Neptune server/browser and exit
+    -Stop                  kill any running Neptune server/browser/map backend and exit
     -Test [client|api]     run the check suites, show the result, exit nonzero if bad
 #>
 param(
@@ -32,11 +50,25 @@ param(
   [switch]$Stop,
   [switch]$SafeGraphics,
   [switch]$NoGpu,
-  [switch]$Test
+  [switch]$Test,
+  # DELIBERATELY NOT auto-advanced the way -Port is. The static server's port only has
+  # to be free, because the launcher hands the browser the URL it chose. The map
+  # backend's port has to be GUESSABLE: the dashboard has to find it without being told,
+  # and 127.0.0.1:8000 is the address this whole repo already writes down (bootstrap.py
+  # prints it, api/config.py defaults to it). A launcher that quietly slid to 8001 would
+  # leave a running map backend the console could not find, which looks exactly like the
+  # blank map this step exists to fix. If it is busy, we say so instead.
+  [int]$ApiPort = 8000,
+  [switch]$NoApi
 )
 
 $ErrorActionPreference = "Stop"
 $root      = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+# The checkout, one level above the client. Resolved ONCE up here because two things now
+# need it - the check suites and the map backend - and a launcher with two opinions about
+# where the repo is would eventually test one tree and serve another.
+$repoRoot  = (Resolve-Path (Join-Path $root "..")).Path
+$apiDir    = Join-Path $repoRoot "api"
 $icon      = Join-Path $root "icon.ico"
 $hostFile  = Join-Path $PSScriptRoot "neptune-host.txt"
 # The camera AP's SSID (or any distinctive part of it). Used by /__wifi to answer
@@ -60,7 +92,7 @@ $userdata     = Join-Path $userdataBase "browser"   # replaced once the browser 
 # (See client/launch/README.md - the Ally holds 192.168.42.2/24 on its Ethernet adapter.)
 $TetherHost = "192.168.42.1"
 
-function Step([string]$n, [string]$m) { Write-Host "`n[$n/4] $m" -ForegroundColor Cyan }
+function Step([string]$n, [string]$m) { Write-Host "`n[$n/5] $m" -ForegroundColor Cyan }
 function OK([string]$m)   { Write-Host "      OK  $m" -ForegroundColor Green }
 function Info([string]$m) { Write-Host "      --  $m" -ForegroundColor DarkGray }
 function Nope([string]$m) { Write-Host "      !!  $m" -ForegroundColor Yellow }
@@ -80,6 +112,90 @@ function PauseBriefly([int]$seconds = 20) {
     }
     Start-Sleep -Milliseconds 100
   }
+}
+
+# ---------------------------------------------------------------------------
+# WHICH PYTHON. Two things here need one now - the check suites (-Test) and the map
+# backend (step 4) - so the search is written ONCE. Two copies would be two opinions
+# about which interpreter owns the api, and they would drift apart on the one machine
+# where that matters.
+#
+# The order is the repo's, not a new one: bootstrap.py's venv_python() and
+# api/tests/run.py's VENVS both believe ROOT/.venv first (bootstrap.py --dev builds it
+# on a dev box), then api/.venv (install.sh builds it on the Pi and runs uvicorn from
+# it). Only when this checkout has neither do we fall back to PATH.
+#
+# A PATH python is PROVED to run before it is used: on Windows `python.exe` is usually
+# the Microsoft Store alias stub, which is not an interpreter at all - it opens the
+# Store. Trusting the name alone is how a launcher reports a green run it never made,
+# or reports a map backend it never started.
+# ---------------------------------------------------------------------------
+function TryPython([string]$exe, [string[]]$pre) {
+  if (-not $exe) { return $null }
+  try {
+    $probe = @()
+    if ($pre) { $probe += $pre }
+    $probe += @("-c", "import sys; print(sys.version.split()[0])")
+    $out = & $exe @probe
+    if ($LASTEXITCODE -ne 0) { return $null }
+    $ver = "$($out | Select-Object -First 1)".Trim()
+    if ($ver -notmatch '^\d+\.\d+') { return $null }
+    return @{ exe = $exe; pre = $pre; ver = $ver; how = "" }
+  } catch { return $null }
+}
+function Find-Python {
+  foreach ($venv in @((Join-Path $repoRoot ".venv"), (Join-Path $repoRoot "api\.venv"))) {
+    $cand = Join-Path $venv "Scripts\python.exe"
+    if (Test-Path $cand) {
+      $py = TryPython $cand @()
+      if ($py) { $py.how = "repo venv"; return $py }
+    }
+  }
+  foreach ($name in @("python.exe", "python3.exe")) {
+    foreach ($c in @(Get-Command $name -All -ErrorAction SilentlyContinue)) {
+      $py = TryPython $c.Source @()
+      if ($py) { $py.how = "found on PATH"; return $py }
+    }
+  }
+  $c = @(Get-Command "py.exe" -ErrorAction SilentlyContinue) | Select-Object -First 1
+  if ($c) { $py = TryPython $c.Source @("-3"); if ($py) { $py.how = "py launcher"; return $py } }
+  return $null
+}
+
+# ---------------------------------------------------------------------------
+# MAP BACKEND process bookkeeping - keyed on OUR --app-dir, exactly the way the browser
+# scan below is keyed on our --user-data-dir, and for the same reason: an operator may
+# well have a uvicorn of their own running on this machine and it is not ours to kill.
+#
+# The marker is REAL WORK rather than a tag nobody would miss: --app-dir is what puts
+# api/ on the child's sys.path, so it cannot be quietly dropped from the command line
+# without the backend failing to import at all.
+# ---------------------------------------------------------------------------
+function Get-NeptuneApi {
+  # WildcardPattern::Escape, not the raw path: a checkout under a directory containing
+  # [ or ] would otherwise be read as a character class by -like and match nothing,
+  # which fails in the worst direction - a leftover backend nobody cleans up.
+  $pattern = "*--app-dir*" + [System.Management.Automation.WildcardPattern]::Escape($apiDir) + "*"
+  Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe' OR Name='python3.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -like "*uvicorn*" -and $_.CommandLine -like $pattern }
+}
+function Stop-NeptuneApi {
+  $procs = @(Get-NeptuneApi)
+  if (-not $procs.Count) { return 0 }
+  foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+  Start-Sleep -Milliseconds 400
+  return $procs.Count
+}
+# Is a Neptune api answering on this URL? Returns its parsed /api/healthz document, or
+# $null. Deliberately asks for the HEALTH document rather than merely opening a socket:
+# "something is listening on 8000" and "the map backend is up" are different facts, and
+# reporting the first as the second is how a console ends up pointed at a stranger.
+function Get-ApiHealth([string]$url, [int]$timeoutSec = 2) {
+  try {
+    $r = Invoke-WebRequest -Uri $url -TimeoutSec $timeoutSec -UseBasicParsing -ErrorAction Stop
+    if ($r.StatusCode -ne 200) { return $null }
+    return ($r.Content | ConvertFrom-Json)
+  } catch { return $null }
 }
 
 # ---------------------------------------------------------------------------
@@ -106,8 +222,14 @@ function Stop-NeptuneBrowsers {
 # ---- -Stop: clean up and get out --------------------------------------------
 if ($Stop) {
   $n = Stop-NeptuneBrowsers
-  Write-Host "stopped $n Neptune browser process(es)." -ForegroundColor Magenta
-  # the server dies with its own process; nothing else to do
+  # The map backend OUTLIVES the launcher if the launcher was killed rather than closed
+  # (Task Manager, a hard reboot of the shell, a crash) - it is a separate process, not a
+  # thread of this one. It is also the one thing here that holds a well-known port, so a
+  # -Stop that left it running would make the very next launch report 8000 busy. That is
+  # exactly the "looks wedged" state -Stop exists to clear.
+  $a = Stop-NeptuneApi
+  Write-Host "stopped $n Neptune browser process(es) and $a map backend process(es)." -ForegroundColor Magenta
+  # the static file server dies with its own process; nothing else to do
   return
 }
 
@@ -178,54 +300,10 @@ if ($Test) {
 
   Write-Host "`n========  NEPTUNE CHECKS  ========" -ForegroundColor Magenta
 
-  # Find python the way the rest of the repo already does, and for the same reason:
-  # bootstrap.py's venv_python() and api/tests/run.py's VENVS both believe ROOT/.venv
-  # first (bootstrap.py --dev builds it on a dev box), then api/.venv (install.sh builds
-  # it on the Pi and runs uvicorn from it). A launcher that assumed 'python' was on PATH
-  # would be a third opinion about which interpreter owns the api, and the one machine
-  # where that matters is the one being tested.
-  #
-  # Only when this checkout has neither venv do we fall back to PATH, and then the
-  # interpreter is PROVED to run before it is used: on Windows `python.exe` is usually
-  # the Microsoft Store alias stub, which is not an interpreter at all - it opens the
-  # Store. Trusting the name alone is how a launcher reports a green run it never made.
-  function TryPython([string]$exe, [string[]]$pre) {
-    if (-not $exe) { return $null }
-    try {
-      $probe = @()
-      if ($pre) { $probe += $pre }
-      $probe += @("-c", "import sys; print(sys.version.split()[0])")
-      $out = & $exe @probe
-      if ($LASTEXITCODE -ne 0) { return $null }
-      $ver = "$($out | Select-Object -First 1)".Trim()
-      if ($ver -notmatch '^\d+\.\d+') { return $null }
-      return @{ exe = $exe; pre = $pre; ver = $ver }
-    } catch { return $null }
-  }
-
-  $repoRoot = (Resolve-Path (Join-Path $root "..")).Path
-  $py = $null
-  $pyHow = ""
-  foreach ($venv in @((Join-Path $repoRoot ".venv"), (Join-Path $repoRoot "api\.venv"))) {
-    $cand = Join-Path $venv "Scripts\python.exe"
-    if (Test-Path $cand) {
-      $py = TryPython $cand @()
-      if ($py) { $pyHow = "repo venv"; break }
-    }
-  }
-  if (-not $py) {
-    foreach ($name in @("python.exe", "python3.exe")) {
-      foreach ($c in @(Get-Command $name -All -ErrorAction SilentlyContinue)) {
-        $py = TryPython $c.Source @()
-        if ($py) { $pyHow = "found on PATH"; break }
-      }
-      if ($py) { break }
-    }
-  }
-  if (-not $py) {
-    $c = @(Get-Command "py.exe" -ErrorAction SilentlyContinue) | Select-Object -First 1
-    if ($c) { $py = TryPython $c.Source @("-3"); if ($py) { $pyHow = "py launcher" } }
-  }
+  # Find-Python, defined once at the top of this file - the repo venvs first, then a
+  # PATH interpreter that is proved to run. See the comment on it for why the order is
+  # the repo's and not a new one.
+  $py = Find-Python
   if (-not $py) {
     Nope "no working python found (tried the repo venvs, PATH, then the py launcher)"
     Info "install Python 3, or run:  python bootstrap.py --dev  from $repoRoot"
@@ -234,7 +312,7 @@ if ($Test) {
     exit 2
   }
   $pyExe = $py.exe
-  OK "python $($py.ver)  ($pyHow)"
+  OK "python $($py.ver)  ($($py.how))"
   Info $pyExe
 
   $suites = @()
@@ -340,12 +418,20 @@ if (-not $createdNew) {
 # whenever Chromium hands the command line to an existing instance for that profile.
 $listener   = $null
 $pool       = $null
+# The map backend we started, if we started one. $null also means "adopted someone
+# else's" or "never came up", and the difference decides whether we may kill it.
+$apiProc    = $null
 # Shared with the request handlers, which run on pool runspaces and can see NOTHING
 # from this scope except what is passed in. `rec` holds the live ffmpeg process so a
 # later /__record?action=stop can find the one an earlier request started.
+# The api* fields are how /__api answers the dashboard: this window is behind a
+# fullscreen browser thirty seconds after launch, so anything only printed here is
+# effectively unread on the machine that matters.
 $shared     = [hashtable]::Synchronized(@{ quit = $false; ffmpeg = ""; rec = $null; recFile = ""; recStarted = $null;
                                           netAt = $null; wifiSsids = @(); wifiErr = $null; camSsidPath = "";
-                                          netWifi = $null; netEth = $null })
+                                          netWifi = $null; netEth = $null;
+                                          apiOk = $false; apiUrl = ""; apiWhy = "not started yet"; apiHw = "";
+                                          apiAreas = -1 })
 
 # Everything the session produces, in one place the operator can actually find.
 #   navigation_logs/images  PIC stills
@@ -647,6 +733,39 @@ try {
         return
       }
 
+      # ---- /__api : WHERE THE MAP BACKEND IS, and whether it came up ----------
+      #
+      # The page cannot work this out for itself, and the launcher's own answer is
+      # printed to a console that is behind a fullscreen browser within half a minute
+      # of launch - so on the machine that matters, that message is unread. Without
+      # this, a dashboard with no map backend and a dashboard with an empty card look
+      # identical: both say "no chart data downloaded", which is true and useless, and
+      # is the exact defect this endpoint exists to make actionable. `why` carries the
+      # launcher's own words for whatever went wrong, so the console can repeat them
+      # instead of inventing a diagnosis.
+      #
+      # THE MAP IS NOT THE VEHICLE. `hardware` is the api's bench mock and is reported
+      # so nothing can mistake this backend for a sub - `vehicle:false` says the same
+      # thing in one field. What it SERVES (offline areas, the Trust's chart layers,
+      # the centreline, the depth models) is real data about real water and is NOT
+      # flagged as simulated, because it is not.
+      if ($path -eq "/__api") {
+        $payload = [ordered]@{
+          ok       = [bool]$shared.apiOk
+          url      = "$($shared.apiUrl)"
+          why      = "$($shared.apiWhy)"
+          hardware = "$($shared.apiHw)"
+          areas    = [int]$shared.apiAreas   # -1 = not asked / could not ask; 0 = a real, empty card
+          vehicle  = $false
+        }
+        $json = ($payload | ConvertTo-Json -Compress -Depth 4)
+        $body = [System.Text.Encoding]::UTF8.GetBytes($json)
+        $head = "HTTP/1.1 200 OK`r`nContent-Type: application/json`r`nCache-Control: no-store`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n"
+        $hb = [System.Text.Encoding]::ASCII.GetBytes($head)
+        $stream.Write($hb, 0, $hb.Length); $stream.Write($body, 0, $body.Length); $stream.Flush()
+        return
+      }
+
       # The dashboard's EXIT button hits this so the operator can always get out.
       if ($path -eq "/__quit") {
         $shared.quit = $true
@@ -864,7 +983,215 @@ try {
   $inflight = New-Object System.Collections.ArrayList
 
   # =========================================================================
-  Step 4 "Dashboard"
+  Step 4 "Map backend"
+  # =========================================================================
+  # THE ALLY HOLDS THE MAP DATA, NOT THE PI - and until this step it had nothing to
+  # hold it WITH.
+  #
+  # Every piece of chart the console draws is an API endpoint: /api/areas (what is on
+  # this card), /api/areas/<a>/crt and /crt/<layer> (the Trust's hazard layers),
+  # /api/areas/<a>/depth/nominal and /depth/surveyed, /api/areas/<a>/centreline,
+  # /api/areas/fetch (the downloader) and /api/readiness. This launcher used to serve
+  # the client's FILES and start no backend at all, so with no Pi on the tether there
+  # was nothing to answer any of them, and the chart panel said "no chart data
+  # downloaded". That sentence was TRUE and USELESS: it named a missing download when
+  # what was missing was a server.
+  #
+  # WHY IT IS RIGHT TO RUN THIS WITH NO SUB ATTACHED. The vehicle and the map are two
+  # different backends that happen to live in one process. Simulating the VEHICLE means
+  # there is no sub and every reading off the model is flagged - that rule does not move.
+  # The MAP is satellite imagery, the Trust's hazard layers, the canal centreline and an
+  # offline area: real data about real water, downloaded from real services, exactly as
+  # true with nothing on the tether as with a sub on it. So the map data served here is
+  # NOT marked simulated, because it is not.
+  #
+  # And it is not a vehicle: NEPTUNE_HW=mock below, reported on this screen and on
+  # /__api, with the console's SIM flagging left exactly as it is.
+  $apiUrl    = "http://127.0.0.1:$ApiPort"
+  $apiHealth = "$apiUrl/api/healthz"
+  $shared.apiUrl = $apiUrl
+
+  if ($NoApi) {
+    $shared.apiWhy = "not started: -NoApi was passed"
+    Nope "map backend NOT started (-NoApi) - areas, chart layers and downloads are unavailable"
+    Info "the dashboard still opens and flies; only the map has no data source"
+  } else {
+    # Ours from a previous run first, for the same reason the orphaned-browser sweep
+    # exists below: this process outlives a launcher that was killed rather than closed,
+    # it holds a well-known port, and a second launch either fails to bind or ends up
+    # talking to a backend nobody is supervising. A uvicorn wearing our --app-dir marker
+    # is ours by definition and is cleared out here.
+    $staleApi = Stop-NeptuneApi
+    if ($staleApi) { Info "closed $staleApi map backend(s) left by a previous run" }
+
+    # Anything still ANSWERING on the port after that sweep is not ours - almost always
+    # the operator's own `uvicorn main:app` from a terminal. Adopt it and leave it alone
+    # at exit: a working map is a working map, and killing a server somebody else started
+    # is not this launcher's business.
+    $health = Get-ApiHealth $apiHealth 2
+    if ($health) {
+      $shared.apiOk = $true
+      $shared.apiWhy = "adopted a map backend that was already running on this port"
+      $shared.apiHw  = "$($health.hardware)"
+      OK "map backend already up on $apiUrl (started by hand - left running at exit)"
+    } else {
+      # Something listening that will not answer /api/healthz is NOT a map backend, and
+      # the child would only fail to bind. Name the process holding the port, because
+      # "port in use" without a culprit is a dead end on a machine with no terminal.
+      $squatter = $null
+      try {
+        $conn = @(Get-NetTCPConnection -State Listen -LocalPort $ApiPort -ErrorAction SilentlyContinue) | Select-Object -First 1
+        if ($conn) { $squatter = Get-CimInstance Win32_Process -Filter "ProcessId=$($conn.OwningProcess)" -ErrorAction SilentlyContinue }
+      } catch { }
+
+      $py = $null
+      if (-not $squatter) { $py = Find-Python }
+
+      if ($squatter) {
+        $shared.apiWhy = "port $ApiPort is held by $($squatter.Name) (pid $($squatter.ProcessId)), which is not a Neptune api"
+        Nope "port $ApiPort is held by $($squatter.Name) (pid $($squatter.ProcessId)) and it is not a Neptune api"
+        Info "close it, or relaunch with a different port:  Neptune.bat -ApiPort 8010"
+        Info "the dashboard still opens - the MAP is what loses its data source"
+      }
+      elseif (-not $py) {
+        $shared.apiWhy = "no python interpreter on this handheld"
+        Nope "no working python (tried the repo venvs, PATH, then the py launcher) - no map backend"
+        Info "install Python 3, or run:  python bootstrap.py --dev  from $repoRoot"
+        Info "the dashboard still opens - the MAP is what loses its data source"
+      }
+      else {
+        OK "python $($py.ver)  ($($py.how))"
+
+        # Both streams to disk, TRUNCATED per launch. This is the only record of a
+        # backend that dies in 300 ms, and it is read exactly once - just after it
+        # happened - so an append-forever file on a handheld is a file nobody opens.
+        $apiOut = Join-Path $artifactRoot "logs\map-backend.out.log"
+        $apiErr = Join-Path $artifactRoot "logs\map-backend.err.log"
+        foreach ($f in @($apiOut, $apiErr)) { try { [System.IO.File]::WriteAllText($f, "") } catch {} }
+
+        # NEPTUNE_HW=mock, stated rather than left to `auto`.
+        #
+        # `auto` lands on the same bench mock here (RealHardware.__init__ raises while
+        # the GPIO is unwired), but it gets there by TRYING TO BE A VEHICLE and failing,
+        # and it logs that as a warning on a machine where no sub was ever expected.
+        # Saying `mock` states the intent outright: this process is a MAP SERVER ON A
+        # HANDHELD. Everything it reports about a vehicle is simulated, is flagged as
+        # simulated by the api and by the console, and stays that way.
+        $env:NEPTUNE_HW = "mock"
+        # No camera either. Left on `auto` the api hunts for one and would end up
+        # holding the Ally's own webcam; a map server has no business opening it.
+        $env:NEPTUNE_CAM = "none"
+
+        # --host 127.0.0.1 (NOT the api's own 0.0.0.0 default): this is a backend for the
+        # handheld it runs on, exactly like the static server above, and nothing off this
+        # machine should be able to reach it.
+        # --app-dir puts api/ on the child's sys.path AND is the marker Get-NeptuneApi
+        # recognises as ours.
+        # --log-level warning because at info uvicorn logs one line PER TILE REQUEST, and
+        # a map pan would write megabytes to a log that only exists for crash tails.
+        # Each argument is quoted here rather than left to Start-Process: PowerShell 5.1
+        # joins -ArgumentList with plain spaces and adds no quoting of its own, so a
+        # checkout under a path with a space in it would arrive as two arguments.
+        $apiArgs = @()
+        if ($py.pre) { $apiArgs += $py.pre }
+        $apiArgs += @("-m", "uvicorn", "main:app",
+                      "--host", "127.0.0.1",
+                      "--port", "$ApiPort",
+                      "--app-dir", ('"' + $apiDir + '"'),
+                      "--log-level", "warning")
+        $apiProc = $null
+        try {
+          $apiProc = Start-Process -FilePath $py.exe -ArgumentList $apiArgs -WorkingDirectory $apiDir `
+                                   -NoNewWindow -PassThru `
+                                   -RedirectStandardOutput $apiOut -RedirectStandardError $apiErr
+        } catch {
+          Nope "could not start the map backend: $($_.Exception.Message)"
+        }
+
+        # Supervise the start rather than assume it. A first run imports fastapi, the nav
+        # service and the chart code, which is seconds rather than milliseconds on this
+        # handheld - and "started the process" is not the same claim as "the map has a
+        # backend", which is the claim the operator needs.
+        $health = $null
+        if ($apiProc) {
+          Info "starting it (this takes a few seconds the first time)"
+          $waitedMs = 0
+          while ($waitedMs -lt 40000) {
+            # THE PORT IS ASKED FIRST, AND HasExited SECOND. Measured on this handheld:
+            # the python on PATH is the Windows Python Manager SHIM
+            # (WindowsApps\...PythonManager\python.exe), which re-execs the real
+            # interpreter (pythoncore-3.14-64\python.exe) as a CHILD carrying the same
+            # command line - so Start-Process hands back a wrapper, not the server. A
+            # wrapper exiting is not the same event as the map backend dying, and
+            # checking the handle first would let a perfectly healthy backend be
+            # reported dead. Only the port can answer "is the map served".
+            $health = Get-ApiHealth $apiHealth 2
+            if ($health) { break }
+            if ($apiProc.HasExited) { break }
+            Start-Sleep -Milliseconds 400
+            $waitedMs += 400
+          }
+        }
+
+        if ($health) {
+          $shared.apiOk  = $true
+          $shared.apiWhy = ""
+          $shared.apiHw  = "$($health.hardware)"
+          OK "map backend on $apiUrl  (started here; stops when this window does)"
+          Info "vehicle hardware: $($health.hardware) - this serves the MAP. The sub stays simulated and flagged."
+
+          # THE OTHER HALF OF THE ORIGINAL COMPLAINT. With a backend up, "no chart data
+          # downloaded" finally has two possible meanings, so say which one this handheld
+          # is in: a map server with nothing on the card is still a blank map, and that is
+          # a download somebody has to go and do while there is internet.
+          $areas = Get-ApiHealth "$apiUrl/api/areas" 6
+          if ($null -eq $areas) {
+            $shared.apiAreas = -1
+            Info "could not list the offline areas - the map panel will say what it finds"
+          } else {
+            $names = @(@($areas.areas) | ForEach-Object { $_.name } | Where-Object { $_ })
+            $shared.apiAreas = $names.Count
+            if ($names.Count -gt 0) { OK "$($names.Count) offline area(s) on this handheld: $($names -join ', ')" }
+            else {
+              Nope "the map backend is up but NO area is downloaded - chart panels will still read empty"
+              Info "download one from the map panel while this handheld has internet"
+            }
+          }
+        } elseif ($apiProc) {
+          # Kill FIRST, then read the log: Get-Content cannot always open a file a live
+          # process still holds, and a diagnosis that fails to print is worse than none.
+          $why = "did not answer $apiHealth within 40 s"
+          if ($apiProc.HasExited) { $why = "exited immediately (exit code $($apiProc.ExitCode))" }
+          try { if (-not $apiProc.HasExited) { $apiProc.Kill(); $null = $apiProc.WaitForExit(3000) } } catch {}
+          # ...and the sweep, because the handle may be the Python Manager shim rather
+          # than the interpreter (see the wait loop above). A half-started backend left
+          # sitting on port 8000 would make the NEXT launch report the port busy, turning
+          # one bad start into every subsequent one.
+          try { $null = Stop-NeptuneApi } catch {}
+          $apiProc = $null
+          $shared.apiWhy = $why
+
+          Nope "map backend $why - the MAP cannot download or draw chart layers"
+          Info "the dashboard still opens; this is a degraded console, not a dead one"
+          $tail = @()
+          foreach ($f in @($apiErr, $apiOut)) {
+            if (Test-Path $f) { $tail += @(Get-Content $f -Tail 8 -ErrorAction SilentlyContinue) }
+          }
+          $tail = @($tail | Where-Object { "$_".Trim() })
+          foreach ($line in (@($tail) | Select-Object -Last 6)) { Info "$line" }
+          # The overwhelmingly likely cause on a fresh Ally, named with its one-line fix
+          # rather than left for the operator to infer from a traceback on a 7-inch screen.
+          if (@($tail | Where-Object { "$_" -match 'ModuleNotFoundError|No module named' }).Count -gt 0) {
+            Info "this python has none of the api's packages - run:  python bootstrap.py --dev  from $repoRoot"
+          }
+          Info "full output: $apiErr"
+        }
+      }
+    }
+  }
+
+  # =========================================================================
+  Step 5 "Dashboard"
   # =========================================================================
   # Chrome first, then Edge. (Brave removed - Chrome is the supported browser.)
   $candidatesExe = @(
@@ -1071,6 +1398,21 @@ try {
   try { if ($listener) { $listener.Stop() } } catch {}
   try { if ($pool) { $pool.Close(); $pool.Dispose() } } catch {}
   try { $null = Stop-NeptuneBrowsers } catch {}
+  # The map backend is a SEPARATE PROCESS, not a thread of this one, so nothing about
+  # closing this window stops it on its own - and it is the one thing here holding a
+  # well-known port. Left running it would make the very next launch report 8000 busy.
+  #
+  # Ours only, twice over: the handle we were given by Start-Process, then a sweep for
+  # anything wearing our --app-dir marker. A backend the operator started by hand has
+  # neither, and is left exactly as it was found.
+  #
+  # THE SWEEP IS NOT BELT-AND-BRACES HERE, IT IS THE PART THAT WORKS. Measured on this
+  # handheld: the python on PATH is the Windows Python Manager shim, which re-execs the
+  # real interpreter as a child, so the handle below is a WRAPPER and killing it does
+  # not necessarily take the process that holds port 8000 with it. Both wear the
+  # --app-dir marker, so the sweep gets whichever one is left. Kill first, sweep second.
+  try { if ($apiProc -and -not $apiProc.HasExited) { $apiProc.Kill(); $null = $apiProc.WaitForExit(3000) } } catch {}
+  try { $null = Stop-NeptuneApi } catch {}
   try { if ($mutex) { $mutex.ReleaseMutex(); $mutex.Dispose() } } catch {}
-  Write-Host "`nNeptune closed - server stopped.`n" -ForegroundColor Magenta
+  Write-Host "`nNeptune closed - server and map backend stopped.`n" -ForegroundColor Magenta
 }

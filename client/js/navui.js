@@ -5,7 +5,28 @@
    status tile, the map's empty-state button, and CONFIG.
    ============================================================================ */
 
+/* TWO BACKENDS, TWO BASES, AND THIS FILE WAS THE PLACE THEY GOT CONFLATED.
+
+   _navFetch is the VEHICLE — the sub, its dive, its dead-reckoning datum.
+   _mapFetch is the MAP DATA backend (crt.js mapDataBase), which on the ROG Ally is a
+   service running on the Ally itself.
+
+   The whole offline-data path used to run down the first of those, so a console with
+   no Pi could create no area, fetch no charts and download no centreline: the map was
+   a function of whether a submarine happened to be plugged in. It is not. Satellite
+   imagery, the Trust's hazard layers and the canal centreline are real data about real
+   water, and the handheld is the thing that has the disk and the hotspot. mapDataBase()
+   falls back to the vehicle host, so a console with no map service of its own is
+   unchanged. */
 function _navFetch(path, opts){ return fetch((state.httpBase||'') + path, opts); }
+function _mapFetch(path, opts){
+  const base = (typeof mapDataBase==='function') ? mapDataBase() : (state.httpBase||'');
+  return fetch(base + path, opts);
+}
+/* Is the map data this console's own, rather than the vehicle's? Everything below that
+   has to say WHERE something landed, or whether this console could have started it,
+   turns on this one question. */
+function _mapIsOurs(){ return (typeof mapDataLocal==='function') && mapDataLocal(); }
 
 /* ---- geocoding is CLIENT-FIRST (§1): browser → Nominatim directly. It needs
    INTERNET, not the Pi. The Pi proxy is only a fallback, never a precondition. ---- */
@@ -13,7 +34,10 @@ async function _geocode(q){
   const url='https://nominatim.openstreetmap.org/search?'+new URLSearchParams({q, format:'jsonv2', limit:'5', 'accept-language':'en'});
   try{ const r=await fetch(url, {headers:{Accept:'application/json'}});
     if(r.ok){ const j=await r.json(); if(Array.isArray(j)) return j.map(it=>({name:it.display_name, lat:+it.lat, lon:+it.lon})); } }catch(e){}
-  try{ const r=await _navFetch('/api/geocode/search?q='+encodeURIComponent(q)); const j=await r.json(); return j.results||null; }catch(e){}
+  // The proxy fallback is a MAP question ("where is this place"), so it goes to the map
+  // backend. Asked of the vehicle it was doubly wrong: the sub has no internet down the
+  // tether to proxy with, and a console with no sub had no fallback at all.
+  try{ const r=await _mapFetch('/api/geocode/search?q='+encodeURIComponent(q)); const j=await r.json(); return j.results||null; }catch(e){}
   return null;   // null → no internet (honest); NOT "backend unreachable"
 }
 async function _revGeocode(lat, lon){
@@ -139,9 +163,34 @@ async function setOrigin(o){
   // on a Pi that may be switched off, and bootConsider() itself touches no network
   // until it has been told, by the launcher, that there is internet to touch.
   try{ if(typeof bootConsider==='function') bootConsider(null, o, 'the launch point was set'); }catch(e){}
-  // 4) mirror to the Pi if it's up (dead reckoning). Best-effort; never blocks.
-  try{ await _navFetch('/api/origin?override=true',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)}); }catch(e){/* Pi off — fine */}
+  // 4) TELL THE MAP BACKEND, AND THAT IS WHAT ACTUALLY FILLS THE MAP. POST /api/origin
+  // schedules that service's own fetch of the three things an area is made of —
+  // imagery, the Trust's hazard charts and the waterway centreline — onto ITS disk,
+  // which on this handheld is this handheld's disk. This is the half that was missing:
+  // the request went only to the vehicle, so with no vehicle nothing was ever asked to
+  // download anything, and the panel's "no chart data downloaded" was true forever.
+  //
+  // Best-effort and never awaited into the operator's way: the endpoint returns before
+  // a byte is fetched (it schedules, it does not download), but a service that is not
+  // running must not leave somebody staring at a modal.
+  try{ _postOriginTo(_mapFetch, o, 'the map service'); }catch(e){}
+  // 5) mirror to the Pi if it's up (dead reckoning). Best-effort; never blocks. Sent
+  // with ?fetch=false when the map is not the Pi's job: the datum is what the vehicle
+  // needs, and asking a sub on a tether with no internet to go and download a canal is
+  // a request that can only fail slowly.
+  if(!_mapIsOurs()) return true;             // one backend: the call above was the mirror
+  try{ await _postOriginTo(_navFetch, o, 'the vehicle', false); }catch(e){/* Pi off — fine */}
   return true;
+}
+/* ONE ORIGIN POST, TWO POSSIBLE ADDRESSEES. `fetch` is the query flag that decides
+   whether the receiving service also goes and downloads the area for this launch point
+   (api/nav/service.py set_origin): true for whoever holds the map, false for a vehicle
+   that is only being told where the datum is. */
+function _postOriginTo(via, o, who, wantFetch){
+  const q = '/api/origin?override=true' + (wantFetch===false ? '&fetch=false' : '');
+  return via(q, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(o)})
+    .then(r=>{ if(r && r.ok) LOG.map('launch point sent to '+who+(wantFetch===false ? '' : ', which will download this area for it')); return r; })
+    .catch(e=>{ LOG.net('launch point not delivered to '+who+' ('+((e&&e.message)||'no route')+')'); });
 }
 
 /* ---- §2: auto-request the handheld's location on load ------------------------
@@ -158,7 +207,13 @@ async function autoRequestOrigin(){
     if(typeof STORE!=='undefined'){ const o=await STORE.get('origin', null);
       if(o && typeof o.lat==='number'){ stored=o;
         if(typeof MAP!=='undefined'){ MAP.origin=o; MAP.hasOrigin=true; renderOriginTile&&renderOriginTile(); }
-        _navFetch('/api/origin?override=true',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)}).catch(()=>{});
+        // Same two addressees as setOrigin, for the same reason: an origin remembered
+        // from yesterday still has an area to fill, and re-posting it on open is how a
+        // download that was interrupted last night resumes this morning without the
+        // operator having to re-tap anything. The map service reads its own card first
+        // and asks the network only for what is actually missing.
+        _postOriginTo(_mapFetch, o, 'the map service');
+        if(_mapIsOurs()) _postOriginTo(_navFetch, o, 'the vehicle', false);
       } }
   }catch(e){}
 
@@ -505,7 +560,10 @@ async function _loadAreas(){
     const del=document.createElement('button'); del.className='mp-btn'; del.textContent='DEL';
     del.onclick=async()=>{ if(confirm('Delete area "'+a.name+'"? This removes the saved imagery from this device.')){
       await STORE.evictArea(a);
-      _navFetch('/api/areas/'+encodeURIComponent(a.name),{method:'DELETE'}).catch(()=>{});   // also drop the Pi mirror if present
+      // The backend's copy is map data, so it is the map backend that is told to drop
+      // it. Sent to the vehicle, this deleted the Pi's mirror and left the handheld's
+      // own card holding an area the operator had just said they were finished with.
+      _mapFetch('/api/areas/'+encodeURIComponent(a.name),{method:'DELETE'}).catch(()=>{});
       if(typeof MAP!=='undefined' && MAP.activeArea===a.name){ MAP.activeArea=null; MAP.hasArea=false; if(typeof updateEmptyState==='function') updateEmptyState(); }
       _loadAreas(); } };
     row.appendChild(meta); row.appendChild(act); row.appendChild(del); box.appendChild(row);
@@ -740,21 +798,61 @@ const BOOTFETCH = {
   running:false, abort:false,
   startedAt:0, endedAt:0,
   _piAt:0,                       // when the Pi's half was last read
+  _chartsAt:0, _chartsBusy:false, // when the map service was last ASKED to fetch charts, and
+                                 // whether one such ask is in flight. Both exist because
+                                 // bootLookAtCharts runs on the map's 5 s bootstrap tick, and a
+                                 // missing layer would otherwise post a new fetch every five
+                                 // seconds for the whole dive — see BOOT_CHARTS_GAP_MS.
   /* THREE SOURCES, AND THE PANEL NAMES WHICH ONE IS BEING FETCHED. `drives` is the
-     honest half: this console downloads its own imagery and only WATCHES the Pi's
-     two, because the Pi's card is filled by the Pi and the Trust layers are fetched
-     by a command on it. A row that reported the Pi's work as if this handheld were
-     doing it would be a console taking credit for a download it cannot start. */
+     honest half and it answers exactly one question: CAN THIS CONSOLE START THIS
+     DOWNLOAD. A row that reported somebody else's work as if this handheld were doing
+     it would be a console taking credit for a download it cannot start — and it would
+     go on claiming it after the tether was unplugged.
+
+     THAT REASONING IS UNCHANGED; WHAT CHANGED IS WHO OWNS THE CARD. The chart layers
+     used to be fetched by a command typed on the Pi, with no endpoint to trigger it
+     from here, so `drives:false` was simply the truth about them. With a map service
+     on this handheld the same layers are downloaded ONTO THIS HANDHELD, started by
+     this console, and reporting that as somebody else's work would be the same
+     dishonesty pointing the other way. So the flag is no longer a constant: it is set
+     by bootOwnership() from where the map data actually lives. The values below are
+     the no-map-service world — a console whose charts really are the Pi's — and they
+     stay correct for it.
+
+     IMAGERY ON THE PI is always drives:false, whatever else changes. That row is the
+     Pi's SECOND copy of the tiles, filled by the Pi for the Pi's own map view, and
+     nothing on this console has ever been able to start it. */
   jobs: {
     imagery: {id:'imagery', name:'SATELLITE IMAGERY', where:'this handheld', drives:true,
               state:'waiting', done:0, total:0, held:0, got:0, missed:0, bytes:0, why:'', at:0},
     pi:      {id:'pi',      name:'IMAGERY ON THE PI', where:"the Pi's card", drives:false,
               state:'waiting', done:0, total:0, held:0, got:0, missed:0, bytes:0, why:'', at:0},
-    charts:  {id:'charts',  name:'CHART LAYERS',      where:"the Pi's card", drives:false,
+    /* THE CHART ROW IS NOW THE WHOLE NATIONAL NETWORK, AND IT IS NOT PER-AREA.
+       It used to report a per-area clipping fetched by a command typed on the Pi. The
+       Trust's vectors are downloaded ONCE, nationally, on launch, onto this handheld —
+       so this row counts LAYERS (27 of them) rather than tiles, and it is the row that
+       says DOWNLOADING · 6 OF 27 on a new handheld's first run. */
+    charts:  {id:'charts',  name:'CANAL & RIVER TRUST NETWORK', where:"the Pi's card", drives:false,
               state:'waiting', done:0, total:0, held:0, got:0, missed:0, bytes:0, why:'', at:0},
   },
   order: ['imagery','pi','charts'],
 };
+
+/* WHOSE CARD EACH ROW FILLS, decided from where the map data lives rather than written
+   into the table above twice. Idempotent and cheap: mapDataBase() is fixed at boot, so
+   this settles on the first render and never changes under the operator.
+
+   It is called before the rows are BUILT (crt.js crtBuildFetch) because `where` is baked
+   into the markup — a row built before the base was known would spend the rest of the
+   session pointing a download at the wrong machine. */
+function bootOwnership(){
+  if(typeof BOOTFETCH==='undefined') return;
+  const ours = _mapIsOurs();
+  const c = BOOTFETCH.jobs.charts;
+  c.drives = ours;
+  c.where  = ours ? 'this handheld' : "the Pi's card";
+  c.name   = 'CANAL & RIVER TRUST NETWORK';
+}
 
 function bootSleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
 function bootMB(n){ return n<10 ? n.toFixed(1) : String(Math.round(n)); }
@@ -920,9 +1018,25 @@ async function bootConsider(areas, origin, why){
   try{
     await bootAutoReady();
     if(BOOTFETCH.running) return;
-    if(typeof state!=='undefined' && (state.demo || state._fileSim)){
-      bootTop('idle', 'this console is running the simulator, so there is no launch point to '
-                    + 'download for and nothing is fetched');
+    bootOwnership();
+    // SIM MEANS THE VEHICLE IS SIMULATED. IT DOES NOT MEAN THE MAP IS FAKE, and this
+    // guard used to say it did: ?sim=1 returned here, so setting a launch point on a
+    // handheld with a hotspot in its pocket downloaded absolutely nothing and the panel
+    // reported "no chart data downloaded" — true, and entirely this line's doing.
+    //
+    // There is no sub, the physics is a model, and every reading off it is flagged as
+    // such. The WATER is not modelled. The imagery is a photograph of a real canal, the
+    // hazard layers are the Trust's own published assets, and the centreline is where
+    // the cut actually runs — none of that becomes untrue because nothing is plugged in,
+    // and none of it is marked simulated when it arrives, because none of it is.
+    //
+    // A page opened off the DISK is still refused, and that is a different fact: file://
+    // has no Cache API to store tiles in and no origin to fetch them from, so there is
+    // nothing here that could work rather than nothing here that is allowed to.
+    if(typeof state!=='undefined' && state._fileSim){
+      bootTop('idle', 'this page was opened straight off the disk (file://), where the browser allows '
+                    + 'no offline tile store and no downloads at all. Nothing can be fetched from '
+                    + 'here. Open Neptune from the launcher and the map downloads itself.');
       return;
     }
     const o = origin || ((typeof MAP!=='undefined') ? MAP.origin : null);
@@ -1016,9 +1130,26 @@ async function bootConsider(areas, origin, why){
 /* ---- THE RUN ------------------------------------------------------------- */
 async function bootStart(why, resume){
   if(BOOTFETCH.running) return;
+  /* THE CHARTS DO NOT WAIT FOR A LAUNCH POINT, AND THIS IS WHERE THAT USED TO GO
+     WRONG. DOWNLOAD NOW returned here with "set one first" whenever there was no
+     origin — including on a brand new handheld whose actual problem was that it had no
+     chart data at all, which needs no launch point and never did. The national fetch is
+     started first, unconditionally; only the IMAGERY half needs to know where you are
+     going, because only the imagery is bounded by it. */
   const o = (typeof MAP!=='undefined') ? MAP.origin : null;
+  const netHere = (typeof CRT!=='undefined') && CRT.net && CRT.net.ok;
+  if(!netHere && _mapIsOurs()){
+    BOOTFETCH._chartsAt = 0;                       // pressing the button is not a retry loop
+    bootDriveCharts('the operator pressed DOWNLOAD NOW');
+  }
   if(!o || typeof o.lat!=='number'){
-    bootTop('no-origin', 'there is no launch point to download for yet — set one first.');
+    bootTop(netHere ? 'no-origin' : 'running',
+      netHere
+        ? 'there is no launch point to download imagery for yet — set one first. The Canal & River '
+        + 'Trust network needs no launch point and is already on this handheld.'
+        : 'downloading the Canal & River Trust network onto this handheld. It needs no launch point: '
+        + 'the whole national network is fetched once and kept here. Set a launch point as well and '
+        + 'the satellite imagery for it downloads too.');
     return;
   }
   await bootAutoReady();
@@ -1068,9 +1199,9 @@ function bootStop(why){
         + '. Whatever landed is kept and the next run resumes from it.');
 }
 
-/* THE NAME. The Pi's own name for this water wins when there is one, because two
-   copies of one area under two names is two areas — and `crt-fetch <area>` would
-   then be run against whichever one the operator happened to read off the screen.
+/* THE NAME. The MAP BACKEND'S own name for this water wins when there is one, because
+   two copies of one area under two names is two areas — and the chart layers would
+   then be clipped to whichever one the operator happened to read off the screen.
 
    AND IT IS NEVER WORTH A STALL. _revGeocode goes straight out to Nominatim, a free
    public service that is sometimes slow and carries no timeout of its own — while the
@@ -1081,8 +1212,12 @@ function bootStop(why){
    label on it, and coordinates are a perfectly good label. */
 const BOOT_NAME_MS = 6000;
 async function bootName(bbox, origin){
-  const pi = await bootPiArea(origin);
-  if(pi && pi.name) return pi.name;
+  // Whoever holds the map gets to name the water — the map service on this handheld
+  // where there is one, the Pi where there is not. Two copies of one area under two
+  // names is two areas, and the chart layers would then be clipped to whichever of them
+  // the operator happened to read off the screen.
+  const held = await bootMapArea(origin);
+  if(held && held.name) return held.name;
   let n = null;
   try{
     n = await Promise.race([
@@ -1229,36 +1364,78 @@ async function bootRunImagery(name, plan, origin, existing){
 }
 
 /* ---- THE PI'S HALF, WATCHED AND NOT DRIVEN -------------------------------
-   The Pi fills its own card and the Trust layers are fetched by a command on it, so
-   this console reports what it finds and says plainly what it cannot start. Two
-   things it will not do: claim the Pi's download as its own, and poll a link with no
-   Pi on the end of it — bootPiOnLink() is an in-memory read and the guard below it
-   means a console at the canal never spends a request discovering there is nobody
-   there. */
-async function bootGet(path, ms){
+   The Pi fills its own card, so this console reports what it finds there and says
+   plainly what it cannot start. Two things it will not do: claim the Pi's download as
+   its own, and poll a link with no Pi on the end of it — bootPiOnLink() is an in-memory
+   read and the guard below it means a console at the canal never spends a request
+   discovering there is nobody there.
+
+   THE CHART LAYERS USED TO LIVE IN THIS SECTION AND NO LONGER DO. They are downloaded
+   by whoever holds the map, which on this handheld is this handheld — see
+   bootLookAtCharts. What stays here is the Pi's second copy of the imagery. */
+async function bootGet(path, ms, via){
   let ctl=null, timer=null;
+  const who = (via===_mapFetch) ? 'the map service' : 'the Pi';
   try{ ctl = (typeof AbortController!=='undefined') ? new AbortController() : null; }catch(e){}
   if(ctl) timer = setTimeout(()=>{ try{ ctl.abort(); }catch(e){} }, ms||8000);
   try{
-    const r = await _navFetch(path, ctl ? {signal:ctl.signal, cache:'no-store'} : {cache:'no-store'});
+    const r = await (via||_navFetch)(path, ctl ? {signal:ctl.signal, cache:'no-store'} : {cache:'no-store'});
     if(timer) clearTimeout(timer);
     let j=null; try{ j = await r.json(); }catch(e){}
     return {ok:r.ok, status:r.status, json:j};
   }catch(e){
     if(timer) clearTimeout(timer);
-    return {ok:false, status:0, err:(e && e.name==='AbortError') ? 'the Pi did not answer in time'
-                                                                : ((e&&e.message)||'the request never reached the Pi')};
+    return {ok:false, status:0, err:(e && e.name==='AbortError') ? (who+' did not answer in time')
+                                                                : ((e&&e.message)||('the request never reached '+who))};
   }
 }
-async function bootPiArea(origin){
-  if(!bootPiOnLink() || !origin) return null;
-  const r = await bootGet('/api/areas', 8000);
+/* POST, for the one thing this console now genuinely starts on the map backend. Same
+   shape and same timeout discipline as bootGet: an endpoint that schedules rather than
+   downloads still has to be unable to hang the panel. */
+async function bootPost(path, body, ms, via){
+  let ctl=null, timer=null;
+  const who = (via===_navFetch) ? 'the Pi' : 'the map service';
+  try{ ctl = (typeof AbortController!=='undefined') ? new AbortController() : null; }catch(e){}
+  if(ctl) timer = setTimeout(()=>{ try{ ctl.abort(); }catch(e){} }, ms||8000);
+  try{
+    const r = await (via||_mapFetch)(path, Object.assign(
+      {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body||{}), cache:'no-store'},
+      ctl ? {signal:ctl.signal} : {}));
+    if(timer) clearTimeout(timer);
+    let j=null; try{ j = await r.json(); }catch(e){}
+    return {ok:r.ok, status:r.status, json:j};
+  }catch(e){
+    if(timer) clearTimeout(timer);
+    return {ok:false, status:0, err:(e && e.name==='AbortError') ? (who+' did not answer in time')
+                                                                : ((e&&e.message)||('the request never reached '+who))};
+  }
+}
+/* An area the BACKEND already has for this launch point. `via` picks which backend:
+   the map service (whose name for the water is the one this console should adopt, so
+   both halves of the download land under one name) or the vehicle (whose second copy
+   the PI row reports). */
+async function bootAreaOn(via, origin){
+  if(!origin) return null;
+  const r = await bootGet('/api/areas', 8000, via);
   if(!r.ok) return null;
   const list = (r.json && (r.json.areas || r.json)) || [];
   if(!Array.isArray(list)) return null;
   return list.find(a=>a && a.name===BOOTFETCH.area)
       || list.find(a=>bootCovers(a, origin, 0))
       || null;
+}
+async function bootPiArea(origin){
+  if(!bootPiOnLink() || !origin) return null;
+  return bootAreaOn(_navFetch, origin);
+}
+/* The map backend's own name for this water, when it has one. Adopted by bootName so
+   the handheld's tile archive and the handheld's chart directory are one area and not
+   two — the same reasoning that made the console adopt the Pi's name before the map
+   moved off it. */
+async function bootMapArea(origin){
+  if(!origin) return null;
+  if(!_mapIsOurs()) return bootPiArea(origin);
+  return bootAreaOn(_mapFetch, origin);
 }
 async function bootLookAtPi(force){
   const now = Date.now();
@@ -1269,6 +1446,12 @@ async function bootLookAtPi(force){
     const s = 'there is no Pi answering on this link, so nothing on its card can be read or filled. '
             + 'This handheld\'s own copy above is what the map draws from and it does not need one.';
     bootJob('pi','no-pi',{done:0,total:0,why:s});
+    // THE CHART ROW IS NO LONGER THE PI'S TO SPEAK FOR, and this early return was where
+    // the whole map used to die: with no Pi on the link the hazard layers were declared
+    // unreachable and the function stopped, so nothing ever asked the handheld's own map
+    // service whether it had them — or told it to go and get them. The Trust layers live
+    // wherever the map lives, so that question is asked of whoever that is.
+    if(_mapIsOurs()){ bootLookAtCharts(null); return; }
     bootJob('charts','no-pi',{done:0,total:0,why:s+' The Canal & River Trust hazard layers live on the '
             + 'Pi, so they cannot be fetched or checked until it is on the tether.'});
     return;
@@ -1277,8 +1460,11 @@ async function bootLookAtPi(force){
   if(!a){
     bootJob('pi','not-downloaded',{done:0,total:0,
       why:'the Pi is answering and holds no offline area covering this launch point. Its card is a '
-        + 'SECOND copy — the map above does not need it — but it is also what gives the hazard fetch '
-        + 'an area to clip to, which is why the row below cannot run without it.'});
+        + 'SECOND copy and the map above does not need it'
+        + (_mapIsOurs() ? '. The hazard layers are downloaded onto this handheld and do not need it '
+                        + 'either.'
+                        : '— but it is also what gives the hazard fetch an area to clip to, which is '
+                        + 'why the row below cannot run without it.')});
   } else {
     // The Pi's own vocabulary if this build publishes one; otherwise fall back to
     // what /api/areas has always carried. `present` alone is not enough: an MBTiles
@@ -1325,7 +1511,8 @@ function bootPiProgress(m){
     bootJob('pi','held',{done:total, total:total,
       why:'the Pi finished its own copy of "'+(m.name||BOOTFETCH.area||'this area')+'"'
         + (typeof m.ok==='number' && total ? (' — '+m.ok.toLocaleString()+' of '+total.toLocaleString()+' tiles landed') : '')
-        + '. That card is now what `crt-fetch` can clip the hazard layers to.'});
+        + '. That is the Pi\'s second copy of the imagery; the map above draws from this '
+        + 'handheld\'s own and never needed it.'});
     bootLookAtCharts(null);
     return;
   }
@@ -1342,52 +1529,266 @@ function bootPiProgress(m){
       + '. This console is watching it, not driving it.'});
 }
 
-/* CHART LAYERS. Read off the index crt.js has already fetched — asking for it a
-   second time would double the traffic to say the same thing — and honest about the
-   one case this console cannot fix: the Trust layers are downloaded by a command on
-   the Pi and there is no endpoint to start it from here. Saying "failed" for that
-   would send an operator hunting for a fault; saying NOT AUTOMATIC and printing the
-   command sends them to the thing that actually works. */
+/* CHART LAYERS — AND THIS CONSOLE NOW DRIVES THEM.
+
+   Read off the index crt.js has already fetched, because asking for it a second time
+   would double the traffic to say the same thing. What changed is what happens when the
+   answer is "they are not here":
+
+     THE MAP IS THIS HANDHELD'S      the map service on it downloads the Trust layers,
+                                     the centreline and its own imagery for the launch
+                                     point, and this console starts that. So the row
+                                     DRIVES: it says DOWNLOADING while it runs and the
+                                     button starts it. There is no command for anybody
+                                     to type.
+     THE MAP IS THE PI'S             unchanged, and still the honest answer for that
+                                     console: the Trust layers are fetched by a
+                                     bootstrap command on the Pi and there is no
+                                     endpoint to start it from here. Saying "failed"
+                                     would send an operator hunting for a fault; NOT
+                                     AUTOMATIC with the command printed sends them to
+                                     the thing that actually works.
+
+   Both branches end in the same place if the layers are missing: this map is not
+   showing hazards, and a stretch with no marks on it means NO DATA rather than
+   "nothing there". Only the remedy differs, because only the remedy CAN differ. */
 function bootLookAtCharts(piArea){
-  const area = (typeof CRT!=='undefined' && CRT.area) ? CRT.area : (BOOTFETCH.area||'');
-  const raw = (typeof CRT!=='undefined' && CRT.indexRaw) ? CRT.indexRaw : null;
   if(typeof CRT==='undefined'){ bootJob('charts','unknown',{why:'the chart layer module is not loaded'}); return; }
-  if(!CRT.area){
-    bootJob('charts','waiting',{why:'no map area is active yet, so there is nothing to ask the Pi about.'});
+  const raw = CRT.indexRaw || null;
+  const ours = _mapIsOurs();
+  const who  = (typeof mapDataName==='function') ? mapDataName() : 'the Pi';
+  const total = (typeof CRT_NATIONAL_LAYERS!=='undefined') ? CRT_NATIONAL_LAYERS : 27;
+  // THE PER-AREA HALF RIDES ALONG ON THE SAME TICK. The Trust's vectors are national
+  // now; the waterway centreline this console snaps to is not, and nothing else would
+  // ever ask for it — see bootDriveArea, which is guarded and costs nothing when the
+  // centreline is already here.
+  if(ours && CRT.area && (typeof MAP==='undefined' || !MAP.centreline || !MAP.centreline.length))
+    bootDriveArea(CRT.area, 'the waterway centreline for this area is not on this handheld');
+
+  /* DOWNLOADING FIRST, BECAUSE IT IS THE ORDINARY STATE OF A NEW HANDHELD. The launch
+     fetch is running: nothing is missing, it is on its way, and the row counts LAYERS
+     because that is what this download is made of. This row used to be unreachable
+     until an area existed, which is why a brand new handheld's honest report was a
+     panel full of absences. */
+  if(typeof crtDownloading==='function' && crtDownloading()){
+    const d = crtDownloadCount();
+    bootJob('charts','running',{done:d.done, total:d.total,
+      why:'this console is downloading the WHOLE Canal & River Trust network onto this handheld — '
+        + d.done+' of '+d.total+' layers so far'+(CRT.dl.layer?(', currently '+CRT.dl.layer):'')
+        + '. It happens once, on launch, and it needs no launch point and no area: from then on the '
+        + 'map is simply here. The console is fully flyable while it runs. Until a layer lands this '
+        + 'map is not showing its marks, so an unmarked stretch means NOT YET rather than "nothing '
+        + 'there".'});
+    return;
+  }
+  /* HERE. Counted off the layer rows rather than off a status word, because what the
+     operator is owed is how many layers are actually readable — a store that answers
+     "present" with nineteen unreadable files is not a map. */
+  const n = (typeof crtAll==='function')
+          ? crtAll().filter(e=>{ const s=(CRT.state[e.id]||{}).status;
+                                 return s==='present'||s==='held'||s==='empty'; }).length : 0;
+  if(CRT.net.ok || (raw && raw.status==='present') || n>0){
+    bootJob('charts','held',{done:n, total:Math.max(n, total),
+      why:'the Canal & River Trust network is on this handheld — '+n+' layers, read from '+who
+        + ' with no launch point, no area and no sub needed. Nothing was re-downloaded. Every layer '
+        + 'held is drawn on the map; switch off the ones you do not want in the list below.'});
     return;
   }
   if(CRT.indexOk !== true){
     // The SAME decision the layer rows make, through the same evidence, so the two
     // halves of this panel can never disagree about which silence this is.
     const quiet = (typeof crtNoAnswerStatus==='function') ? crtNoAnswerStatus() : 'unknown';
-    if(quiet==='not-downloaded')
-      bootJob('charts','not-downloaded',{why:'no chart data has ever been downloaded for "'+area+'" on '
-        + 'this handheld and there is no Pi on this link to download it from'
-        + (CRT.indexWhy?(' ('+CRT.indexWhy+')'):'')+'. Nothing has failed.'});
-    else
-      bootJob('charts','unknown',{why:'the Pi could not be asked for the chart index'
+    if(quiet==='not-downloaded'){
+      bootJob('charts','not-downloaded',{done:0, total:total,
+        why:'the Canal & River Trust network has never been downloaded onto this handheld'
+        + (CRT.indexWhy?(' ('+CRT.indexWhy+')'):'')+'. Nothing has failed: it is fetched once, on '
+        + 'launch, with a connection available'
+        + (ours ? ' — and this console starts that fetch itself, so DOWNLOAD NOW will run it.'
+                : ', and the map data on this console comes off the Pi, which holds none.')});
+      // AND THEN ACTUALLY GO AND GET IT, which is the whole point of owning the map:
+      // reporting "not downloaded" over a service that is sitting there able to download
+      // it is the same do-nothing panel this round exists to remove.
+      if(ours) bootDriveCharts('the Canal & River Trust network is not on this handheld yet');
+    } else {
+      bootJob('charts','unknown',{done:0, total:total,
+        why:who+' could not be asked for the chart index'
         + (CRT.indexWhy?(' — '+CRT.indexWhy):'')+', so nothing is known about the hazard layers here.'});
+    }
     return;
   }
-  const present = (raw && raw.status==='present');
-  const n = (typeof crtAll==='function')
-          ? crtAll().filter(e=>((CRT.state[e.id]||{}).status)==='present').length : 0;
-  if(present || n>0){
-    bootJob('charts','held',{done:n, total:n,
-      why:'the Pi already holds the Canal & River Trust layers for "'+area+'"'
-        + (n?(' — '+n+' of them are loaded and drawn'):'')+'. Nothing was re-downloaded.'});
+  if(ours){
+    // Both stores answered and neither holds anything. This console can fix that, so it
+    // does — and the row reports the run rather than printing an instruction.
+    bootJob('charts','running',{done:0,total:total,
+      why:'the Canal & River Trust network is not on this handheld yet'
+        + (raw && raw.why ? (' — '+raw.why) : '')+'. This console is asking the map service on this '
+        + 'handheld to download it now — the whole national network, once. Until it lands this map '
+        + 'is not showing locks, weirs, sluices, culverts, tunnel portals or outfalls at all, and a '
+        + 'stretch with no marks on it means NO DATA rather than "nothing there".'});
+    bootDriveCharts('the chart index says the hazard layers are missing');
     return;
   }
-  const cmd = (raw && raw.remedy) || ('python -m nav.cli crt-fetch ' + area);
-  bootJob('charts','not-automatic',{done:0,total:0,
+  const cmd = (raw && raw.remedy) || 'python -m nav.cli crt-fetch';
+  bootJob('charts','not-automatic',{done:0,total:total,
     why:'THE HAZARD LAYERS ARE NOT ON THIS PI AND THIS CONSOLE CANNOT START THAT FETCH. '
       + (raw && raw.why ? ('The Pi says: '+raw.why+'. ') : '')
-      + 'The Trust layers are downloaded by a bootstrap command on the Pi itself — there is no '
-      + 'endpoint to trigger it from here, so a button that pretended otherwise would do nothing. '
-      + 'Run this on the Pi while it still has internet:  ' + cmd + '  '
-      + '(the area above is what gives that command a box to clip to). Until then this map is not '
-      + 'showing locks, weirs, sluices, culverts, tunnel portals or outfalls at all, and a stretch '
-      + 'with no marks on it means NO DATA rather than "nothing there".'});
+      + 'The map data on this console comes off the Pi\'s card, and the Trust layers are downloaded '
+      + 'by a bootstrap command on the Pi itself — there is no endpoint to trigger it from here, so '
+      + 'a button that pretended otherwise would do nothing. Run this on the Pi while it still has '
+      + 'internet:  ' + cmd + '  Until then this map is not showing locks, weirs, sluices, culverts, '
+      + 'tunnel portals or outfalls at all, and a stretch with no marks on it means NO DATA rather '
+      + 'than "nothing there".'});
+}
+/* The chart-progress poll in crt.js calls this so the download panel and the layer
+   panel are refreshed by ONE clock. Two timers reporting one download is two chances
+   for the row and the badge to disagree about how far through it is. */
+function bootNoteCharts(){
+  try{ bootLookAtCharts(null); bootFinish(); }catch(e){}
+}
+
+/* START THE MAP SERVICE'S OWN FETCH, and then watch it.
+
+   POST /api/areas/fetch returns AT ONCE with the job it started — it schedules and
+   does no network work of its own — so this cannot hang the panel, and the reporting
+   below is a poll of GET /api/areas/fetch rather than a request left in flight.
+
+   RATE-LIMITED AND NOT RE-ENTRANT, because this is reached from bootLookAtCharts,
+   which the map's 5 s bootstrap tick calls: without the guard a missing chart layer
+   would post a new fetch every five seconds for the whole dive. One in flight at a
+   time, and one attempt per BOOT_CHARTS_GAP_MS, so a service that is refusing is
+   asked occasionally rather than hammered.
+
+   IT ONLY RUNS WITH A CONNECTION. Same gate as the imagery half and for the same
+   reason: at the water there is no signal, that is normal, and spending requests to
+   rediscover it every five seconds is how a console spends a dive on DNS timeouts. */
+const BOOT_CHARTS_GAP_MS = 60000;
+/* THE NATIONAL FETCH IS STARTED HERE, AND IT CARRIES NO AREA. That is the whole
+   change: `POST /api/crt/fetch` with no body worth speaking of, because the thing
+   being fetched is the whole published network and there is nothing to clip it to. */
+async function bootDriveCharts(why){
+  if(!_mapIsOurs()) return;
+  if(BOOTFETCH._chartsBusy) return;
+  const now = Date.now();
+  if(now - (BOOTFETCH._chartsAt||0) < BOOT_CHARTS_GAP_MS) return;
+  const total = (typeof CRT_NATIONAL_LAYERS!=='undefined') ? CRT_NATIONAL_LAYERS : 27;
+  const net = bootNet();
+  if(net.v!=='yes'){
+    // Not an error and not a retry loop: the row keeps whatever true thing it already
+    // says about the data not being here, with the reason it cannot be fetched yet.
+    bootJob('charts','not-downloaded',{done:0, total:total,
+      why:'the Canal & River Trust network is not on this handheld and cannot be downloaded from '
+      + 'here: '+net.why+'. This is normal at the water and it is not a fault — press DOWNLOAD NOW '
+      + 'once you are back on a network. Until it is here this map is not showing locks, weirs, '
+      + 'sluices, culverts, tunnel portals or outfalls, and an unmarked stretch means NO DATA rather '
+      + 'than "nothing there".'});
+    return;
+  }
+  BOOTFETCH._chartsBusy = true;
+  BOOTFETCH._chartsAt = now;
+  try{
+    LOG.map('offline data: asking the map service on this handheld to download the WHOLE Canal & '
+          + 'River Trust network ('+why+')');
+    const r = await bootPost(CRT_API.netFetch, {reason:'the console asked for it: '+why}, 8000);
+    if(!r.ok){
+      // A REFUSAL IS AN ANSWER AND IT IS QUOTED. The service refuses with its own
+      // sentence, and paraphrasing that into "failed" would throw away the only thing
+      // that says what to do next.
+      const said = (r.json && (r.json.detail || r.json.why)) || r.err || ('HTTP '+r.status);
+      bootJob('charts','failed',{done:0, total:total,
+        why:'the map service on this handheld would not start the national chart download: '+said
+          + '. Nothing was fetched and nothing was lost.'});
+      return;
+    }
+    // ONE CLOCK, NOT TWO. crt.js already polls the download and re-reads the store when
+    // it settles; starting a second watcher here would have two pollers reporting one
+    // fetch, which is two chances for this row and the layer rows to quote different
+    // numbers at each other on the same screen.
+    if(typeof crtFetchDownloadState==='function'){
+      await crtFetchDownloadState();
+      if(typeof crtWatchDownload==='function') crtWatchDownload();
+    }
+    bootLookAtCharts(null);
+  }catch(e){
+    bootJob('charts','failed',{done:0, total:total,
+      why:'the chart download could not be started ('+((e&&e.message)||e)+').'});
+  }finally{
+    BOOTFETCH._chartsBusy = false;
+  }
+}
+/* WATCH THE JOB THAT WAS JUST STARTED, per source and in its own words.
+
+   api/nav/service.py runs the three sources sequentially — centreline, charts, imagery
+   — and reports each separately, which is the same shape this panel already draws. Only
+   the CHARTS and CENTRELINE halves are reported here: the imagery this map actually
+   draws from is the row above, downloaded into this browser's own tile cache, and
+   counting the service's second copy into it would be one download reported twice.
+
+   BOUNDED, and it stops the moment the job settles. A poll that ran forever would be a
+   request every two seconds for the rest of a dive; a poll that gave up silently would
+   leave the row saying DOWNLOADING over a job that finished ten minutes ago, which is
+   the stuck-progress lie this surface exists to prevent — so the timeout says so. */
+const BOOT_CHARTS_POLL_MS = 2000;
+const BOOT_CHARTS_MAX_MS  = 300000;
+/* THE PER-AREA HALF, WHICH IS NOW THE CENTRELINE AND NOT THE HAZARDS.
+   The Trust's vectors moved to the national store; what still belongs to an area is
+   the waterway centreline this console snaps to, and the card the depth pair is built
+   from. Nothing triggered those once the chart fetch stopped being per-area, so a
+   handheld would have had a national map and no centreline — which is a REGRESSION
+   this function exists to not commit. Same guards as the national fetch: one at a
+   time, one attempt a minute, and only with a connection. */
+let _bootAreaAt = 0, _bootAreaBusy = false;
+async function bootDriveArea(area, why){
+  if(!_mapIsOurs() || !area || _bootAreaBusy) return;
+  const now = Date.now();
+  if(now - _bootAreaAt < BOOT_CHARTS_GAP_MS) return;
+  if(bootNet().v!=='yes') return;                 // at the water this is normal, and it is not a fault
+  _bootAreaBusy = true; _bootAreaAt = now;
+  try{
+    const o = (typeof MAP!=='undefined') ? MAP.origin : null;
+    const body = {name:area, reason:'the console asked for it: '+why};
+    if(o && typeof o.lat==='number'){ body.lat = o.lat; body.lon = o.lon; }
+    LOG.map('offline data: asking the map service on this handheld for the waterway centreline for "'
+          + area+'" ('+why+')');
+    const r = await bootPost('/api/areas/fetch', body, 8000);
+    if(!r.ok){
+      LOG.warn('offline data: the map service would not fetch the centreline for "'+area+'" — '
+             + ((r.json && (r.json.detail||r.json.why)) || r.err || ('HTTP '+r.status)));
+      return;
+    }
+    await bootWatchArea(area);
+  }catch(e){
+    LOG.warn('offline data: the centreline fetch for "'+area+'" could not be started ('
+           + ((e&&e.message)||e)+')');
+  }finally{ _bootAreaBusy = false; }
+}
+/* Watch it, and say what happened in the log — the visible report is the map itself
+   (the centreline appears) and the layer panel (the card's own rows), which is where
+   the per-area facts have always been reported. Bounded: a poll that ran forever is a
+   request every two seconds for the rest of a dive. */
+async function bootWatchArea(area){
+  const t0 = Date.now();
+  while(Date.now() - t0 < BOOT_CHARTS_MAX_MS){
+    await bootSleep(BOOT_CHARTS_POLL_MS);
+    const r = await bootGet('/api/areas/fetch', 6000, _mapFetch);
+    if(!r.ok || !r.json) continue;                    // one missed poll is not an answer
+    const j = r.json;
+    if(j.running) continue;
+    const cl = (j.sources || {}).centreline || {};
+    if(cl.status==='failed')
+      LOG.warn('offline data: the waterway centreline for "'+area+'" did not download — '
+             + (cl.why||'no reason given')+'. The map draws without it; snapping has nothing to '
+             + 'snap to on this cut.');
+    else
+      LOG.map('offline data: the waterway centreline for "'+area+'" is on this handheld');
+    // Go and read what landed, or the panel keeps reciting the answer from before the
+    // fetch ran.
+    if(typeof loadCentreline==='function') loadCentreline(area);
+    if(typeof crtLoadAll==='function') crtLoadAll('the area fetch finished');
+    return;
+  }
+  LOG.warn('offline data: the area fetch for "'+area+'" has been running for over '
+         + Math.round(BOOT_CHARTS_MAX_MS/60000)+' minutes and this console has stopped watching it. '
+         + 'It may still be running — press REFRESH in the layers panel to look again.');
 }
 
 /* THE ONE SENTENCE AT THE END, and it names each source separately. "Download
@@ -1423,6 +1824,13 @@ function bootFinish(){
                                || j.state==='no-pi' || j.state==='unknown' || j.state==='waiting');
   const good = js.filter(j=>j.state==='done' || j.state==='held');
   const fetched = js.some(j=>j.state==='done');
+  // STILL RUNNING IS NOT FINISHED, and it fell through every bucket here to the final
+  // `else` — which announces DOWNLOADED. That was harmless while this console drove
+  // exactly one row and called this only after it, and it stopped being harmless the
+  // moment the chart layers became a download this console starts and then watches:
+  // the top line would say "everything is downloaded" over a hazard fetch that was at
+  // that instant three layers in. A source that is running says so.
+  const busy = js.filter(j=>j.state==='running');
   const list = a=>a.map(j=>j.name.toLowerCase()).join(', ');
   let st, why;
   if(stopped.length){
@@ -1432,6 +1840,10 @@ function bootFinish(){
   } else if(failed.length){
     st='failed'; why = (good.length ? (list(good)+' downloaded; ') : '')
                      + failed.map(j=>j.name.toLowerCase()+' did NOT — '+j.why).join('  ');
+  } else if(busy.length){
+    st='running'; why = (good.length ? (list(good)+' is on this handheld. ') : '')
+                      + list(busy)+' '+(busy.length>1?'are':'is')+' still downloading — '
+                      + busy.map(j=>j.why).filter(Boolean).join('  ');
   } else if(outstanding.length){
     st='partial'; why = (good.length ? (list(good)+' is downloaded and on this handheld. ') : '')
                       + outstanding.map(j=>j.name.toLowerCase()+' is NOT: '+j.why).join('  ');
