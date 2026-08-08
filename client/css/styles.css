@@ -663,6 +663,14 @@ body.map-blind #crt-panel.on{display:flex}
   letter-spacing:.14em;color:var(--on-surface-variant)}
 .crt-head.t1{color:var(--hazard)}
 .crt-head.t2{color:var(--tertiary)}
+/* THE BANK BLOCK IS NOT A FOURTH TIER, so it is not coloured like one. The three tiers
+   above are a safety ORDER for Canal & River Trust marks; this is a raster wash about the
+   LAND, from the Environment Agency, painted under all of them. It wears the amber it
+   paints, and a rule above it, because "the Trust does not publish this stretch" and
+   "nobody has processed the terrain here" are different absences with different fixes and
+   the panel has to make that visible before either row is read. */
+.crt-head.tb{color:#E39A2E;margin-top:6px;padding-top:8px;
+  border-top:1px solid rgba(255,255,255,.10)}
 .crt-row{display:flex;align-items:center;gap:8px;padding:4px 10px;min-height:28px}
 .crt-row:hover{background:rgba(180,107,255,.08)}
 .crt-glyph{flex:0 0 18px;height:18px;line-height:0}
@@ -697,6 +705,23 @@ body.map-blind #crt-panel.on{display:flex}
 .crt-state.s-held{color:color-mix(in srgb,var(--tertiary) 80%,var(--on-surface-variant));
   border-style:dashed;border-color:color-mix(in srgb,var(--tertiary) 40%,transparent)}
 .crt-state.s-off,.crt-state.s-no-area{color:rgba(185,169,214,.65)}
+/* PARTIAL and NOT HERE belong to the LIDAR bank layer, and they are the two states this
+   panel did not previously have a word for. Neither is a fault — nothing failed — so
+   neither wears an alarm colour; both are absences, so both are dashed like NOT
+   DOWNLOADED beside them. PARTIAL is the louder of the two because part of what is on
+   screen IS painted, which is the state most easily misread as a complete picture. */
+.crt-state.s-partial{color:#E39A2E;border-style:dashed;
+  border-color:color-mix(in srgb,#E39A2E 55%,transparent)}
+.crt-state.s-outside{color:rgba(185,169,214,.8);border-style:dashed;
+  border-color:rgba(185,169,214,.45)}
+/* UNREADABLE is a fault — a file that is on this handheld and will not parse — so it wears
+   the fault colour ABSENT wears. CANNOT BUILD is not: nothing broke, this machine simply
+   cannot do the arithmetic, and the Pi is in that state permanently and on purpose. An
+   alarm colour on the vehicle's normal condition is how alarm colours stop meaning
+   anything, so it is dashed and dim like every other honest absence. */
+.crt-state.s-unreadable{color:var(--error);border-color:var(--error);border-style:dashed}
+.crt-state.s-no-library{color:rgba(185,169,214,.8);border-style:dashed;
+  border-color:rgba(185,169,214,.45)}
 /* A count with a +N on it is two facts in one pill: what the Pi has saved, and what
    this sub has measured since. Bordered so the compound reading is visibly compound. */
 .crt-state.live{border-color:var(--tertiary)}
@@ -720,6 +745,15 @@ body.map-blind #crt-panel.on{display:flex}
    dimming it would file it with the absences. */
 .crt-row.downloading .crt-glyph{opacity:.8}
 .crt-row.held .crt-glyph{opacity:.85}
+/* The bank row dims on the same rule the chart rows do — the two swatches are the layer's
+   own colours, so a dimmed key is the honest picture of a key for something that is not
+   being painted. NOT HERE and PARTIAL dim less than ABSENT: the data exists, it just does
+   not cover the water on screen, and filing that with a missing file would be the same
+   flattening this whole panel exists to prevent. */
+.crt-row.bank.outside .crt-glyph,.crt-row.bank.partial .crt-glyph{opacity:.6}
+.crt-row.bank.unreadable .crt-glyph,.crt-row.bank.no-library .crt-glyph{opacity:.4}
+.crt-row.bank.unreadable .crt-name{color:var(--on-surface-variant)}
+.crt-row.bank .crt-name{letter-spacing:.02em}
 /* BOUNDED, AND IT HAS TO BE. With every layer drawn, the national store hands back
    nine distinct licence statements instead of one, and an unbounded credit block grew
    until it pushed the entire layer list off the bottom of a 330 px panel — the whole
@@ -742,6 +776,13 @@ body.map-blind #crt-panel.on{display:flex}
 .crt-g.t1 polygon{fill:var(--hazard);stroke:#0c0118;stroke-width:1.4}
 .crt-g.t1 text{fill:#0c0118}
 .crt-g.t2 rect{fill:rgba(12,1,24,.75);stroke:var(--tertiary);stroke-width:1.4}
+/* THE CHEVRON ROWS. Locks and bridges are the only two layers in the whole national set
+   that carry a direction, so they are the only two whose key glyph is a polygon instead
+   of the tier's symmetric shape — and a tier-2 polygon had no rule at all, which would
+   have left the bridges swatch an unfilled, unstroked ghost beside a map full of green
+   chevrons. Same fill and stroke as the rounded square it replaces: the SHAPE changed
+   because the data says something extra, and nothing about the tier did. */
+.crt-g.t2 polygon{fill:rgba(12,1,24,.75);stroke:var(--tertiary);stroke-width:1.4}
 .crt-g.t2 text{fill:var(--tertiary)}
 .crt-g.t3 circle{fill:rgba(12,1,24,.75);stroke:rgba(200,170,255,.75);stroke-width:1.4}
 .crt-g.t3 text{fill:rgba(200,170,255,.9)}
@@ -1120,6 +1161,14 @@ body.sim-takeover #stale-badge{top:116px}
   justify-content:space-between;column-gap:10px}
 #leak-icon{display:inline-flex;width:18px;height:18px;flex:0 0 auto;align-self:center}
 #leak-icon svg{width:18px;height:18px}
+/* Only latched states are pressable — see renderLeakRearm. The hit area is grown
+   past the 18px glyph because this is tapped with wet hands on a handheld, and the
+   ring is the only thing saying "this is a control" on an icon that is otherwise
+   pure status. */
+#leak-icon[data-rearm]{cursor:pointer;border-radius:50%;outline-offset:2px;
+  box-shadow:0 0 0 1px rgba(255,255,255,.35)}
+#leak-icon[data-rearm]:hover{box-shadow:0 0 0 2px rgba(255,255,255,.6)}
+#leak-icon[data-rearm]:focus-visible{outline:2px solid var(--hazard)}
 
 /* ---- flex utilities (used by the viewport-fitting rail) ---- */
 .flex-1{flex:1 1 0%}

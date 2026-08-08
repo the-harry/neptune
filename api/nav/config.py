@@ -307,6 +307,169 @@ class NavSettings:
     crt_user_agent: str = field(default_factory=lambda: _s(
         "NAV_CRT_UA", "NeptuneROV/1.0 (canal survey; offline hazard cache)"))
 
+    # --- LIDAR launch-bank layer (nav/lidar.py) — BOOTSTRAP-ONLY DOWNLOAD -------
+    #
+    # WHAT THE LAYER IS. The Environment Agency's 1 m composite DTM, painted over the
+    # satellite basemap in two colours so the map stops being a dark blue blob and
+    # starts saying which bank you could get down with kit and which one is a wall.
+    #
+    # WHERE IT RUNS. The handheld, once, with internet. The decode needs numpy and
+    # Pillow and the classification needs scipy; the Pi 3B+ carries none of them and
+    # must not be made to. Nothing in the serving path resolves the hostname below.
+    #
+    # WHAT IT NEVER CLAIMS. Nothing here says anything about depth — LIDAR cannot see
+    # through water, and no water pixel is painted. And "under 2 m above the water" is
+    # a geometric fact, not permission to launch: the recon's own output classified a
+    # railway cutting as low bank. Every sentence the layer prints has to keep those
+    # two apart.
+    #
+    # The WCS endpoint. Verified live 2026-08-08 against a Regent's Canal box at
+    # Camden: 2,523,587 bytes, a 358x453 float32 grid, 21.54-35.03 m OD, 4.94% nodata.
+    lidar_wcs_url: str = field(default_factory=lambda: _s(
+        "NAV_LIDAR_WCS",
+        "https://environment.data.gov.uk/spatialdata/"
+        "lidar-composite-digital-terrain-model-dtm-1m-2022/wcs"))
+    lidar_coverage_id: str = field(default_factory=lambda: _s(
+        "NAV_LIDAR_COVERAGE",
+        "13787b9a-26a4-4775-8523-806d13af58fc__Lidar_Composite_Elevation_DTM_1m"))
+    # SUBSETTING CRS IS NOT DECORATION. DescribeCoverage says this coverage is natively
+    # EPSG:27700 with axis labels "E N", so `subset=Long(...)` names an axis it does not
+    # have — and the service does not say so. It answers HTTP 500 "Internal server
+    # error", which reads as the service being down. With this parameter the identical
+    # request returns 200 and a GeoTIFF. Measured, both ways, on the same minute.
+    lidar_subset_crs: str = field(default_factory=lambda: _s(
+        "NAV_LIDAR_SUBSET_CRS", "http://www.opengis.net/def/crs/EPSG/0/4326"))
+    # UNCOMPRESSED ON PURPOSE, and this one cost a measurement to learn. The service
+    # honours &compression=DEFLATE and it is a 7.5x saving on the wire (2,523,587 bytes
+    # -> 337,867 for the same Camden box, and faster). It is not used because PILLOW
+    # DECODES IT WRONG: hand-unpacking the deflate tiles with zlib reproduces the
+    # uncompressed grid exactly, so the server's bytes are right, but PIL 12.3.0 turns
+    # a pixel whose true value is 31.73 m OD into 2.08e-32. A wrong elevation is worse
+    # than a missing one, because nothing downstream can tell that it is wrong.
+    lidar_format: str = field(default_factory=lambda: _s("NAV_LIDAR_FORMAT", "image/tiff"))
+    lidar_user_agent: str = field(default_factory=lambda: _s(
+        "NAV_LIDAR_UA", "NeptuneROV/1.0 (canal survey; offline lidar cache)"))
+    lidar_attribution: str = field(default_factory=lambda: _s(
+        "NAV_LIDAR_ATTR",
+        "Contains public sector information licensed under the Open Government Licence "
+        "v3.0 — Environment Agency LIDAR Composite DTM 1 m, 2022"))
+    # The survey the data is from, carried into every provenance record. BANKS CHANGE:
+    # a wall built in 2024 is not in a 2022 survey, and an operator who is not told the
+    # vintage cannot weigh that. Written down rather than derived because the service
+    # publishes it in the dataset name and nowhere in the pixels.
+    lidar_survey_vintage: str = field(default_factory=lambda: _s("NAV_LIDAR_VINTAGE", "2022"))
+
+    # ---- how the download is cut up ----
+    # ONE SUB-REQUEST IS 1000 m SQUARE. Measured at Camden, live:
+    #     350 m ->  2,523,587 bytes in 0.9 s   (3.9x the raw float32 — edge padding)
+    #    1000 m ->  9,437,675 bytes in 2.8 s   (2.2x)
+    #    2400 m -> 32,588,323 bytes in 62.0 s  (1.3x)
+    # Bigger is cheaper per byte and that is not the constraint. 62 seconds is one
+    # all-or-nothing unit of work with a whole minute for a canal-side hotspot to drop
+    # in and nothing to show while it runs. 1000 m is under three seconds, is worth
+    # about 9 MB if it has to be thrown away, and cuts the standard 2.4 km area into
+    # nine of which the corridor filter usually keeps four or five.
+    lidar_subrequest_m: float = field(default_factory=lambda: _f("NAV_LIDAR_SUBREQ_M", 1000.0))
+    # Stored pixel size, in metres, square at the area's centre latitude. 1 m is the
+    # survey's own resolution: anything finer invents detail, anything coarser throws
+    # away the half-metre steps that distinguish a slipway from a wall.
+    lidar_px_m: float = field(default_factory=lambda: _f("NAV_LIDAR_PX_M", 1.0))
+    # Requests per second, sequential. Deliberately far slower than sat_rate_per_s (6):
+    # these are 9 MB responses off a free public service, not 20 kB tiles, and a run
+    # that gets throttled out mid-bootstrap leaves an area that LOOKS surveyed and is
+    # holed. One request every two seconds against a fetch that already takes three.
+    lidar_rate_per_s: float = field(default_factory=lambda: _f("NAV_LIDAR_RATE", 0.5))
+    lidar_timeout_s: float = field(default_factory=lambda: _f("NAV_LIDAR_TIMEOUT_S", 120.0))
+    lidar_tries: int = field(default_factory=lambda: _i("NAV_LIDAR_TRIES", 3))
+    # Estimates shown BEFORE an operator on a metered hotspot commits to a download.
+    # Both measured, both deliberately the pessimistic end of what was seen.
+    lidar_avg_mb_per_request: float = field(default_factory=lambda: _f("NAV_LIDAR_AVG_MB", 9.5))
+    lidar_avg_seconds_per_request: float = field(default_factory=lambda: _f("NAV_LIDAR_AVG_S", 3.0))
+    # Caps that bite before the network does. 64 sub-requests is an 8 km square, well
+    # past area_max_radius_m; 80 Mpx is 320 MB of float32, which is a lot of card for
+    # one layer and a lot of array for one pass of scipy.
+    lidar_max_requests: int = field(default_factory=lambda: _i("NAV_LIDAR_MAX_REQ", 64))
+    lidar_max_pixels: int = field(default_factory=lambda: _i("NAV_LIDAR_MAX_PX", 80_000_000))
+
+    # ---- the corridor: which ground is worth downloading at all ----
+    # A sub-request is fetched only if a Canal & River Trust canal centreline passes
+    # within this distance of it. 150 m is generous against the ~34 m painted band on
+    # purpose: the classification needs the ground BEYOND the band to find each pound's
+    # water level and to measure a bank against its nearest water, and a corridor cut
+    # to the width of the paint would starve those at every edge.
+    lidar_fetch_margin_m: float = field(default_factory=lambda: _f("NAV_LIDAR_MARGIN_M", 150.0))
+    # The layer key inside data/crt/national/. Already on the card, nationally, 3,173
+    # features — `python -m nav.cli crt-fetch` put it there and this never re-fetches it.
+    lidar_centreline_layer: str = field(default_factory=lambda: _s(
+        "NAV_LIDAR_CENTRELINE", "canals-by-km-length-1"))
+    # Suffix on the DIRECTORY beside the imagery: data/areas/<name>.lidar/. It has to be
+    # a directory, not files called <name>.dtm.json and friends, because
+    # areas.list_areas() globs areas/*.json and would read one as an area called
+    # "<name>.dtm" that nothing can fly and nothing can delete.
+    lidar_dir_suffix: str = field(default_factory=lambda: _s("NAV_LIDAR_DIR_SUFFIX", ".lidar"))
+
+    # ---- what counts as a measurement, and what is refused ----
+    # Anything below this is the GDAL_NODATA fill (about -3.4e38) whether or not the
+    # file carried the tag to say so. Unmasked it dominates every histogram and turns
+    # every hillshade it touches into a cliff.
+    lidar_sentinel_below: float = field(default_factory=lambda: _f("NAV_LIDAR_SENTINEL", -1e30))
+    # Plausible ground, in metres above Ordnance Datum. The service declares its own
+    # range as -12.0 to 1400.0 (DescribeCoverage AllowedValues); these are a little
+    # wider, because the job of this guard is catching garbage and not second-guessing
+    # the survey at its own edges.
+    lidar_elev_min_m: float = field(default_factory=lambda: _f("NAV_LIDAR_ELEV_MIN", -20.0))
+    lidar_elev_max_m: float = field(default_factory=lambda: _f("NAV_LIDAR_ELEV_MAX", 1500.0))
+    # THE FILL-SHEET TEST, in metres of relief. A box outside the 2022 survey does not
+    # come back as nodata — measured over the North Sea, it comes back as a grid of
+    # 0.0 and denormals with NO GDAL_NODATA tag at all. "Flat, at zero, everywhere" is
+    # exactly the shape of a launchable bank, so a response with less relief than this
+    # and a range straddling zero is refused as fill rather than stored as terrain.
+    lidar_fill_span_m: float = field(default_factory=lambda: _f("NAV_LIDAR_FILL_SPAN_M", 0.01))
+    # Below this fraction of surveyed pixels an area calls itself PARTIAL even when
+    # every sub-request answered. Half a map that says PRESENT is the failure the whole
+    # state field exists to prevent.
+    lidar_min_coverage: float = field(default_factory=lambda: _f("NAV_LIDAR_MIN_COVERAGE", 0.5))
+
+    # ---- the classification and the paint (the render half reads these) ----
+    # PROVEN ON REAL DATA — Regent's Canal at Camden — and frozen. They live here rather
+    # than in the renderer so that the two halves of this layer cannot drift apart, and
+    # so that an operator can be shown the number the paint actually used.
+    #
+    # BINARY, TWO COLOURS, NO ELEVATION RAMP. Amber is bank LESS THAN this far above
+    # the local water level; everything higher, and all urban fabric, is the dark
+    # earthy brown. A ramp would read as depth or as confidence and the layer has
+    # neither to offer.
+    lidar_launch_max_height_m: float = field(default_factory=lambda: _f("NAV_LIDAR_LAUNCH_M", 2.0))
+    lidar_colour_low: str = field(default_factory=lambda: _s("NAV_LIDAR_COL_LOW", "#E39A2E"))
+    lidar_colour_high: str = field(default_factory=lambda: _s("NAV_LIDAR_COL_HIGH", "#453016"))
+    # Hillshade, from the same raw DTM, multiplied through BOTH paint classes — it is
+    # what turns two flat colours into readable ground.
+    lidar_hillshade_azimuth_deg: float = field(default_factory=lambda: _f("NAV_LIDAR_HS_AZ", 315.0))
+    lidar_hillshade_altitude_deg: float = field(default_factory=lambda: _f("NAV_LIDAR_HS_ALT", 45.0))
+    lidar_hillshade_z_factor: float = field(default_factory=lambda: _f("NAV_LIDAR_HS_Z", 3.0))
+    # Faint white contours on the banks only. Thin and nearly transparent on purpose:
+    # they are texture that reveals slope, not a chart to read heights off.
+    lidar_contour_interval_m: float = field(default_factory=lambda: _f("NAV_LIDAR_CONTOUR_M", 1.0))
+    lidar_contour_width_px: float = field(default_factory=lambda: _f("NAV_LIDAR_CONTOUR_PX", 0.35))
+    lidar_contour_alpha: float = field(default_factory=lambda: _f("NAV_LIDAR_CONTOUR_A", 0.30))
+    # THE CORRIDOR IS BUFFERED FROM THE VECTOR, never detected as flat sheets in the
+    # DTM. That is what makes it continuous by construction: it bridges every bridge,
+    # lock and tunnel mouth, where a flatness detector loses the water entirely and
+    # leaves a gap in the paint exactly where the infrastructure an operator most needs
+    # to see is.
+    lidar_water_buffer_m: float = field(default_factory=lambda: _f("NAV_LIDAR_WATER_BUF_M", 12.0))
+    lidar_band_buffer_m: float = field(default_factory=lambda: _f("NAV_LIDAR_BAND_BUF_M", 22.0))
+    # PER-POUND WATER LEVELS, not one constant for the area. Pound levels are the modes
+    # of a histogram of near-flat pixels close to the centreline, and each bank pixel is
+    # measured against its NEAREST flat-water pixel — so the amber/brown split
+    # self-adapts as the canal steps down a lock flight. The Camden recon read
+    # 29.0 -> 27.6 -> 25.2 -> 22.6 m OD across four pounds; a single global datum would
+    # have painted the bottom pound's towpath as a wall.
+    lidar_pound_bin_m: float = field(default_factory=lambda: _f("NAV_LIDAR_POUND_BIN_M", 0.2))
+    lidar_pound_separation_m: float = field(default_factory=lambda: _f("NAV_LIDAR_POUND_SEP_M", 0.6))
+    lidar_flat_gradient: float = field(default_factory=lambda: _f("NAV_LIDAR_FLAT_GRAD", 0.04))
+    lidar_water_sample_m: float = field(default_factory=lambda: _f("NAV_LIDAR_WATER_SAMPLE_M", 8.0))
+
     # --- live track decimation (§7.5) — cap the polyline ---
     max_live_points: int = field(default_factory=lambda: _i("NAV_MAX_POINTS", 4000))
 

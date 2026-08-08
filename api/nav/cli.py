@@ -17,23 +17,42 @@
   python -m nav.cli crt-fetch gas-street         # ALSO clip a copy for one area, which is
                                                  # an optimisation for drawing and nothing
                                                  # more — the national set is the data
+  python -m nav.cli bank-fetch gas-street        # the LAUNCH-BANK overlay for one area:
+                                                 # an EA LIDAR ground model in, painted
+                                                 # tiles out — BOOTSTRAP, needs internet,
+                                                 # and HANDHELD-only work
+  python -m nav.cli bank-fetch --status          # which areas are painted, off the disk,
+                                                 # no network
+  python -m nav.cli bank-fetch --libs            # are numpy, scipy and Pillow here, for
+                                                 # THIS python, and what installs them
   python -m nav.cli soundings data/dives/dive-*.jsonl [--area gas-street] [--dry-run]
   python -m nav.cli soundings --selftest
   python -m nav.cli mag-cal   [--base http://127.0.0.1:8000]   # guide IMU calibration
   python -m nav.cli state     [--base ...]
   python -m nav.cli readiness [--base ...]
 
-WHICH OF THESE NEED THE INTERNET (§3, the two-phase rule). Exactly two, and both
-are BOOTSTRAP-time commands that say so before they do anything: `area-fetch`,
-which fills a whole offline area, and `crt-fetch`, which fills in the Canal &
-River Trust's layers. Everything else — including `soundings`, which reads a
-journal off the card and writes to a store on the same card — runs unchanged in
-the isolated canal-side segment, where there is no WAN and no hostname resolution.
+WHICH OF THESE NEED THE INTERNET (§3, the two-phase rule). Exactly three, and all
+three are BOOTSTRAP-time commands that say so before they do anything: `area-fetch`,
+which fills a whole offline area, `crt-fetch`, which fills in the Canal & River
+Trust's layers, and `bank-fetch`, which fetches the terrain the launch-bank overlay
+is painted from. Everything else — including `soundings`, which reads a journal off
+the card and writes to a store on the same card — runs unchanged in the isolated
+canal-side segment, where there is no WAN and no hostname resolution.
+
+AND ONE OF THEM NEEDS SOMETHING ELSE AS WELL. `bank-fetch` is the only command in
+this file whose work is mostly arithmetic rather than requests: nav/lidar.py fetches
+a terrain model and nav/bank.py classifies it, which needs numpy, scipy and Pillow.
+That is HANDHELD work by design — the maps live on the handheld and the vehicle is
+never given those libraries — so on a machine without them the command names exactly
+which are missing and what installs them, and changes nothing. `bank-fetch --libs`
+asks that question on its own, before a trip, which is when the answer is still worth
+something.
 
 `area-fetch` IS THE ONE TO RUN BEFORE A TRIP. It is the same job the console runs
 by itself when a launch point is set (nav/service.py, AreaFetch), driven from a
 terminal instead of a WebSocket, so a card filled at home and a card filled by
-tapping the map are the same card.
+tapping the map are the same card — and it now includes the bank overlay, so
+`bank-fetch` is only for filling that one source in on its own.
 
 AND `crt-fetch` WITH NO AREA IS THE ONE THAT MATTERS MOST, ONCE. It downloads the
 whole Trust network — every lock, sluice, culvert, stop-plank groove, outfall,
@@ -1043,13 +1062,15 @@ def _crt_fetch(args) -> int:
 # area-fetch (§3) — the WHOLE bootstrap for one area, in one command
 # ===========================================================================
 #
-# WHY THIS EXISTS ALONGSIDE crt-fetch. crt-fetch fills in ONE of the three things
-# an offline area needs, and it requires an area that already exists to fill in —
-# which, until this round, nothing in the repo ever created. data/areas/ was empty,
-# data/crt/gas-street/ held 26 perfectly good hazard layers belonging to no area,
-# and the console said "no chart data is downloaded" forever. This is the command
-# that creates the area and fills all three: the waterway centreline, the hazard
-# charts and the imagery, in that order.
+# WHY THIS EXISTS ALONGSIDE crt-fetch AND bank-fetch. Each of those fills in ONE of
+# the things an offline area needs, and each requires an area that already exists to
+# fill in — which, until this round, nothing in the repo ever created. data/areas/ was
+# empty, data/crt/gas-street/ held 26 perfectly good hazard layers belonging to no area,
+# and the console said "no chart data is downloaded" forever. This is the command that
+# creates the area and fills all FOUR: the waterway centreline, the hazard charts, the
+# launch-bank overlay and the imagery, in that order. The count is not written into
+# any sentence this file prints — it comes off nav/service.py's FETCH_SOURCES, which
+# is what the printer below walks, so adding a fifth costs nothing here.
 #
 # IT IS THE SAME JOB THE CONSOLE RUNS. Not a parallel implementation of it —
 # nav/service.py's AreaFetch, driven with a printer instead of a WebSocket, so a
@@ -1087,7 +1108,8 @@ def _print_sources(snap: dict) -> None:
 
 
 def _area_fetch(args) -> int:
-    """Create/complete one offline area: centreline + hazard charts + imagery."""
+    """Create/complete one offline area: every source in nav/service.py's FETCH_SOURCES
+    — the centreline, the hazard charts, the launch-bank overlay and the imagery."""
     try:
         from . import service as svcmod
     except Exception as exc:  # noqa: BLE001 — reported, never raised
@@ -1098,9 +1120,13 @@ def _area_fetch(args) -> int:
 
     print("area-fetch: everything one offline area needs, downloaded in one go")
     print("  BOOTSTRAP-time (§3). The waterway centreline, the Canal & River Trust")
-    print("  hazard layers and the satellite imagery — in that order, so a hotspot")
-    print("  that dies half way leaves you the two that keep the sub out of a")
-    print("  culvert and loses only the picture. There is no internet at the canal.\n")
+    print("  hazard layers, the launch-bank overlay and the satellite imagery — in")
+    print("  that order, so a hotspot that dies half way leaves you the ones that")
+    print("  keep the sub out of a culvert and get it back out of the water, and")
+    print("  loses only the picture. There is no internet at the canal.")
+    print("  The bank overlay is also the one that needs numpy, scipy and Pillow on")
+    print("  THIS machine; without them it reports itself unavailable and the rest")
+    print("  of the fetch runs exactly as it would have. `bank-fetch --libs` asks.\n")
 
     lat = lon = None
     if args.at:
@@ -1265,6 +1291,263 @@ async def _area_fetch_run(svcmod, name: str, bbox, zmin: int, zmax: int,
     print(f"activate  : POST /api/areas/{name}/activate")
     print(f"check     : GET  /api/areas/{name}/complete")
     return 0 if after["complete"] else 1
+
+
+# ===========================================================================
+# bank-fetch (§3) — the LAUNCH-BANK overlay for one area, on its own
+# ===========================================================================
+#
+# WHY IT EXISTS WHEN area-fetch ALREADY DOES IT. Same reason `crt-fetch <area>`
+# exists beside `area-fetch`: the sources are independent, they fail independently,
+# and the one that failed is the one worth re-running. This is also the only source
+# whose failure can be about the MACHINE rather than about the network — no numpy,
+# no scipy, no Pillow, no overlay, and no amount of driving somewhere with signal
+# will change that — so it is the one that most needs a command that can be pointed
+# at it and asked what is wrong.
+#
+# IT IS THE SAME JOB, NOT A SECOND COPY OF IT. It drives AreaFetch's own bank step,
+# so a layer built here and a layer built by tapping a launch point come out of the
+# same code, land in the same place and are reported by the same sentences. The one
+# thing it deliberately does NOT do is write the area's `state` field: that word
+# describes the whole area's fetch, and a single-source run that set it to
+# "downloading" would leave it saying so with nothing behind it.
+
+
+def _print_bank_libs(svcmod, libs: dict) -> None:
+    """Which of the three raster libraries this python has, one line each.
+
+    Per library and not a verdict, because "the bank layer is unavailable" sends
+    somebody to install three things when two of them are already there — and on a
+    handheld at a kitchen table the night before a trip, that difference is the
+    whole value of the command.
+    """
+    for mod, pkg in svcmod._BANK_LIBS:
+        here = svcmod._has_module(mod)
+        print(f"  {pkg:<10} {'present' if here else 'MISSING':<8} "
+              f"(import {mod})")
+    print(f"  install  : {libs['install']}")
+    print(f"  where    : {svcmod._BANK_WHERE}.")
+
+
+def _bank_tile_count(block: dict):
+    """The number of overlay tiles in a bank block, whatever shape it arrived in.
+
+    nav/bank.py keeps its whole tile report under `tiles` — a dict of counts, zooms
+    and per-zoom rows — and the number inside it is the only part a person reads.
+    Written once here rather than unpacked at each print, because a `tiles` that is
+    sometimes a count and sometimes a document is exactly the kind of thing that ends
+    up printed as `{'tiles': 84, 'blank': ...}` in a preflight somebody reads at a
+    canal.
+    """
+    t = block.get("tiles")
+    if isinstance(t, dict):
+        t = t.get("tiles")
+    return t if isinstance(t, int) else None
+
+
+def _print_bank_status(svcmod, names: list[str]) -> int:
+    """What bank paint each area has, read off the disk. NO NETWORK.
+
+    The question an operator asks at the water, so it may not touch a socket to
+    answer it — and it prints the sentence rather than only the word, because
+    "absent" and "unavailable" are four letters apart and mean opposite things
+    about what anybody can do next.
+    """
+    if not names:
+        print("  (no areas on this card, so there is nothing to have a bank layer)")
+        return 1
+    worst = 0
+    for name in names:
+        b = svcmod._bank_block(name)
+        n = _bank_tile_count(b)
+        held = (b.get("lidar") or {}).get("state")
+        print(f"  {name:<20} paint {b['status']:<12} terrain {str(held or '?'):<10} "
+              f"{(str(n) + ' tile(s)') if n is not None else ''}")
+        print(f"  {'':<20} {b['title']}")
+        if not svcmod._source_held("bank", b["status"]):
+            # UNAVAILABLE IS NOT COUNTED AS A FAILURE OF THE CARD, for the reason
+            # nav/service.py's completeness roll-up does not count it either: it is
+            # not a thing anybody left undone. Neither is PARTIAL, which _source_held
+            # answers for — a corridor the survey never flew is finished work. Both
+            # are still printed in full.
+            worst = max(worst, 0 if b["status"] == "unavailable" else 1)
+    return worst
+
+
+def _bank_fetch(args) -> int:
+    """Build one area's launch-bank overlay: LIDAR terrain in, overlay tiles out."""
+    try:
+        from . import service as svcmod
+    except Exception as exc:  # noqa: BLE001 — reported, never raised
+        print(f"error: api/nav/service.py could not be imported ({_brief(exc)}). This "
+              f"command drives the same job the API serves, so it needs the API's "
+              f"dependencies (fastapi, pydantic) installed.", file=sys.stderr)
+        return 2
+
+    libs = svcmod._bank_libraries()
+    if args.libs:
+        print("bank-fetch --libs: what the launch-bank overlay needs on THIS machine")
+        print(f"  python   : {sys.executable}\n")
+        _print_bank_libs(svcmod, libs)
+        print(f"\n{libs['why']}")
+        # Non-zero when they are missing: this is meant to be usable as a check before
+        # a trip, and a command that exits 0 whatever it finds is one nothing can gate
+        # on.
+        return 0 if libs["ok"] else 1
+
+    known = sorted(a["name"] for a in areamod.list_areas())
+    if args.status:
+        print("bank-fetch --status: the launch-bank layer on this handheld, read off the")
+        print("  disk. No network is touched, so it answers at the water's edge.\n")
+        _print_bank_libs(svcmod, libs)
+        print()
+        name = areamod.slugify(args.area) if args.area else None
+        if name:
+            return _print_bank_status(svcmod, [name])
+        # THE UNION, AND NOT JUST THE AREAS WITH METADATA. A painted directory whose
+        # areas/<name>.json has been deleted still holds tiles this handheld will
+        # serve, and a status command that listed only the tidy half would report a
+        # layer as absent while the console draws it.
+        painted = [c.get("area") for c in svcmod.bank_cards() if c.get("area")]
+        return _print_bank_status(svcmod, sorted(set(known) | set(painted)))
+
+    print("bank-fetch: the launch-bank overlay for one area")
+    print("  BOOTSTRAP-time (§3), and HANDHELD work. The Environment Agency's 1 m LIDAR")
+    print("  terrain model is downloaded once, then decoded, hillshaded and classified")
+    print("  into overlay tiles here. What it answers is which side of the cut could be")
+    print("  got down with the sub and the cable — and imagery with no paint on it looks")
+    print("  exactly like a bank that was measured and found to be a wall.")
+    print("  AMBER IS A GEOMETRIC FACT AND NOT PERMISSION: it says the ground is under")
+    print("  the launch height above the water beside it, and knows nothing about")
+    print("  fences, gates, live railway, reed beds or who owns the field.\n")
+
+    if not args.area:
+        print("error: name an area that exists on this card. The bank layer is built "
+              "for an area's box, and this command will not invent one — "
+              "`area-fetch --at LAT,LON` is what creates an area.", file=sys.stderr)
+        print(f"  known : {', '.join(known) if known else '(no areas on this card)'}",
+              file=sys.stderr)
+        return 2
+    name = areamod.slugify(args.area)
+    meta = svcmod._area_meta(name)
+    if meta is None:
+        print(f"error: there is no area called {name!r} on this card.", file=sys.stderr)
+        print(f"  known : {', '.join(known) if known else '(no areas on this card)'}",
+              file=sys.stderr)
+        return 2
+    bbox = meta.get("bbox")
+    if not bbox:
+        print(f"error: area {name!r} has no usable bbox, so there is no box to fetch "
+              f"terrain for. Nothing here will guess one.", file=sys.stderr)
+        return 2
+    # THE PYRAMID'S ZOOMS ARE THE BANK LAYER'S OWN AND ARE NOT PASSED FROM HERE.
+    # nav/bank.py paints from z13 so the layer is still legible when the map is pulled
+    # back to plan a trip, while an area's imagery pyramid starts at z16 — quoting this
+    # area's imagery range at it would silently narrow a layer whose own module has
+    # already decided how far out it has to be readable. These two are carried only
+    # because AreaFetch takes them for the imagery source.
+    zmin = int(meta.get("minzoom") or settings.sat_min_zoom)
+    zmax = int(meta.get("maxzoom") or settings.sat_max_zoom)
+
+    print(f"area     : {name}" + (f"  ({meta['label']})" if meta.get("label") else ""))
+    print(f"bbox     : {bbox[0]:.5f},{bbox[1]:.5f} .. {bbox[2]:.5f},{bbox[3]:.5f}")
+    print("libraries:")
+    _print_bank_libs(svcmod, libs)
+    before = svcmod._bank_block(name)
+    held = before.get("lidar") or {}
+    print("\non this card already (read off the disk):")
+    print(f"  terrain    {held.get('state', 'absent')}")
+    print(f"             {str(held.get('why', '') or '')[:200]}")
+    print(f"  paint      {before['status']}")
+    print(f"             {before['title'][:200]}")
+    if before["status"] == "unavailable":
+        # REFUSED BEFORE THE PREFLIGHT GOES ANY FURTHER, and refused as a sentence
+        # rather than as a failed download. Nothing about the network is even asked: a
+        # missing library is not a thing a connection fixes, and printing "internet:
+        # available" above this would be an invitation to try again.
+        print(f"\nnothing was built and nothing was downloaded. "
+              f"{before.get('remedy', '')}", file=sys.stderr)
+        return 2
+    if args.dry_run:
+        print("\n--dry-run: nothing was fetched and nothing was written.")
+        return 0
+    if svcmod._source_held("bank", before["status"]) and not args.refresh:
+        # AND NOT ONE SOCKET IS OPENED TO ESTABLISH THAT. The probe costs four seconds
+        # against a resolver that is not there, which is the normal state at the water,
+        # and it would buy nothing — the answer is already on the disk. Same rule
+        # crt-fetch applies to a national card that is already current. PARTIAL counts
+        # as built for the reason nav/service.py's _source_held gives: where the survey
+        # has holes there is nothing left to fetch.
+        print("\nnothing was built, because there was nothing to build, and nothing was")
+        print("asked of the network to find that out. Pass --refresh to build it again.")
+        return 0
+    return asyncio.run(_bank_fetch_run(svcmod, name, bbox, zmin, zmax,
+                                       bool(args.refresh)))
+
+
+async def _bank_fetch_run(svcmod, name: str, bbox, zmin: int, zmax: int,
+                          refresh: bool) -> int:
+    # ONE PROBE PER COMMAND, exactly as area-fetch does it: the verdict is printed in
+    # the preflight where the rest of this file puts it, and the job is not sent off to
+    # ask a second time.
+    ok, why = await svcmod.internet_available()
+    print(f"\ninternet : {('available — ' + why) if ok else ('UNAVAILABLE — ' + why)}")
+    if not ok:
+        print("\nnothing was fetched. What is on this card is unchanged, and unpainted")
+        print("imagery is not a high bank — nothing above claims this cut has one.")
+        return 2
+
+    last = {"status": None, "detail": None, "at": 0.0}
+
+    async def say(snap: dict) -> None:
+        s = (snap.get("sources") or {}).get("bank") or {}
+        st, detail = s.get("status"), s.get("detail")
+        now = time.monotonic()
+        # A finished source says so once. A running one repeats only every
+        # _PROGRESS_GAP_S — but a CHANGE of what it is doing prints immediately,
+        # because the two halves of this job are minutes apart and "downloading
+        # terrain" left on screen while the classifier grinds is the stuck-progress lie
+        # in miniature.
+        if (st, detail) == (last["status"], last["detail"]) and \
+                (st != "running" or (now - last["at"]) < _PROGRESS_GAP_S):
+            return
+        last.update(status=st, detail=detail, at=now)
+        n, of = s.get("done"), s.get("total")
+        count = f"{n}/{of}" if (n is not None and of) else (str(n) if n else "")
+        print(f"  {'bank':<11} {str(st):<12} {count:>10}  {detail or ''}".rstrip(),
+              flush=True)
+
+    print("\nbuilding. The terrain is a handful of large requests against a public")
+    print("service; the decode, the pound detection, the classification and the tile")
+    print("pyramid are arithmetic on this machine, and they are the slow half:")
+    # THE SERVICE'S OWN JOB, DRIVEN ONE SOURCE DEEP. Not a re-implementation: a layer
+    # built here and a layer built by tapping a launch point come out of the same lines
+    # of code, land in the same place and are described by the same sentences.
+    #
+    # AND IT DELIBERATELY DOES NOT RECORD THE AREA'S `state`. That word describes the
+    # whole area's fetch, and a single-source run that wrote "downloading" into it
+    # would leave the console showing a download that nothing is running.
+    job = svcmod.AreaFetch(name, bbox, zmin, zmax, refresh=refresh,
+                           reason="python -m nav.cli bank-fetch", on_change=say)
+    try:
+        await job._bank()
+    except KeyboardInterrupt:
+        print("\nstopped. Whatever was written is on the card; the rest is not.",
+              file=sys.stderr)
+    src = job.sources["bank"]
+    if src.get("why"):
+        print(f"  {'':<11} {src['why']}")
+
+    # THE VERDICT IS READ OFF THE DISK, never off the job's own report — the same rule
+    # crt-fetch and area-fetch follow. A driver that printed its own optimism would be
+    # the one place in this chain where a layer that never landed looks built.
+    print("\non this card now:")
+    rc = _print_bank_status(svcmod, [name])
+    print("\nserve it : GET /api/bank            (every painted area, and what is not)")
+    print("tiles    : GET /api/bank/tiles/{z}/{x}/{y}.png")
+    print("levels   : GET /api/bank/pounds     ?bbox=W,S,E,N")
+    print(f"check    : GET /api/areas/{name}/complete   (all four sources at once)")
+    return rc
 
 
 # --- soundings --------------------------------------------------------------
@@ -1451,7 +1734,7 @@ def main(argv=None) -> int:
     sc.add_argument("--id", default="default")
     af = sub.add_parser("area-fetch",
                         help="create/complete one offline area — centreline, CRT "
-                             "hazard layers and satellite imagery "
+                             "hazard layers, launch-bank overlay and satellite imagery "
                              "(BOOTSTRAP-time: needs internet)")
     af.add_argument("area", nargs="?",
                     help="an area name; with --at, an existing area covering that "
@@ -1497,6 +1780,27 @@ def main(argv=None) -> int:
                     help="W,S,E,N in degrees, overriding the area's own bbox")
     cf.add_argument("--list", action="store_true",
                     help="list the layers the Trust publishes and fetch nothing")
+    bf = sub.add_parser("bank-fetch",
+                        help="build one area's LAUNCH-BANK overlay from an Environment "
+                             "Agency LIDAR ground model (BOOTSTRAP-time: needs internet, "
+                             "and needs numpy, scipy and Pillow — handheld work, never "
+                             "the vehicle's)")
+    bf.add_argument("area", nargs="?",
+                    help="an area that already exists on this card. This command does "
+                         "not create areas — `area-fetch --at LAT,LON` does")
+    bf.add_argument("--status", action="store_true",
+                    help="what terrain and what paint each area has, read off the disk. "
+                         "Touches no network, so it answers at the water's edge")
+    bf.add_argument("--libs", action="store_true",
+                    help="report whether numpy, scipy and Pillow are installed for THIS "
+                         "python, and print the command that installs them. Exits "
+                         "non-zero when any is missing, so a pre-trip check can gate on it")
+    bf.add_argument("--refresh", action="store_true",
+                    help="build it again even though it is already on the card (by "
+                         "default a built overlay is left alone and no terrain is "
+                         "re-downloaded)")
+    bf.add_argument("--dry-run", action="store_true",
+                    help="report what is on the card and build nothing")
     so = sub.add_parser("soundings",
                         help="extract bed soundings from a dive journal into an "
                              "area's sounding store (offline)")
@@ -1534,6 +1838,7 @@ def main(argv=None) -> int:
     if args.cmd == "speed-cal":  return _speed_cal(args)
     if args.cmd == "area-fetch": return _area_fetch(args)
     if args.cmd == "crt-fetch":  return _crt_fetch(args)
+    if args.cmd == "bank-fetch": return _bank_fetch(args)
     if args.cmd == "soundings":  return _soundings(args)
     if args.cmd == "mag-cal":    return _mag_cal(args)
     if args.cmd == "state":      return _get(args, "/api/nav/state")

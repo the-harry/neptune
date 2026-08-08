@@ -7,8 +7,11 @@
 
 There are two machines in this system and they need opposite things:
 
-    TOPSIDE   the ROG Ally. Runs the CLIENT and nothing else. Needs a browser and
-              (for development) Python. The Pi is not required to fly the simulator.
+    TOPSIDE   the ROG Ally. Runs the CLIENT, and the local MAP backend the launcher
+              starts beside it - the offline areas, the national chart card and the
+              launch-bank overlay all live on this machine, and the map processing is
+              done here. Needs a browser and Python. The Pi is not required to fly
+              the simulator.
     VEHICLE   the Raspberry Pi. Runs the API, go2rtc and nginx. Installed by
               install.sh, which this will point you at rather than duplicate.
 
@@ -59,6 +62,39 @@ CORE_DEPS = (
     ("uvicorn", "the ASGI server that app is served by"),
     ("pydantic", "protocol.py and nav/models.py - the client/server wire contract"),
     ("httpx", "WOLFANG CGI client, file offload, thumbnails"),
+)
+
+# The map-processing libraries, which belong to the HANDHELD and to nothing else:
+# (module to probe, what to install, what stops working without it). They are what
+# api/nav/lidar.py and api/nav/bank.py need to turn an Environment Agency terrain model
+# into the LAUNCH-BANK overlay - which side of the cut could be got down with the sub
+# and the cable, and which one is a wall.
+#
+# THEY ARE THE OPPOSITE CASE TO HW_DEPS ABOVE IN EVERY RESPECT, which is why they are
+# their own section rather than three more lines in CORE_DEPS:
+#
+#   WHERE THEY GO. On the machine that holds the maps - the Ally, where the launcher
+#   starts the local map backend. The decode of a float32 GeoTIFF, the hillshade, the
+#   classification and the tile pyramid are one-time work done at a desk, not in a hull.
+#   WHERE THEY MUST NOT GO. The Pi 3B+. It is not a chart server, it has a gigabyte of
+#   RAM, and scipy on it is hours of compiling for a job that is already finished by the
+#   time the tether is rigged. api/requirements.txt keeps them COMMENTED for exactly
+#   this reason: install.sh builds the Pi's venv from that file.
+#   WHAT HAPPENS WITHOUT THEM. The api still starts, the client still flies, every other
+#   layer still draws, and bank tiles ALREADY on the card are still served - reading an
+#   MBTiles row needs neither. What stops is building one, and the layer reports itself
+#   UNAVAILABLE, naming which library is absent and the command below, exactly the way a
+#   missing sensor reports itself rather than taking the console down.
+#
+# Keep this list in step with the handheld section of api/requirements.txt.
+MAP_DEPS = (
+    ("numpy", "numpy",
+     "the elevation grid itself - every array, mask and statistic in nav/lidar.py"),
+    ("scipy", "scipy",
+     "scipy.ndimage in nav/bank.py: the corridor buffer, the gradients, and the "
+     "distance transform that measures a bank against its nearest water"),
+    ("PIL", "Pillow",
+     "decodes the float32 GeoTIFF the service returns and writes the overlay PNGs"),
 )
 
 
@@ -376,6 +412,62 @@ def core_deps() -> int:
     return 0
 
 
+def map_deps() -> int:
+    """Report the handheld's map-processing libraries. Never installs one.
+
+    THE POLARITY IS THE OPPOSITE OF THE TWO SECTIONS ABOVE, and that is the whole
+    reason this is a section of its own. A missing gpiozero matters ON the Pi and
+    nowhere else; a missing numpy matters EVERYWHERE BUT the Pi, because the maps
+    live on the handheld and the vehicle is deliberately never given these. So the
+    same rule - mark it BAD only on the machine where it is actually a defect -
+    lands the other way up here, and on the Pi their absence is not merely tolerated
+    but correct, which this says out loud rather than leaving as three quiet notes.
+
+    ABSENT IS NOT A BROKEN MACHINE, it is one layer this machine cannot build. The
+    api starts, the client flies, the simulator runs, every other layer draws, and
+    bank tiles already on the card are still served. What you do not get is the
+    ability to build one, and the layer says so itself, per area, with the command
+    below in it. Counting it is still right: this file's job is to say where you
+    stand, and "everything this machine needs is present" over a handheld that cannot
+    build a map layer is the one sentence it must never print.
+
+    Probed through the SAME interpreter the api would run under - see probe_imports.
+    Asking this process would report numpy missing on a machine where the venv has
+    it, which is the exact mistake that section was written to stop making.
+    """
+    print("\n--- HANDHELD MAP LIBRARIES (the launch-bank overlay) ---")
+    py = venv_python()
+    found = probe_imports(py, tuple(m for m, _, _ in MAP_DEPS))
+    absent = [(pkg, what) for mod, pkg, what in MAP_DEPS if not found[mod]]
+    on_pi = is_pi()
+    for mod, pkg, what in MAP_DEPS:
+        if found[mod]:
+            say(OK, pkg, what)
+        elif on_pi:
+            say(WARN, pkg, f"not needed here, and not wanted - the vehicle is not a "
+                           f"chart server   ({what})")
+        else:
+            say(BAD, pkg, f"not installed   ({what})")
+    if on_pi:
+        print("  Nothing above belongs on the Pi. The maps are processed on the handheld")
+        print("  and the vehicle serves what it is given, so this is the correct state.")
+        return 0
+    if not absent:
+        return 0
+    print("\n  Without these the api still starts, every other layer still draws, and")
+    print("  bank tiles already on this card are still served. What you cannot do is")
+    print("  BUILD one: the layer reports itself UNAVAILABLE, per area, naming which of")
+    print("  these is missing - a different thing from an area nobody has downloaded")
+    print("  yet, and the console keeps the two apart rather than drawing bare imagery")
+    print("  and letting it read as 'no low bank here'.")
+    print("  `python -m nav.cli bank-fetch --libs` asks the same question of the api's")
+    print("  own interpreter and exits non-zero, so a pre-trip check can gate on it.")
+    print("\n  One command fixes it, and it installs nothing else:")
+    print(f"      {py or sys.executable} -m pip install "
+          + " ".join(pkg for pkg, _ in absent))
+    return len(absent)
+
+
 def api_suite_totals(py: Path | None):
     """(suites, checks, names that cannot load here) — ASKED, never typed.
 
@@ -482,6 +574,7 @@ def main() -> int:
     missing += vehicle(args)
     missing += hardware_deps()
     missing += core_deps()
+    missing += map_deps()
     missing += api_tests(args)
 
     print()

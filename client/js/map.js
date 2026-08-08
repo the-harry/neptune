@@ -1224,6 +1224,25 @@ function drawCanvas(target){
   if(drewTiles){ ctx.setTransform(1,0,0,1,0,0);
     ctx.fillStyle='rgba(6,2,16,'+(MAP.expanded?CONFIG.map.tintExpanded:CONFIG.map.tintCollapsed)+')'; ctx.fillRect(0,0,w,h); }
 
+  /* 2.5) THE LIDAR LAUNCH-BANK LAYER — over the imagery, under everything else.
+
+     WHY EXACTLY HERE. It is a wash about the LAND, prerendered into XYZ tiles in the same
+     scheme the satellite tiles use (crt.js bankDraw), so compositing it is the whole of
+     drawing it. It goes ABOVE the imagery because it is the imagery's interpretation, and
+     BELOW every mark, line and glyph below because a raster covering half the frame drawn
+     over a weir would bury the one thing on this map that stops the vehicle. It also goes
+     after the readability tint on purpose: the tint exists to make vector work legible
+     over photography, and dimming a two-colour classification with it would push the
+     amber toward the brown, which is the one distinction this layer carries.
+
+     SKIPPED FOR A CAPTURE, exactly like the satellite tiles above it and for the same
+     reason: these come from the map service without crossOrigin, so drawing them taints
+     the canvas and toBlob refuses to export it. A screenshot keeps every vector layer,
+     which is what carries the navigational information. */
+  if(haveProj && !(target && target.noTiles) && typeof bankDraw==='function'){
+    try{ bankDraw(ctx,dpr); }catch(e){ LOG.warn('bank layer:', e && e.message); }
+  }
+
   // scale label (updates with zoom, §4)
   const gm = niceMeters(52, 1/curScale());
   if(live){ const sc=$('radar-scale'); if(sc) sc.innerHTML=fmtMeters(gm).replace(' ','&nbsp;'); }
@@ -1467,6 +1486,13 @@ function drawAttribution(ctx,w,h,dpr){
   const s=tileAttribution(); if(s) lines.push(s);
   if(typeof crtAnyPresent==='function' && typeof crtAttribution==='function' && crtAnyPresent())
     lines.push(crtAttribution());
+  // THE BANK LAYER IS SOMEBODY ELSE'S SURVEY. It is Environment Agency LIDAR, not Trust
+  // asset data, and it is published under a licence that asks for the words wherever it
+  // is shown — so it gets its own line rather than being folded under the Trust's credit,
+  // which would be crediting the wrong body for the paint on the banks. Same rule as the
+  // two above it: drawn when that layer actually reached the glass.
+  if(typeof bankAnyDrawn==='function' && typeof bankAttribution==='function' && bankAnyDrawn())
+    lines.push(bankAttribution());
   if(!lines.length) return;
   ctx.setTransform(1,0,0,1,0,0); ctx.font=(11*dpr)+'px sans-serif';
   const lh=16*dpr;

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib.util
 import json
 import logging
 import os
@@ -1030,9 +1031,21 @@ class NavService:
         # the map draws what landed, and what has not landed yet draws as clear
         # water. area_completeness() reports downloading, interrupted and cancelled
         # as their own states so the sentence can say which.
+        #
+        # A SOURCE THIS MACHINE CANNOT BUILD AT ALL DOES NOT FAIL THIS, and it is
+        # still named in the detail every time. That is the same judgement as the
+        # deliberate-skip rule above it: this gate is for things somebody could have
+        # done and did not, because those are fixable while there is still internet.
+        # The vehicle is never given numpy, so the launch-bank overlay is permanently
+        # unbuildable there — failing on it would leave a red line no dive could ever
+        # clear, and a gate that is always red is a gate that gets waved through on
+        # the day it is red about a sluice. area_completeness keeps the two apart, and
+        # keeps a third case apart as well: a bank layer that is BUILT with holes in
+        # the survey behind it, which is the ordinary outcome of a good build and is
+        # reported in this line's detail rather than failing it.
         comp = area_completeness(self.active_area or "")
-        add("offline area COMPLETE — imagery, hazard charts and centreline all on "
-            "this card and nothing still downloading",
+        add("offline area COMPLETE — imagery, hazard charts, the launch-bank overlay "
+            "and the centreline all on this card and nothing still downloading",
             bool(comp["complete"]), comp["detail"])
         # 3 origin + accuracy
         add("origin set within accuracy threshold",
@@ -1178,6 +1191,355 @@ def _soundings_mod():
         return soundings
     except ImportError:      # noqa: BLE001
         return None
+
+
+# What went wrong the last time each optional module was reached for, keyed by module
+# name, or None once one has imported. A module that raises on import is a different
+# fact from a module that is not in the build, and the operator asking why the
+# launch-bank overlay is missing is entitled to the difference: one is a checkout with a
+# feature left out, the other is a library that did not install.
+_BANK_IMPORT: dict[str, str | None] = {}
+
+
+def _has_module(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except Exception:  # noqa: BLE001 — a half-installed package reports absent, not raises
+        return False
+
+
+def _import_optional(name: str):
+    """One of nav/'s optional modules, or None, with the reason kept.
+
+    LAZY FOR THE REASON crt.py IS, AND FOR A STRICTER ONE ON TOP. The reason it
+    shares: these two own the download and the heavy raster work, and the serving path
+    must not import a downloader. The reason that is their own: nav/lidar.py and
+    nav/bank.py are the only modules under nav/ whose processing needs numpy, scipy and
+    Pillow, and the vehicle is deliberately never given any of the three — a Pi 3B+ has
+    neither the RAM nor the hours to build scipy, and it has no reason to, because the
+    maps live on the handheld. An import at module scope would take the WHOLE API down
+    on the machine that flies the sub, over libraries that machine is never meant to
+    have. A missing optional library is exactly like a missing sensor: it is reported,
+    in a sentence, by something that is still running.
+
+    ASKED BEFORE IT IS IMPORTED, so the two absences can be told apart. Without the
+    find_spec, a checkout with no bank.py in it and a bank.py that died on its own
+    imports both come back as the same ImportError, and the sentence the operator reads
+    would send them to install a library when the file is simply not in this build.
+
+    EXCEPTION, NOT ImportError. _crt_mod catches the narrow one because crt.py imports
+    nothing exotic; these must survive whatever a module doing float32 raster work can
+    raise at import time, including a numpy that is present and broken. Anything at all
+    here means "this layer cannot be asked", and the endpoint whose job is to REPORT
+    that must not be the thing that dies of it.
+    """
+    if not _has_module(f"{__package__}.{name}"):
+        # KEYED BY MODULE, because two of them are reached for on one request path and
+        # one shared slot would answer about bank.py with the reason lidar.py gave.
+        _BANK_IMPORT[name] = f"api/nav/{name}.py is not in this build"
+        return None
+    try:
+        mod = importlib.import_module(f".{name}", __package__)
+    except Exception as exc:  # noqa: BLE001 — a broken optional module still serves the rest
+        _BANK_IMPORT[name] = f"api/nav/{name}.py could not be imported ({exc})"
+        return None
+    _BANK_IMPORT[name] = None
+    return mod
+
+
+def _bank_mod():
+    """nav/bank.py — the classifier and the tile pyramid. See _import_optional."""
+    return _import_optional("bank")
+
+
+def _lidar_mod():
+    """nav/lidar.py — the terrain acquisition half. See _import_optional."""
+    return _import_optional("lidar")
+
+
+# The three libraries the launch-bank layer's raster work needs, as (import name, pip
+# name), and the command that installs them. NAMED HERE AS WELL AS IN nav/bank.py on
+# purpose: the case this file most has to be able to describe is the one where bank.py
+# could not be imported at all, and in that case there is nothing in that module left
+# to ask. Keep it in step with the handheld section of api/requirements.txt.
+_BANK_LIBS = (("numpy", "numpy"), ("scipy", "scipy"), ("PIL", "Pillow"))
+_BANK_INSTALL = "pip install numpy scipy Pillow"
+# Where they belong, said once so every sentence below can quote it. The Pi is not a
+# chart server and never becomes one: this is the handheld's work, done once, at home.
+_BANK_WHERE = ("the launch-bank layer is built on the HANDHELD, where the maps live and "
+               "where this is one-time work — the vehicle is deliberately never given "
+               "these libraries")
+
+
+def _bank_libraries() -> dict:
+    """Which of numpy / scipy / Pillow this interpreter has, and the sentence for it.
+
+    nav/bank.py's own library_state() is asked FIRST, because the list of what it needs
+    is its to change and its `why` is written to be shown verbatim. This file's own
+    probe is the fallback for the case where that module could not be imported — which
+    is exactly the case where the answer matters most and cannot come from there.
+
+    find_spec in the fallback and not an import, for the reason bootstrap.py gives for
+    the same probe: this is answered on request paths, and importing numpy to find out
+    whether numpy is there costs a fifth of a second and a lot of address space on a
+    machine that is flying a sub.
+    """
+    bank = _bank_mod()
+    fn = getattr(bank, "library_state", None) if bank is not None else None
+    if callable(fn):
+        try:
+            doc = fn()
+            if isinstance(doc, dict) and isinstance(doc.get("missing"), (list, tuple)):
+                missing = [str(m) for m in doc["missing"]]
+                return {"ok": not missing, "missing": missing,
+                        "install": doc.get("install") or _BANK_INSTALL,
+                        "why": doc.get("why") or _bank_lib_why(missing, _BANK_INSTALL),
+                        "libraries": doc.get("libraries") or {}}
+        except Exception as exc:  # noqa: BLE001 — its answer failing is not this file's
+            log.warning("nav/bank.py library_state() raised (%s) — probing directly", exc)
+    missing = [pkg for mod, pkg in _BANK_LIBS if not _has_module(mod)]
+    return {"ok": not missing, "missing": missing, "install": _BANK_INSTALL,
+            "why": _bank_lib_why(missing, _BANK_INSTALL), "libraries": {}}
+
+
+def _bank_lib_why(missing: list[str], install: str) -> str:
+    if not missing:
+        return ("numpy, scipy and Pillow are installed for this python, so this machine "
+                "can build the launch-bank overlay.")
+    names = ", ".join("Pillow" if m == "PIL" else m for m in missing)
+    return (f"The launch-bank overlay cannot be built on this machine because {names} "
+            f"{'is' if len(missing) == 1 else 'are'} not installed for the python "
+            f"running this service. Install with: {install}  ({_BANK_WHERE}). Nothing "
+            f"else is affected — the API, the map, the hazard layers and the vehicle "
+            f"all run exactly as they did, and tiles already on this card are still "
+            f"served.")
+
+
+# The five answers the launch-bank overlay can give. nav/bank.py's card() says
+# present / partial / absent, which are facts about a card; this file adds two.
+#
+# UNAVAILABLE is different in kind: it means this MACHINE cannot build the layer at all
+# — no nav/bank.py in the build, or none of numpy/scipy/Pillow on this interpreter —
+# which is not a fact about the water and not something a download would fix.
+#
+# WHY IT IS NOT FOLDED INTO "absent". On the vehicle it would be permanent: the Pi is
+# never given numpy, so ABSENT there would be a red line that can never go green, on the
+# one machine where the pre-dive gate is read. A gate that is always red is a gate that
+# stops being read, and then the sluice layer's red goes past with it. On a bench with a
+# fresh checkout it would be just as wrong in the other direction — it would send
+# somebody looking for internet to download something no amount of internet can supply.
+#
+# UNREADABLE is the file-is-there-and-will-not-parse answer the rest of this module
+# already draws for every other layer, kept here so a bank card that raises is not
+# rounded up into "nothing has been built".
+#
+# AND IT IS ONLY UNAVAILABLE WHEN THERE IS NOTHING TO SERVE. Tiles already on the card
+# are read out of an MBTiles archive with sqlite and nothing else, so a Pi handed a card
+# built on the handheld serves this layer perfectly — which is the whole point of
+# building it at home. The libraries gate the BUILD, never the map.
+_BANK_STATES = ("present", "partial", "absent", "unreadable", "unavailable")
+
+
+def _bank_block(area: str) -> dict:
+    """What the launch-bank overlay is for this area — off the disk, in one shape.
+
+    EVERY KEY THE MODULE SUPPLIED IS KEPT and only the ones this file must be able to
+    rely on are imposed on top: `status` (this file's five-word vocabulary, from
+    bank.py's three), plus a title and an aria-label that are never empty. nav/bank.py
+    and nav/lidar.py landed in the same round as this wiring, exactly as
+    nav/soundings.py did, and the lesson from that round is written into
+    _surveyed_collection above: a rename over there must cost a duller sentence here,
+    never a 500 out of the endpoint an operator checks before a dive.
+
+    BOTH HALVES ARE REPORTED, because they fail differently and are fixed differently.
+    `lidar` is the download — a hotspot that died leaves it partial and re-running helps.
+    The bank card is the paint — it is computed here, from what the download left, and
+    re-running the network changes nothing about it.
+    """
+    libs = _bank_libraries()
+    bank = _bank_mod()
+    lidar = _lidar_mod()
+    held = None
+    if lidar is not None:
+        try:
+            held = lidar.card(area)
+        except Exception as exc:  # noqa: BLE001 — a card that will not answer is an answer
+            log.warning("nav/lidar.py card(%s) raised: %s", area, exc)
+    base = {"area": area, "layer": "bank", "url": "/api/bank",
+            "libraries": libs, "lidar": held}
+    if bank is None:
+        why = _BANK_IMPORT.get("bank") or "api/nav/bank.py could not be loaded"
+        return {
+            **base, "status": "unavailable", "why": why,
+            "means": ("nothing on this machine can build or read a launch-bank layer, so "
+                      "nothing is known about which bank could be got down with the sub "
+                      "and the cable. That is a missing capability, not a survey result"),
+            "remedy": (libs["install"] if not libs["ok"] else
+                       "install a build of this repo that includes api/nav/bank.py"),
+            "title": (f"LAUNCH BANKS: UNAVAILABLE on this machine — {why}. Nothing here "
+                      f"claims a bank is low and nothing claims it is high."),
+            "aria_label": (f"The launch bank layer is unavailable for area {area} "
+                           f"because the module that builds it could not be loaded."),
+        }
+    try:
+        card = bank.card(area)
+    except Exception as exc:  # noqa: BLE001 — an unreadable card is an answer, never a 500
+        log.warning("nav/bank.py card(%s) raised: %s", area, exc)
+        return {
+            **base, "status": "unreadable", "why": f"{type(exc).__name__}: {exc}",
+            "means": _UNREADABLE_MEANS, "remedy": _UNREADABLE_REMEDY,
+            "title": (f"LAUNCH BANKS, {area}: the record beside this area's bank tiles "
+                      f"could not be read ({exc}). Nothing is claimed about these banks "
+                      f"either way."),
+            "aria_label": f"The launch bank layer for area {area} could not be read.",
+        }
+    if not isinstance(card, dict):
+        card = {}
+    status = card.get("state")
+    painted = bool(card.get("painted"))
+    if not painted and not libs["ok"]:
+        # THE ONLY PLACE THE LIBRARIES DECIDE ANYTHING. Nothing is painted and this
+        # machine cannot paint it, so the honest word is not "absent" — nobody left
+        # this undone, and no fetch will produce it here. Once tiles ARE on the card
+        # the libraries stop mattering entirely and this branch is not taken.
+        return {
+            **base, **card, "status": "unavailable", "why": libs["why"],
+            "means": ("the launch-bank layer is classified from a LIDAR ground model and "
+                      "the arithmetic that does it needs these libraries. Without them "
+                      "nothing is known about where the bank is low — which is not the "
+                      "same as knowing there is no low bank here"),
+            "remedy": libs["install"],
+            "title": f"LAUNCH BANKS, {area}: UNAVAILABLE — {libs['why']}",
+            "aria_label": (f"The launch bank layer is unavailable on this machine. "
+                           f"{libs['why']}"),
+        }
+    if status not in _BANK_STATES:
+        # NOT UNDERSTOOD IS NOT FINE. Reported as PARTIAL, which is the conservative end
+        # of this vocabulary: it never claims the layer is whole, and unlike "unreadable"
+        # it does not send anybody off to delete files over a word this file simply has
+        # not been taught yet.
+        log.warning("nav/bank.py reported state %r for %s, which is not one of %s",
+                    status, area, list(_BANK_STATES))
+        card = {**card, "why": (f"the bank module answered {status!r}, which this "
+                                f"service does not know how to read")}
+        status = "partial"
+    n = card.get("pounds")
+    tiles = ((card.get("tiles") or {}).get("tiles")
+             if isinstance(card.get("tiles"), dict) else card.get("tiles"))
+    default_titles = {
+        "present": (f"LAUNCH BANKS, {area}: on this card"
+                    + (f", {tiles} overlay tile(s)" if isinstance(tiles, int) else "")
+                    + (f", {n} water level(s) detected" if isinstance(n, int) else "")
+                    + ". Amber is bank measured under the launch height above the water "
+                      "beside it, which is a geometric fact and not permission to launch; "
+                      "unpainted ground has NOT been surveyed and found high."),
+        "partial": (f"LAUNCH BANKS, {area}: PARTIAL. Part of this corridor has no "
+                    f"terrain behind it and is drawn as nothing — which is NOT bank that "
+                    f"was measured and found high."),
+        "absent": (f"LAUNCH BANKS, {area}: ABSENT. No bank classification has been built "
+                   f"for this area, so nothing here knows which side could be got down "
+                   f"with the sub and the cable. Bare imagery is not a high bank."),
+        "unreadable": (f"LAUNCH BANKS, {area}: the layer is on the card and cannot be "
+                       f"read, so nothing is claimed about these banks."),
+        "unavailable": f"LAUNCH BANKS: UNAVAILABLE on this machine — {_BANK_WHERE}.",
+    }
+    default_aria = {
+        "present": f"The launch bank layer for area {area} is built and on this card.",
+        "partial": f"The launch bank layer for area {area} is only partly built.",
+        "absent": f"No launch bank layer has been built for area {area}.",
+        "unreadable": f"The launch bank layer for area {area} cannot be read.",
+        "unavailable": "The launch bank layer cannot be built on this machine.",
+    }
+    return {
+        **base, **card,
+        "status": status, "area": area, "layer": "bank",
+        "title": card.get("title") or default_titles[status],
+        "aria_label": card.get("aria_label") or default_aria[status],
+    }
+
+
+# Every painted area's card, cached against the FILES rather than against a clock —
+# exactly like _layer_cache, _nominal_cache and _pyramid_cache above, and for a sharper
+# reason than any of them. This list is read on the TILE path: a map view is forty
+# overlay tiles, each of which has to find which area holds it, and bank.list_painted()
+# is a directory scan plus a JSON parse per area. Uncached that is forty scans and a
+# hundred and sixty parses to paint one screen, on a handheld that is also flying a sub.
+#
+# A SIGNATURE AND NOT A TIMER, so the answer can never be stale: the moment a build
+# replaces a provenance file its mtime moves and the next question is answered off the
+# disk. The stat is what is repeated per request; the parse is what is not.
+#
+# MEASURED ON THE ALLY, two painted areas with 4.4 kB records: 0.160 ms per call
+# through the cache against 0.417 ms straight to list_painted(), so a forty-tile screen
+# pays 6 ms instead of 17. The gap is per AREA and per byte of record, so it widens on
+# the handheld that has been used all season, which is the one that matters.
+_bank_cards_cache: dict[str, tuple] = {}
+
+
+def _bank_cards_sig(bank) -> tuple:
+    """(dir, mtime, size) for every area's bank record. Cheap, and it never parses."""
+    suffix = getattr(settings, "lidar_dir_suffix", ".lidar")
+    prov = getattr(bank, "render_provenance_path", None)
+    out: list[tuple] = []
+    try:
+        entries = sorted(settings.areas_dir.iterdir())
+    except OSError:
+        return ()
+    for p in entries:
+        if not (p.is_dir() and p.name.endswith(suffix)):
+            continue
+        name = p.name[: -len(suffix)] if suffix else p.name
+        paths = [p] + ([prov(name)] if callable(prov) else [])
+        for q in paths:
+            try:
+                st = q.stat()
+                out.append((str(q), st.st_mtime_ns, st.st_size))
+            except OSError:
+                out.append((str(q), 0, -1))
+    return tuple(out)
+
+
+def bank_cards() -> list[dict]:
+    """Every area on this handheld that has launch-bank paint, with its state.
+
+    The list the area-less /api/bank index and the tile lookup are both built on. No
+    network, no numpy: a scan and a JSON read per area, and only when one of them has
+    changed since the last question.
+    """
+    bank = _bank_mod()
+    fn = getattr(bank, "list_painted", None) if bank is not None else None
+    if not callable(fn):
+        return []
+    sig = _bank_cards_sig(bank)
+    hit = _bank_cards_cache.get("cards")
+    if hit is not None and hit[0] == sig:
+        return hit[1]
+    try:
+        cards = [c for c in (fn() or []) if isinstance(c, dict)]
+    except Exception as exc:  # noqa: BLE001 — an unreadable card is an answer, never a 500
+        log.warning("nav/bank.py list_painted() raised: %s", exc)
+        return []
+    _bank_cards_cache["cards"] = (sig, cards)
+    return cards
+
+
+# IS THERE ANYTHING MORE THIS CARD COULD BE GIVEN? That, and not the word "present", is
+# what the pre-dive gate is actually asking of each source — see area_completeness.
+#
+# THE BANK LAYER IS THE ONE SOURCE WHERE THOSE TWO QUESTIONS COME APART. Its PARTIAL is
+# not a download that stopped half way: nav/lidar.py says in as many words that where
+# the survey has holes "nothing further will be downloaded — the gaps are in the
+# source", and nav/bank.py calls a corridor partial at anything under 99.5% coverage,
+# which is the ordinary outcome of a perfectly good build. Counted as missing, every
+# successful build on most of the network would leave the gate red for ever, and a gate
+# that is always red is one that gets waved through on the day it is red about a sluice.
+# Counted as held, the word PARTIAL and its sentence still travel on the source, in the
+# roll-up's detail, in the console's own layer row and out of the CLI — nothing is
+# hidden, and the operator is told exactly which ground was never looked at.
+#
+# ABSENT still fails, because that is a card with no bank layer on it at all.
+def _source_held(key: str, status: str) -> bool:
+    return status == "present" or (key == "bank" and status == "partial")
 
 
 def _unsurveyed_sentence(snd) -> str:
@@ -2039,9 +2401,17 @@ def _feature_from_journal(path):
 # mid-job as a matter of routine, so what an interrupted fetch leaves behind is a
 # design decision and not an accident. The centreline is ONE request and it is what
 # the estimator snaps to; the hazard layers are a few hundred small requests and they
-# are what keeps the sub out of a culvert mouth; the imagery is a thousand requests
-# and it is a picture to look at. Losing the picture is a disappointment. Losing the
-# other two is the dive.
+# are what keeps the sub out of a culvert mouth; the low-bank overlay is one big raster
+# and it is how the sub gets back OUT; the imagery is a thousand requests and it is a
+# picture to look at. Losing the picture is a disappointment. Losing any of the other
+# three is the dive, or the recovery afterwards.
+#
+# WHY THE BANK LAYER SITS ABOVE THE IMAGERY AND BELOW THE HAZARDS. It is heavier than
+# either in wall-clock terms — one terrain download and then a decode, a hillshade and a
+# tile pyramid — so putting it first would mean a hotspot that dies in the usual four
+# minutes costs the centreline and the sluices to buy a picture of the towpath. It is
+# above the imagery because a bank you cannot climb out onto is a recovery problem and a
+# blank background is not.
 FETCH_SOURCES: tuple[tuple[str, str, str], ...] = (
     ("centreline", "the waterway centreline (OpenStreetMap, via Overpass)",
      "the estimator has nothing to snap the track to and the map has no water drawn "
@@ -2050,6 +2420,11 @@ FETCH_SOURCES: tuple[tuple[str, str, str], ...] = (
      "nothing is known about sluices, weirs, culverts, stop-plank grooves, outfalls "
      "or safety gates on this water, and an absent hazard layer draws exactly like an "
      "empty one"),
+    ("bank", "the launch-bank overlay (an Environment Agency LIDAR ground model, "
+             "downloaded and then classified on this handheld)",
+     "nothing is known about which side of this cut could be got down with the sub and "
+     "the cable — and imagery with no bank paint on it looks exactly like imagery of a "
+     "bank that was measured and found to be a wall"),
     ("imagery", "the satellite basemap tiles (Esri World Imagery)",
      "the map has no picture under the track — the track and the hazards still draw, "
      "on a blank background"),
@@ -2059,7 +2434,15 @@ FETCH_SOURCES: tuple[tuple[str, str, str], ...] = (
 # it was already on the card and nothing was re-downloaded — and it is deliberately
 # NOT called "done", so a console can show the difference between what this run
 # fetched and what this run found.
-_SRC_STATES = ("pending", "running", "done", "skipped", "failed")
+#
+# "unavailable" IS NOT A FAILURE AND MUST NEVER BE COUNTED AS ONE. It means this
+# machine cannot do that source at all: no module for it in this build, or none of the
+# libraries it needs on this interpreter. The Pi is what forces the word to exist — the
+# vehicle is deliberately never given numpy, so a bank source reported as FAILED there
+# would turn every otherwise-perfect fetch red, permanently, over a library nobody is
+# ever going to install on it. Red that can never go green is red that stops being read.
+# It is not "skipped" either: skipped means it was already on the card.
+_SRC_STATES = ("pending", "running", "done", "skipped", "failed", "unavailable")
 
 # Job states. "offline" is separated from "failed" on purpose: a canal-side console
 # with no signal has not suffered a fault, it is in the condition this whole
@@ -2382,6 +2765,39 @@ def area_completeness(name: str) -> dict:
             scope=scope, layers=n_layers, failed=[], unreadable=[],
             features=crt_block.get("features"), fetched=crt_block.get("fetched"))
 
+    # --- the launch banks ----------------------------------------------------
+    # Straight through from the modules that own the claim, with this file adding
+    # nothing to it: _bank_block already answers in this vocabulary and already
+    # carries its own two sentences. The one thing to notice is that it can answer
+    # UNAVAILABLE, which none of the other three can, and that word is handled where
+    # `missing` is worked out below rather than translated away here.
+    #
+    # A CHOSEN FEW KEYS AND NOT THE WHOLE RECORD. _bank_block hands back everything
+    # nav/bank.py wrote — the classification constants, the hillshade parameters, the
+    # per-zoom tile table, the corridor stats — which is right for the layer's own
+    # endpoint and wrong here: THIS document is polled, by the console and by the
+    # readiness check, and 4 kB of provenance per poll is bytes and parse time spent on
+    # a Pi 3B+ to tell somebody something they did not ask this endpoint for. What a
+    # roll-up needs is the word, the sentence, and where to go next.
+    bank = _bank_block(name)
+    libs = bank.get("libraries") or {}
+    sources["bank"] = _src(
+        bank["status"], bank["title"], bank["aria_label"],
+        why=bank.get("why"), means=bank.get("means"), remedy=bank.get("remedy"),
+        url=bank.get("url"), layer="bank",
+        tiles=(bank["tiles"].get("tiles") if isinstance(bank.get("tiles"), dict)
+               else bank.get("tiles")),
+        pounds=bank.get("pounds"),
+        vintage=(bank.get("source") or {}).get("survey_vintage"),
+        # The download half's own verdict, beside the paint's. They fail differently
+        # and are fixed differently — one by a connection, one by nothing at all — and
+        # a roll-up that carried only the second would send somebody to re-run a build
+        # over terrain that never arrived.
+        terrain=(bank.get("lidar") or {}).get("state"),
+        terrain_why=(bank.get("lidar") or {}).get("why"),
+        libraries={"ok": libs.get("ok"), "missing": libs.get("missing"),
+                   "install": libs.get("install")})
+
     # --- centreline ----------------------------------------------------------
     cl = settings.areas_dir / f"{name}.geojson"
     state, err, feats, _bytes = _read_layer(cl)
@@ -2414,36 +2830,88 @@ def area_completeness(name: str) -> dict:
     state = meta.get("state") or ("absent" if meta else "no-such-area")
     rec = meta.get("fetch") if isinstance(meta.get("fetch"), dict) else None
     live = state == "downloading"
-    missing = [k for k, s in sources.items() if s["status"] != "present"]
+    # UNAVAILABLE IS REPORTED IN FULL AND IS NOT COUNTED AS MISSING, and the line
+    # between the two is worth stating precisely because it is the one place in this
+    # document where something is deliberately not held against the card.
+    #
+    # MISSING means: this card could hold it and does not. Somebody with a connection
+    # can fix that, and until they do the map is short of something it is meant to
+    # have — so it fails `complete`, and the pre-dive gate refuses.
+    #
+    # UNAVAILABLE means: this MACHINE cannot hold it at all. On the vehicle that is
+    # permanent by design (no numpy on a Pi 3B+, ever) and no download would change
+    # it. Counted as missing it would paint the gate red on every dive this system
+    # ever flies, for a reason nobody can act on — and a gate that is always red is
+    # one nobody reads, including on the day it is red about a sluice. So it travels
+    # in its own list, in `detail`, in `title` and in `aria_label`: named every time,
+    # never dressed up as a pass, and never counted as a fault.
+    unavailable = [k for k, s in sources.items() if s["status"] == "unavailable"]
+    missing = [k for k, s in sources.items()
+               if not _source_held(k, s["status"]) and s["status"] != "unavailable"]
+    # HELD BUT NOT WHOLE, named in its own right. _source_held lets the bank layer's
+    # PARTIAL satisfy the gate — the reasoning is written beside it — and this is what
+    # stops that from being a silence: the word and the module's own sentence travel in
+    # the detail below, so a corridor the survey never flew is said out loud on the same
+    # line that says the area is ready.
+    incomplete = [k for k, s in sources.items()
+                  if _source_held(k, s["status"]) and s["status"] != "present"]
     # A DOWNLOAD IN FLIGHT IS NOT COMPLETE EVEN IF EVERY SOURCE HAPPENS TO READ
     # PRESENT AT THIS INSTANT. The imagery archive gains rows as it goes and the
     # counts are only a snapshot; "still coming" is its own answer and the pre-dive
     # gate must refuse it rather than round it up to yes.
     complete = not missing and not live
+    # The unavailable ones, in a clause that goes on the end of every sentence below —
+    # including the one that says everything is here, because "everything is on this
+    # card" over a machine that cannot build the bank layer is exactly the
+    # looks-complete-and-is-not claim this document exists to refuse.
+    cannot = ""
+    aria_cannot = ""
+    if unavailable:
+        why1 = (sources[unavailable[0]].get("why")
+                or "this machine cannot build it")
+        cannot = (f" {', '.join(unavailable)} cannot be built on this machine at all "
+                  f"({why1}) — that is not a download anybody is waiting for, and "
+                  f"nothing here claims anything about it either way.")
+        aria_cannot = (f" {', '.join(unavailable)} cannot be built on this machine, so "
+                       f"nothing is known about it.")
+    for k in incomplete:
+        cannot += (f" {k} is HELD BUT NOT WHOLE: "
+                   f"{sources[k].get('why') or sources[k].get('title')}")
+        aria_cannot += f" {k} is held but incomplete."
     if live:
         detail = (f"area={name}: state=downloading — "
-                  f"{', '.join(missing) if missing else 'finishing up'}. Not yet.")
+                  f"{', '.join(missing) if missing else 'finishing up'}. Not yet.{cannot}")
     elif missing:
         detail = (f"area={name}: {', '.join(missing)} not on this card (area state="
                   f"{state}"
-                  + (f", {meta.get('state_why')}" if meta.get("state_why") else "") + ")")
+                  + (f", {meta.get('state_why')}" if meta.get("state_why") else "") + ")"
+                  + cannot)
     else:
-        detail = (f"area={name}: imagery, hazard charts and centreline all present and "
-                  f"readable (area state={state})")
+        detail = (f"area={name}: "
+                  + ", ".join(k for k in sources
+                              if k not in unavailable and k not in incomplete)
+                  + f" all present and readable (area state={state}).{cannot}")
     return {
         "area": name, "complete": complete, "missing": missing,
+        # Its own key, beside `missing` and never inside it — the same separation
+        # _crt_layers keeps between `failed` and `unreadable`, and for the same
+        # reason: the two send somebody to two different places, and one of them is
+        # nowhere at all.
+        "unavailable": unavailable, "incomplete": incomplete,
         "state": state, "downloading": live, "sources": sources, "fetch": rec,
         "bbox": bbox, "zmin": zmin, "zmax": zmax, "detail": detail,
         "title": (f"Offline data for {name}: "
-                  + ("everything is on this card." if complete else
+                  + ("everything this machine can hold is on this card." if complete else
                      f"{', '.join(missing) or 'a fetch'} still "
-                     + ("downloading." if live else "missing."))),
+                     + ("downloading." if live else "missing."))
+                  + cannot),
         "aria_label": (f"Area {name} is "
-                       + ("complete: imagery, hazard charts and waterway centreline are "
-                          "all downloaded and readable."
+                       + ("complete: every source this machine can hold is downloaded "
+                          "and readable."
                           if complete else
                           f"incomplete. Missing or unfinished: "
-                          f"{', '.join(missing) or 'a download is in progress'}.")),
+                          f"{', '.join(missing) or 'a download is in progress'}.")
+                       + aria_cannot),
     }
 
 
@@ -2473,15 +2941,27 @@ def _offline_record(area: str, why: str, reason: str = "") -> dict:
     the expected outcome of every trigger that fires at the bank, and it has to read
     that way or the operator learns to dismiss it.
     """
+    # A SOURCE THIS MACHINE CANNOT DO IS NOT "WAITING FOR INTERNET". Told that, an
+    # operator drives home, finds a connection, re-runs the fetch and gets the same
+    # empty layer with the same reassuring sentence beside it. See
+    # AreaFetch._unavailable_sources — this is the same rule on the path where no job
+    # was ever built to hold it.
+    bank = _bank_block(area)
+    sources = {}
+    for k, label, _means in FETCH_SOURCES:
+        if k == "bank" and bank.get("status") == "unavailable":
+            sources[k] = _src("unavailable", bank["title"], bank["aria_label"],
+                              why=bank.get("why"), remedy=bank.get("remedy"))
+        else:
+            sources[k] = _src("pending", f"Not started: {label} needs internet.",
+                              f"{label} was not downloaded because there is no internet.",
+                              why=why)
     return {
         "scope": "area",
         "area": area, "state": "offline", "reason": reason,
         "started": _iso(), "finished": _iso(), "pid": os.getpid(),
         "net": {"ok": False, "why": why},
-        "sources": {k: _src("pending", f"Not started: {label} needs internet.",
-                            f"{label} was not downloaded because there is no internet.",
-                            why=why)
-                    for k, label, _ in FETCH_SOURCES},
+        "sources": sources,
         "title": (f"Nothing was downloaded for {area}: there is no internet here. "
                   f"{why}. This is the normal state at the water's edge and not a "
                   f"fault — but anything missing from this card stays missing until "
@@ -2521,6 +3001,28 @@ def _window_box(raw: str) -> list[float] | None:
     if not (-180 <= w < e <= 180 and -90 <= s < n <= 90):
         return None
     return [w, s, e, n]
+
+
+def _point_in_box(feature, box: list[float]) -> bool:
+    """Is this feature's first coordinate inside [W,S,E,N]?
+
+    KEPT IN THE WINDOW WHEN IT CANNOT BE PLACED, which is the same rule
+    _window_response applies to a feature with no bbox: excluding something because
+    this file did not understand its geometry would be the map deciding not to show
+    something on the strength of its own ignorance.
+    """
+    w, s, e, n = box
+    geom = (feature or {}).get("geometry") or {}
+    coords = geom.get("coordinates")
+    while isinstance(coords, (list, tuple)) and coords and isinstance(coords[0], (list, tuple)):
+        coords = coords[0]
+    if not (isinstance(coords, (list, tuple)) and len(coords) >= 2):
+        return True
+    try:
+        lon, lat = float(coords[0]), float(coords[1])
+    except (TypeError, ValueError):
+        return True
+    return w <= lon <= e and s <= lat <= n
 
 
 def _window_response(crt, layer: str, path: Path, rec: dict, box: list[float],
@@ -2902,7 +3404,7 @@ class NationalFetch:
 class AreaFetch:
     """One background job that brings ONE area's offline data up to date.
 
-    Sequential by construction: three sources, one after another, each driven by the
+    Sequential by construction: one source after another, each driven by the
     module that owns it. It exists to be watched — snapshot() is a complete document
     at every instant, per source, so a console can render "charts done, imagery
     failed" instead of a single percentage that says nothing an operator can act on.
@@ -2946,6 +3448,12 @@ class AreaFetch:
     def snapshot(self) -> dict:
         done = [k for k, s in self.sources.items() if s["status"] in ("done", "skipped")]
         failed = [k for k, s in self.sources.items() if s["status"] == "failed"]
+        # NOT DONE AND NOT FAILED. A source this machine cannot do at all is its own
+        # list, because folding it into either of the other two tells a lie in a
+        # different direction each way: into `done` and the panel says the bank layer
+        # is on the card, into `failed` and it says a download went wrong that was
+        # never possible and never attempted.
+        unavailable = [k for k, s in self.sources.items() if s["status"] == "unavailable"]
         return {
             # `scope` ON EVERY SNAPSHOT, because two different jobs now broadcast on one
             # socket as {"type": "area_fetch", …} — this one and the national fetch —
@@ -2961,9 +3469,9 @@ class AreaFetch:
             "radius_m": self.radius_m, "refresh": self.refresh, "cap": self.cap,
             "sources": {k: dict(v) for k, v in self.sources.items()},
             "order": [k for k, _, _ in FETCH_SOURCES],
-            "done": done, "failed": failed,
-            "title": self._title(done, failed),
-            "aria_label": self._aria(done, failed),
+            "done": done, "failed": failed, "unavailable": unavailable,
+            "title": self._title(done, failed, unavailable),
+            "aria_label": self._aria(done, failed, unavailable),
         }
 
     def _settled(self) -> dict:
@@ -2987,37 +3495,49 @@ class AreaFetch:
             log.warning("could not record the settled fetch for %s: %s", self.area, exc)
         return snap
 
-    def _title(self, done: list[str], failed: list[str]) -> str:
+    def _title(self, done: list[str], failed: list[str],
+               unavailable: list[str] | None = None) -> str:
         running = [k for k, s in self.sources.items() if s["status"] == "running"]
+        # SAID IN EVERY SENTENCE THIS JOB PRODUCES, including the happy one. A run that
+        # fetched everything it could still has to name what it could not do at all,
+        # or "up to date" is a claim about a card that is missing a layer.
+        cannot = ""
+        for key in (unavailable or []):
+            cannot += (f" {key} was NOT attempted on this machine: "
+                       f"{self.sources[key].get('why') or 'it is unavailable here'}.")
         if self.state == "offline":
             return (f"Nothing was downloaded for {self.area}: there is no internet here. "
-                    f"{(self.net or {}).get('why', '')}")
+                    f"{(self.net or {}).get('why', '')}{cannot}")
         if self.state == "cancelled":
             return (f"The fetch for {self.area} was stopped. What had already landed is on "
                     f"the card; the rest is not, and the map will draw the difference as "
-                    f"blank rather than as empty water.")
+                    f"blank rather than as empty water.{cannot}")
         if self.state in _JOB_LIVE:
             what = ", ".join(f"{k} ({self.sources[k]['detail']})" for k in running) or "starting"
             return (f"Downloading offline data for {self.area}: {what}. "
                     f"{len(done)} of {len(self.sources)} source(s) finished. The console "
-                    f"stays flyable throughout — this runs in the background.")
+                    f"stays flyable throughout — this runs in the background.{cannot}")
         if failed:
             return (f"Offline data for {self.area}: {', '.join(done) or 'nothing'} finished, "
                     f"{', '.join(failed)} FAILED. What failed was not written, so the map is "
-                    f"missing it rather than showing it as empty.")
+                    f"missing it rather than showing it as empty.{cannot}")
         return (f"Offline data for {self.area} is up to date: "
-                f"{', '.join(done)} — nothing here needs the internet again.")
+                f"{', '.join(done)} — nothing here needs the internet again.{cannot}")
 
-    def _aria(self, done: list[str], failed: list[str]) -> str:
+    def _aria(self, done: list[str], failed: list[str],
+              unavailable: list[str] | None = None) -> str:
+        cannot = (f" {', '.join(unavailable)} could not be attempted on this machine."
+                  if unavailable else "")
         if self.state in _JOB_LIVE:
             return (f"Downloading offline data for area {self.area}. {len(done)} of "
-                    f"{len(self.sources)} sources finished.")
+                    f"{len(self.sources)} sources finished.{cannot}")
         if self.state == "offline":
             return f"No download was started for area {self.area}: there is no internet."
         if failed:
             return (f"Download for area {self.area} finished with failures. Completed: "
-                    f"{', '.join(done) or 'none'}. Failed: {', '.join(failed)}.")
-        return f"Download for area {self.area} is complete. Sources: {', '.join(done)}."
+                    f"{', '.join(done) or 'none'}. Failed: {', '.join(failed)}.{cannot}")
+        return (f"Download for area {self.area} is complete. Sources: "
+                f"{', '.join(done)}.{cannot}")
 
     def crash(self, exc: BaseException) -> None:
         """The job died of something it did not catch. Say so where it will be seen."""
@@ -3060,18 +3580,32 @@ class AreaFetch:
             # re-probed between layers would spend a canal-side afternoon on
             # timeouts, and a job that probed nothing would hand every one of a
             # thousand tile requests to a resolver that is not there.
+            # WHAT THIS MACHINE CANNOT DO AT ALL, decided before the internet is even
+            # asked about — because it is not a question the internet answers. See
+            # _unavailable_sources: no signal changes when you drive somewhere, a
+            # library that is not installed does not.
+            for key, cannot in self._unavailable_sources().items():
+                self._set(key, status="unavailable", why=cannot,
+                          detail="not possible on this machine")
             ok, why = net if net is not None else await internet_available()
             self.net = {"ok": ok, "why": why}
             if not ok:
                 self.state = "offline"
-                for key in self.sources:
+                for key, src in self.sources.items():
+                    # An unavailable source is NOT re-labelled "waiting for internet".
+                    # That sentence sends an operator back with a hotspot to fetch
+                    # something that would not build even with one.
+                    if src["status"] == "unavailable":
+                        continue
                     self._set(key, status="pending",
                               why=f"not started — there is no internet: {why}")
                 return self._settled()
             if not self.cap["within"]:
                 self.state = "failed"
                 self.error = self.cap["title"]
-                for key in self.sources:
+                for key, src in self.sources.items():
+                    if src["status"] == "unavailable":
+                        continue
                     self._set(key, status="failed", why=self.cap["title"])
                 return self._settled()
 
@@ -3080,6 +3614,7 @@ class AreaFetch:
             await self._label()
             await self._centreline()
             await self._charts()
+            await self._bank()
             await self._imagery()
 
             failed = [k for k, s in self.sources.items() if s["status"] == "failed"]
@@ -3126,6 +3661,33 @@ class AreaFetch:
             areamod._merge_meta(self.area, missing)
         except Exception as exc:  # noqa: BLE001 — the tiles matter more than the labels
             log.warning("could not restore area metadata for %s: %s", self.area, exc)
+
+    def _unavailable_sources(self) -> dict[str, str]:
+        """Which sources this MACHINE cannot do at all, and why. Asked once per job.
+
+        DELIBERATELY NOT THE SAME QUESTION AS "IS THERE INTERNET". No signal is a
+        fact about here and now, and it changes the moment somebody drives to a
+        car park with bars on the phone; this is a fact about the machine, and
+        driving does not fix it. Reporting the second as the first is how an
+        operator ends up going home, finding a connection, re-running the fetch and
+        getting the same empty bank layer with the same reassuring "no internet"
+        beside it.
+
+        Only the bank overlay can answer yes today: it is the one source whose work
+        needs libraries this repo does not put on the vehicle. The dict shape is so
+        the next such source is a line rather than a rewrite.
+        """
+        out: dict[str, str] = {}
+        try:
+            block = _bank_block(self.area)
+        except Exception as exc:  # noqa: BLE001 — a fetch must not die deciding what to skip
+            log.warning("could not decide whether the bank layer is buildable: %s", exc)
+            return out
+        if block.get("status") == "unavailable":
+            why = block.get("why") or "this machine cannot build it"
+            remedy = block.get("remedy")
+            out["bank"] = f"{why} — {remedy}" if remedy else why
+        return out
 
     async def _label(self) -> None:
         """Give a date-named area a human title, once, while there is internet.
@@ -3278,7 +3840,194 @@ class AreaFetch:
                       detail=f"{n} layer(s), {res.get('features', '?')} feature(s)", why="")
         await self._emit()
 
-    # ---- source 3: the satellite imagery --------------------------------
+    # ---- source 3: the LAUNCH-BANK OVERLAY, from a LIDAR ground model ------
+    #
+    # WHAT THIS SOURCE IS, AND WHY IT IS TWO MODULES. nav/lidar.py fetches the
+    # Environment Agency's 1 m terrain model for this box, a handful of large
+    # sub-requests, and mosaics it into one float32 grid on the card. nav/bank.py then
+    # classifies that grid against the water level of each pound it detects and writes
+    # the overlay pyramid. They are separate because they fail separately and are fixed
+    # separately: a hotspot that died leaves the DOWNLOAD partial and re-running helps,
+    # while a corridor the survey never flew leaves the PAINT partial and no amount of
+    # re-running will change it. One source key, two steps, and the sentences say which.
+    #
+    # THE CLASSIFICATION IS SYNCHRONOUS AND CPU-BOUND AND MUST NOT RUN ON THIS LOOP.
+    # bank.render_area's own docstring says so: "an async caller wraps it in
+    # asyncio.to_thread". That caller is here. This event loop is also flying the sub at
+    # 10 Hz, and a numpy pass over a 144 MB grid taken on it is seconds in which nothing
+    # steers, no telemetry goes out and no leak alarm is read.
+    #
+    # A FAILURE HERE IS NOT A FAILURE OF THE DIVE, and it is not nothing either: what is
+    # lost is the answer to "which side could I get down with the sub and the cable",
+    # which is asked at the worst possible moment when it was not asked at home. So it
+    # is recorded exactly as loudly as the others, and it never stops the imagery.
+    async def _bank(self) -> None:
+        key = "bank"
+        if self.sources[key]["status"] == "unavailable":
+            # Already decided in run(), before the internet was asked about. Nothing to
+            # add and nothing to attempt.
+            return
+        before = _bank_block(self.area)
+        if before["status"] == "unavailable":
+            # ASKED AGAIN HERE, not only in run(). This method is also driven on its
+            # own — `python -m nav.cli bank-fetch` runs exactly this and nothing else —
+            # and a version that only checked in its caller would sail past a missing
+            # numpy and hand the box to a builder that cannot build it.
+            self._set(key, status="unavailable", detail="not possible on this machine",
+                      why=" — ".join(s for s in (before.get("why"),
+                                                 before.get("remedy")) if s))
+            await self._emit()
+            return
+        if before["status"] in ("present", "partial") and not self.refresh:
+            # ALREADY BUILT. Skipped rather than rebuilt: the terrain under a canal does
+            # not move between two weekends, the download is somebody's public service,
+            # and the classification is minutes of a handheld's battery for a
+            # byte-identical answer. PARTIAL counts as built here for the reason
+            # _source_held gives — where the survey has holes there is nothing more to
+            # fetch, and re-running would spend the whole cost to produce the same holes.
+            # `refresh` is how you say you meant it.
+            self._set(key, status="skipped", detail=f"already on the card ({before['status']})",
+                      why=(f"{before.get('why') or 'already built'} — nothing was "
+                           f"downloaded and nothing was recomputed. Pass refresh to "
+                           f"build it again"))
+            await self._emit()
+            return
+
+        lidar = _lidar_mod()
+        bank = _bank_mod()
+        get = getattr(lidar, "download_dtm", None) if lidar is not None else None
+        render = getattr(bank, "render_area", None) if bank is not None else None
+        if not callable(get) or not callable(render):
+            self._set(key, status="unavailable", detail="not possible on this machine",
+                      why=("this build does not offer lidar.download_dtm(area, bbox, "
+                           "progress=, refresh=) and bank.render_area(area, progress=), "
+                           "so nothing here can build a launch-bank layer"))
+            await self._emit()
+            return
+
+        # ---- step 1: the terrain ------------------------------------------
+        self._set(key, status="running",
+                  detail="asking the Environment Agency for the terrain model")
+        await self._emit()
+
+        async def say(msg: dict) -> None:
+            # DEFENSIVE ON EVERY KEY. This is another module's progress dict and a
+            # KeyError raised inside a progress callback would end a download that was
+            # working perfectly.
+            if not isinstance(msg, dict):
+                return
+            got, want = msg.get("done"), msg.get("of") or msg.get("total")
+            bits = [str(msg.get("state") or "")]
+            if msg.get("why"):
+                bits.append(str(msg["why"]))
+            self._set(key, done=got, total=want,
+                      detail=(msg.get("detail") or " ".join(b for b in bits if b)
+                              or "downloading terrain"))
+            await self._emit()
+
+        try:
+            got = await get(self.area, self.bbox, progress=say, refresh=self.refresh)
+        except Exception as exc:  # noqa: BLE001 — one source may never end the job
+            self._set(key, status="failed", why=f"the terrain download raised: {exc}")
+            await self._emit()
+            return
+        got = got if isinstance(got, dict) else {}
+        state, why = got.get("state"), got.get("why") or ""
+        if state == "unavailable":
+            self._set(key, status="unavailable", detail="not possible on this machine",
+                      why=why or "the terrain half reported itself unavailable")
+            await self._emit()
+            return
+        if state == "refused":
+            self._set(key, status="failed", why=why or "the terrain download was refused")
+            await self._emit()
+            return
+        if state == "absent":
+            # NOTHING TO FETCH, WHICH IS NOT THE SAME AS A FETCH THAT FAILED. Either no
+            # Trust centreline crosses this box — so there is no corridor to survey — or
+            # the survey does not reach this ground. Both are facts about the country
+            # and neither is fixable by re-running with a better connection, so this is
+            # a SKIP with the reason on it, exactly as crt.py's deliberate skips are.
+            # Reported as a failure it would put a red mark on every fetch for a canal
+            # outside the English LIDAR composite, for ever, and the operator would
+            # learn to ignore the one row that also carries real failures.
+            self._set(key, status="skipped",
+                      detail="no terrain to fetch for this area",
+                      why=why or ("no LIDAR terrain covers this area, so no bank layer "
+                                  "can be built from it — the imagery here is drawn "
+                                  "unpainted, which means NOT SURVEYED and not 'no low "
+                                  "bank'"))
+            await self._emit()
+            return
+
+        # ---- step 2: the classification, OFF THIS LOOP --------------------
+        self._set(key, detail="classifying the terrain and writing overlay tiles")
+        await self._emit()
+        # The render's progress callback is SYNCHRONOUS — it is called from inside the
+        # worker thread, where nothing can be awaited — so it only records, and this
+        # loop publishes what it recorded while it waits. Handing an await across a
+        # thread boundary is the other way to do this and it needs the loop's own
+        # scheduler; polling once a second is enough for a step measured in tens of
+        # seconds and it cannot deadlock.
+        seen: dict = {}
+
+        def tick(ev) -> None:
+            if isinstance(ev, dict):
+                seen.update(ev)
+
+        task = asyncio.ensure_future(
+            asyncio.to_thread(render, self.area, progress=tick))
+        said = None
+        try:
+            while not task.done():
+                await asyncio.wait({task}, timeout=1.0)
+                if seen and seen != said:
+                    said = dict(seen)
+                    self._set(key, done=said.get("tiles"),
+                              detail=(f"zoom {said.get('zoom')}: {said.get('tiles')} "
+                                      f"tile(s) painted, {said.get('blank')} empty"))
+                    await self._emit()
+            task.result()
+        except asyncio.CancelledError:
+            # The whole JOB is being cancelled. The render is a plain thread and cannot
+            # be interrupted; it writes through an atomic replace, so whatever it
+            # finishes is either wholly there or not there at all. Let go of it rather
+            # than leaving this coroutine waiting on a loop that is being torn down.
+            raise
+        except Exception as exc:  # noqa: BLE001 — including BankUnavailable
+            self._set(key, status="failed",
+                      why=(f"the terrain downloaded and the classification failed "
+                           f"({type(exc).__name__}: {exc}). The grid is on the card, so "
+                           f"a re-run does not download it again"))
+            await self._emit()
+            return
+
+        # BELIEVE THE DISK, NOT THE RETURN VALUE — the same rule _charts follows, for
+        # the same reason: a builder reports what it thinks it wrote, and the question
+        # before a dive is what is on the card.
+        after = _bank_block(self.area)
+        tiles = after.get("tiles")
+        n = tiles.get("tiles") if isinstance(tiles, dict) else tiles
+        if after["status"] in ("present", "partial"):
+            self._set(key, status="done", done=n, total=n,
+                      detail=(f"{n} overlay tile(s)" if isinstance(n, int) else "built")
+                             + (f", {after.get('pounds')} water level(s)"
+                                if after.get("pounds") is not None else ""),
+                      # PARTIAL IS REPORTED AS DONE-WITH-A-SENTENCE, not as a failure.
+                      # See _source_held: at anything under 99.5% corridor coverage
+                      # bank.py calls a perfectly good build partial, and a source that
+                      # went red on the ordinary outcome would be a red nobody reads.
+                      why=("" if after["status"] == "present"
+                           else after.get("why") or "part of this corridor has no "
+                                                    "terrain behind it"))
+        else:
+            self._set(key, status="failed", done=n,
+                      why=((after.get("why") or "no overlay tile was written")
+                           + " The imagery here draws unpainted, which means NOT "
+                             "SURVEYED and never 'no low bank'."))
+        await self._emit()
+
+    # ---- source 4: the satellite imagery --------------------------------
     async def _imagery(self) -> None:
         key = "imagery"
         have, want, err = _tiles_present(self.area, self.bbox, self.zmin, self.zmax)
@@ -3784,6 +4533,221 @@ def build_router(svc: NavService) -> APIRouter:
         return Response(content=data, media_type="image/jpeg",
                         headers={"Cache-Control": "public, max-age=604800"})
 
+    # ---- THE LAUNCH-BANK OVERLAY: no area anywhere in these three paths -------
+    #
+    # WHY THEY ARE NOT UNDER /api/areas/, and it is the same reason the national chart
+    # card is not. client/js/crt.js states the contract in one object at the top of
+    # itself — /api/bank, /api/bank/tiles/{z}/{x}/{y}.png, /api/bank/pounds — and says
+    # why: "NO AREA IN ANY PATH — the areas are reported BY the index rather than being
+    # a parameter of it, so a console with no launch point still learns what is held."
+    # A console at a kitchen table with no origin set can therefore ask what bank data
+    # this handheld holds, and the map can draw the paint for whatever it is looking at
+    # without first deciding which area that is.
+    #
+    # THE DOCUMENT COMES FIRST, ALWAYS. A raster overlay has the hazard layers' failure
+    # and a worse one: a tile that is not there is a transparent hole, and a transparent
+    # hole over a canal bank reads as "no low bank here" — a survey result nobody
+    # produced. So the console is not meant to discover this layer by asking for tiles
+    # and seeing what comes back; it reads the index, which says what is held per area
+    # and in one word, and only then paints.
+    #
+    # ALL THREE ARE SERVED OFF THE DISK AND NONE NEEDS numpy. A tile is an sqlite row
+    # out of an MBTiles archive, the index is two small JSON files per area. Only
+    # BUILDING needs the raster stack, so a Pi handed a card built on the handheld
+    # serves this layer perfectly — which is the whole point of building it at home.
+
+    @r.get("/api/bank")
+    async def bank_index():
+        """What launch-bank data this handheld holds, INCLUDING what it does not.
+
+        The keys are client/js/crt.js's, which reads `status`, `tiles`, `minzoom`,
+        `maxzoom`, `threshold_m`, `vintage`, `attribution`, `why` and an `areas` array
+        of {area, status, bbox, fetched, vintage, tiles, why}. They are spelled here
+        exactly as that file spells them, because two halves of one feature spelling a
+        field two ways is how this project has silently lost a feature five times.
+
+        NEVER 404, AND NEVER AN EMPTY SUCCESS EITHER. A 404 is read by the console as
+        "the bootstrap processing has not run here", which is one of the true answers
+        but not the only one — a handheld with no numpy and a handheld that simply has
+        not been pointed at an area are different situations with different fixes. So
+        this always answers, and `status` plus `why` say which it is.
+        """
+        bank = _bank_mod()
+        libs = _bank_libraries()
+        cards = bank_cards()
+        rows = []
+        for c in cards:
+            src = c.get("source") or {}
+            tiles = c.get("tiles")
+            rows.append({
+                "area": c.get("area"),
+                "status": c.get("state", "absent"),
+                "bbox": c.get("bbox"),
+                "fetched": src.get("fetched") or c.get("built"),
+                "built": c.get("built"),
+                "vintage": src.get("survey_vintage"),
+                # A COUNT, because that is what the console's row shows. bank.py keeps
+                # the whole tile report under this name; the number inside it is the
+                # one thing a person can read.
+                "tiles": (tiles.get("tiles") if isinstance(tiles, dict) else tiles),
+                "pounds": c.get("pounds"),
+                "why": c.get("why"),
+                "title": c.get("title"),
+                "aria_label": c.get("aria_label"),
+            })
+        held = [r for r in rows if r["status"] != "absent"]
+        zmin = min((c.get("tiles", {}).get("zmin") for c in cards
+                    if isinstance(c.get("tiles"), dict)
+                    and c["tiles"].get("zmin") is not None),
+                   default=getattr(bank, "BANK_ZMIN", None))
+        zmax = max((c.get("tiles", {}).get("zmax") for c in cards
+                    if isinstance(c.get("tiles"), dict)
+                    and c["tiles"].get("zmax") is not None),
+                   default=getattr(bank, "BANK_ZMAX", None))
+        vintage = next((r["vintage"] for r in held if r.get("vintage")),
+                       getattr(settings, "lidar_survey_vintage", ""))
+        if bank is None:
+            why = (_BANK_IMPORT.get("bank") or "api/nav/bank.py could not be loaded")
+        elif not held:
+            why = ((libs["why"] + " ") if not libs["ok"] else "") + (
+                "no launch-bank layer has been built on this handheld yet. The imagery "
+                "draws unpainted, and unpainted means NOT SURVEYED — it does not mean "
+                "there is no low bank here. Build one with: "
+                "python -m nav.cli bank-fetch <area>")
+        else:
+            why = (f"{len(held)} area(s) painted from the {vintage} Environment Agency "
+                   f"LIDAR survey. Ground with no paint on it has not been looked at.")
+        return {
+            "layer": getattr(bank, "BANK_LAYER_KEY", "bank"),
+            # 'absent' is the word the console switches on to mean "held nothing",
+            # and it decides coverage for itself from the area boxes below.
+            "status": "present" if held else "absent",
+            "tiles": "/api/bank/tiles/{z}/{x}/{y}.png",
+            "pounds": "/api/bank/pounds",
+            "minzoom": zmin, "maxzoom": zmax,
+            "threshold_m": getattr(settings, "lidar_launch_max_height_m", None),
+            "vintage": vintage,
+            "attribution": getattr(settings, "lidar_attribution", ""),
+            "libraries": libs,
+            "areas": rows,
+            "why": why,
+            "title": (f"LAUNCH BANKS: {len(held)} area(s) on this handheld. {why}"),
+            "aria_label": (f"The launch bank layer holds {len(held)} area(s) on this "
+                           f"handheld. {why}"),
+        }
+
+    @r.get("/api/bank/tiles/{z}/{x}/{y}.png")
+    async def bank_tile(z: int, x: int, y: int):
+        """One overlay tile, from whichever painted area holds it.
+
+        NO AREA IN THE PATH, so this looks through the painted areas for one whose
+        archive has this tile. That is a handful of sqlite lookups against files that
+        are open anyway; the alternative is a console that has to know which area it is
+        over before it can draw, which is exactly the coupling the wire was written to
+        avoid.
+
+        A MISSING TILE IS A 404 AND NOTHING ELSE — never a blank PNG. The console draws
+        a missing bank tile as nothing at all and refuses to upscale a neighbour,
+        because upscaling a classification paints amber over ground nobody classified;
+        it decides what the hole MEANS from the index above, which is why that document
+        is the one carrying the sentences.
+        """
+        bank = _bank_mod()
+        fn = getattr(bank, "read_tile", None) if bank is not None else None
+        if not callable(fn):
+            raise HTTPException(
+                404, "this build cannot serve launch-bank tiles: api/nav/bank.py is not "
+                     "here. Ask GET /api/bank, which says so in a sentence.")
+        for card in bank_cards():
+            name = card.get("area")
+            if not name:
+                continue
+            try:
+                data = fn(name, z, x, y)
+            except Exception as exc:  # noqa: BLE001 — a bad archive is a 404, never a 500
+                log.warning("nav/bank.py read_tile(%s,%s,%s,%s) raised: %s",
+                            name, z, x, y, exc)
+                continue
+            if data:
+                return Response(
+                    content=data, media_type="image/png",
+                    # BARE ASCII TOKENS ONLY. Headers are latin-1, and the national
+                    # layer endpoint above answered HTTP 500 once over an em-dash in
+                    # one — an area name is already restricted to this alphabet.
+                    headers={"X-Neptune-Bank-Area": str(name),
+                             "Cache-Control": "public, max-age=604800"})
+        raise HTTPException(404, "no painted area on this handheld holds that tile")
+
+    @r.get("/api/bank/pounds")
+    async def bank_pounds(bbox: str | None = None):
+        """The detected water levels, as GeoJSON, for every painted area.
+
+        THESE ARE HEIGHTS OF THE WATER SURFACE AND NEVER DEPTHS OF IT, and the sentence
+        travels on the collection because a number floating over a canal with no
+        sentence attached is read as whatever the reader already expected. Each is the
+        level every bank beside it was measured against.
+
+        ?bbox=W,S,E,N windows it, the same way the national chart layers are windowed
+        and for the same reason: the console asks for the part it is looking at.
+        Windowing here is a coordinate comparison over a few dozen labels, not the
+        byte-offset index the 100 MB layers need.
+        """
+        bank = _bank_mod()
+        fn = getattr(bank, "pound_labels", None) if bank is not None else None
+        box = _window_box(bbox) if bbox else None
+        if bbox and box is None:
+            raise HTTPException(400, "bbox must be W,S,E,N in degrees")
+        feats, areas = [], []
+        if callable(fn):
+            for card in bank_cards():
+                name = card.get("area")
+                if not name:
+                    continue
+                try:
+                    doc = fn(name)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("nav/bank.py pound_labels(%s) raised: %s", name, exc)
+                    continue
+                if not isinstance(doc, dict):
+                    continue
+                areas.append(name)
+                for f in doc.get("features") or []:
+                    if box is not None and not _point_in_box(f, box):
+                        continue
+                    props = dict(f.get("properties") or {})
+                    props.setdefault("area", name)
+                    # THE NAME THE CONSOLE ASKS FOR, BESIDE THE ONE THE PRODUCER
+                    # WROTE, and neither replaces the other. nav/bank.py calls this
+                    # `level_m_od` — the right name, because the unit and the datum
+                    # are half the meaning — and client/js/crt.js's _bankLevelOf
+                    # looks for `level_m`, `water_level_m` or `level` and gives up on
+                    # anything else, which would leave every pound on the map
+                    # unlabelled with nothing anywhere saying why. This is the same
+                    # translation _surveyed_collection makes for `depth_m`, made in
+                    # the same place and for the same reason: the producer's own name
+                    # travels unchanged, so nothing downstream has to trust it.
+                    if "level_m" not in props and props.get("level_m_od") is not None:
+                        props["level_m"] = props["level_m_od"]
+                    feats.append({**f, "properties": props})
+        return {
+            "type": "FeatureCollection",
+            "layer": "bank-pounds",
+            "areas": areas,
+            "windowed": box is not None,
+            "bbox": box,
+            "features": feats,
+            "vintage": getattr(settings, "lidar_survey_vintage", ""),
+            "attribution": getattr(settings, "lidar_attribution", ""),
+            "title": ("Detected water levels, in metres above Ordnance Datum, one per "
+                      "sheet of flat water the LIDAR found along the corridor. Each is "
+                      "the height of the SURFACE and the height every bank beside it "
+                      "was measured against. Nothing here has measured how much water "
+                      "is under that surface."),
+            "aria_label": (f"{len(feats)} detected water level labels"
+                           + (" in the current view" if box is not None else "")
+                           + ". These are heights of the water surface, not depths."),
+        }
+
     @r.get("/api/areas/{name}/thumb")
     async def area_thumb(name: str):
         meta = next((a for a in areamod.list_areas() if a["name"] == name), None)
@@ -3916,6 +4880,7 @@ def build_router(svc: NavService) -> APIRouter:
                            "remedy": _SOUND_CMD.format(area=name)}
 
         cl = settings.areas_dir / f"{name}.geojson"
+        bank_block = _bank_block(name)
         # THE SUMMARY MUST COUNT WHAT IT COULD NOT READ. It used to add up the absent
         # rows only, so an area whose files were all present-and-corrupt was headlined
         # "Every hazard layer the fetch produced is here" — a certification issued by
@@ -3963,6 +4928,15 @@ def build_router(svc: NavService) -> APIRouter:
             "means": crt_block.get("means"),
             "remedy": crt_block.get("remedy"),
             "depth": {"nominal": nominal_block, "surveyed": sound_block},
+            # THE LAUNCH-BANK ROW RIDES IN THIS INDEX FOR THE REASON EVERY OTHER ROW
+            # DOES: this document is what earns the console the right to say a layer
+            # is not there. It is the PER-AREA view — the console's own bank row reads
+            # the area-less /api/bank, which is where the paint and the tile template
+            # come from — and it is here so that "what does this area hold" has one
+            # answer with nothing left out of it. The block is _bank_block's, unedited,
+            # with the same `present` boolean every other row in this document carries.
+            "bank": {**bank_block, "url": "/api/bank",
+                     "present": bank_block["status"] == "present"},
             "centreline": {"status": "present" if cl.exists() else "absent",
                            "present": cl.exists(),
                            "url": f"/api/areas/{name}/centreline"},

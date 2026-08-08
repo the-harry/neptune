@@ -278,6 +278,21 @@ const CRT_NO_FLOW =
 const CRT_RING =
   'The dashed ring is a fixed standoff this console draws around the mark, chosen by us; it is '
 + 'not a surveyed danger area and the real one may be larger.';
+/* THE CLAUSE EVERY CHEVRON OWES, kept in one place for the same reason the two above it
+   are: it is the half of the mark that says what a rotated glyph does NOT tell you.
+   267 features (265 bridges, 2 locks) carry no angle at all, and a chevron pointing at a
+   default would be an invented fact at every one of them — so those keep the plain
+   symmetric mark, which is a cannot-tell you can see. */
+const CRT_CHEVRON =
+  'A mark drawn as a CHEVRON (reading as > or <) is one this console has an angle for, turned to '
++ 'that angle on screen and turning with the map. A mark drawn as the plain symmetric glyph is one '
++ 'it does NOT have an angle for, or one standing in for several features that do not share a '
++ 'single direction — in both cases the console cannot tell you which way it lies, and says so by '
++ 'not pointing rather than by pointing at a default. AND THE ANGLE IS A LINE, NOT AN ARROW: what '
++ 'is published is an orientation, so a chevron drawn at it and the same chevron turned right round '
++ 'describe the identical published fact. Which end carries the point is this console\'s drawing and '
++ 'not the Trust\'s claim. Read the chevron as the line it lies on; there is no far end and no near '
++ 'end to it.';
 
 /* ---------------------------------------------------------------------------
    THE TABLE. One entry per layer, and the entry IS the layer: its tier, its mark,
@@ -301,6 +316,32 @@ const CRT_LAYERS = [
   /* ---- TIER 1 — KEEP AWAY. Always drawn. ---- */
   { id:'locks', tier:1, mark:'L', standoffM:30, name:'LOCKS',
     aliases:['lock','locks','lock_gates','lock_chambers'],
+    /* THE ONE FIELD IN THE WHOLE NETWORK THAT CARRIES AN ANGLE — an AXIS, not a
+       direction, which took measuring to find out. Every field name across all 27
+       national layers was checked and `angle` is the only one anywhere: 1,722 locks
+       with 1,720 angles, 6,916 bridges with 6,651. No weir, sluice, culvert, outfall
+       or tunnel portal has one, which is why only these two rows carry this.
+
+       THIS ROW USED TO CALL THE FALL-DIRECTION READING "PLAUSIBLE" and leave it there.
+       It is not plausible, it is wrong, and this console held the data to say so: the
+       angle is the gate line, square across the chamber. Both measurements are in the
+       sentence below because a refuted guess is worth more to the next reader than a
+       bare assertion — the numbers are what stop it being re-guessed. Note also that
+       the two layers do NOT agree with each other: a lock's angle is perpendicular to
+       the cut and a bridge's runs along it, so the two rows say different things on
+       purpose. See CRT_CHEVRON and _crtAngleOf. */
+    angleWhat:
+      'THE CHEVRON IS THE LOCK\'S PUBLISHED ANGLE, AND THAT ANGLE IS THE GATE LINE — the chamber '
+    + 'squared across the cut, not the way water falls through it. This console measured that rather '
+    + 'than guessing at it. Against the Trust\'s own centreline, 1,705 locks sit a median 88.9° off '
+    + 'the line of the canal, 98.9% of them between 75° and 90°, and exactly one in 1,705 within 15° '
+    + '— a cross-axis everywhere, not a direction of travel. Measured a second way, against this '
+    + 'handheld\'s own LIDAR down the Camden flight, where the ground falls 29.01 to 27.64 to 25.10 '
+    + 'to 22.61 metres above Ordnance Datum: every published angle there lands within 6.5° of exactly '
+    + 'perpendicular to the fall. So a chevron on a lock points ACROSS the channel, at the bank. Read '
+    + 'it as the line the gates stand on — how square the chamber is to the water, which is worth '
+    + 'knowing before you arrive. Never read it as which way the water goes. On that question this '
+    + 'layer is silent, and the two measurements above are why.',
     what:'LOCK — a chamber with gates and paddles at each end. Working one moves tonnes of water '
        + 'through it in a couple of minutes, and the pull at an open paddle is far beyond anything '
        + 'this sub can swim against: it ends up in the chamber, under a gate, or inside the side '
@@ -386,6 +427,25 @@ const CRT_LAYERS = [
        + 'one place a boat will be swinging its propeller across the whole channel.' },
   { id:'bridges', tier:2, mark:'B', name:'BRIDGES',
     aliases:['bridge','bridges','bridge_points'],
+    /* THE SAME FIELD, AND EMPHATICALLY NOT THE SAME MEANING — but not the meaning this
+       row first guessed at either. It said the angle was "almost certainly how the deck
+       lies across the cut", which sounded careful and was measurably false: 6,126
+       bridges sit a median 3.3° off the line of the canal, so the angle runs ALONG the
+       water and not across it. The deck reading had it at ninety degrees to the truth.
+       What survives untouched is the reason this row exists — a bridge has no direction
+       of travel and nothing flows through it, so flattening locks and bridges into one
+       sentence would hand an operator a current at 6,651 places that never had one
+       measured. */
+    angleWhat:
+      'THE CHEVRON RUNS ALONG THE CUT, not across it. The Trust publish an angle for most bridges, '
+    + 'and measured against their own centreline 6,126 of them sit a median 3.3° off the line of the '
+    + 'canal, 84.6% within 15° of it and only 7.5% anywhere near square to it — so this is the line '
+    + 'of the WATER through the arch, not the line of the deck over it. (This row used to say the '
+    + 'deck, which was wrong by ninety degrees; a lock\'s angle is the one that sits square, and the '
+    + 'two layers genuinely differ.) It is still an orientation and nothing more: not a direction of '
+    + 'travel, not a current, and nothing moves through a bridge, so a chevron here never means water '
+    + 'is going that way. What it is good for is picturing how the channel runs under the arch before '
+    + 'you drive a tethered sub into it.',
     what:'BRIDGE — the channel narrows and darkens underneath, and the bed collects whatever has '
        + 'been dropped off the parapet, which is very often exactly what you came to lift. Narrow '
        + 'also means the tether has two walls to find instead of none.' },
@@ -588,11 +648,19 @@ const CRT = {
    moving. FEEDERS was exactly that and shipped stating a current as fact, which is
    the one thing this data cannot support: an inference must never dress as a
    measurement, and the tier a layer sits in is no reason for it to be allowed to. */
+/* THE ORDER HERE IS LOad-BEARING and it is why this is not three lines. The two hazard
+   clauses are appended by TESTING THE STRING FOR THEMSELVES, so anything appended before
+   them can suppress them: an angle clause that happened to contain the words "no flow
+   measurement" would silently delete the no-flow clause from the LOCKS row, which is the
+   one row on this console where it matters most. So the hazard clauses are assembled
+   first, off e.what alone, and the directional clause goes on the end afterwards. */
 function crtWhat(e){
-  if(!(e.tier===1 || e.hazardish || e.flowProxy)) return e.what;
   let s = e.what;
-  if(s.indexOf('standoff this console draws') < 0 && e.standoffM) s += ' ' + CRT_RING;
-  if(s.indexOf('no flow measurement') < 0) s += ' ' + CRT_NO_FLOW;
+  if(e.tier===1 || e.hazardish || e.flowProxy){
+    if(s.indexOf('standoff this console draws') < 0 && e.standoffM) s += ' ' + CRT_RING;
+    if(s.indexOf('no flow measurement') < 0) s += ' ' + CRT_NO_FLOW;
+  }
+  if(e.angleWhat) s += ' ' + e.angleWhat + ' ' + CRT_CHEVRON;
   return s;
 }
 
@@ -811,6 +879,37 @@ function crtLiveClause(e){
          + 'no simulated version of them.';
   return '';
 }
+/* HOW MANY OF THE MARKS ON SCREEN ARE ACTUALLY POINTING, AND HOW MANY CANNOT.
+
+   Counted off the last frame the layer was drawn in, so the row reports the picture the
+   operator is looking at rather than a property of the file. It exists because a chevron
+   layer has two silent failures and neither is visible from the map: a feature with no
+   published angle keeps the plain glyph (267 of them nationally — 265 bridges, 2 locks),
+   and a merged mark drops its chevron because the features under it do not share one
+   direction. Both look identical on the glass to "this console decided not to point",
+   and the difference is worth a sentence. */
+function crtAngleClause(e){
+  if(!e.angleWhat) return '';
+  const st = CRT.state[e.id] || {};
+  const chev = st.chevrons||0, none = st.noAngle||0, merged = st.merged||0;
+  if(!st.drawn) return '';
+  let s = ' ' + (chev ? (chev + ' of the ' + st.drawn + ' mark' + (st.drawn===1?'':'s') +
+                         ' on screen ' + (chev===1?'is a chevron':'are chevrons') + ', turned to the '
+                       + 'angle published for that feature and turning with the map.')
+                      : ('None of the ' + st.drawn + ' mark' + (st.drawn===1?'':'s') +
+                         ' on screen is drawn as a chevron.'));
+  if(none)
+    s += ' ' + none + ' feature' + (none===1?'':'s') + ' in view carr' + (none===1?'ies':'y')
+       + ' no angle at all, so ' + (none===1?'it keeps':'they keep') + ' the plain symmetric mark — a '
+       + 'cannot-tell you can see, rather than a chevron pointing at a default.';
+  if(merged)
+    s += ' ' + merged + ' mark' + (merged===1?'':'s') + ' stand' + (merged===1?'s':'')
+       + ' for more than one feature at this zoom and therefore point' + (merged===1?'s':'')
+       + ' nowhere: the features under it do not share a single direction. Zoom in and each gets '
+       + 'its own chevron back.';
+  return s;
+}
+
 /* WHICH STORE THIS ROW IS TALKING ABOUT, in words. There are two now and they are
    different disks with different contents: "the national store has no relief weirs"
    and "this area's card has none" are separate claims, and a row that said only "the
@@ -871,6 +970,7 @@ function crtStateSentence(e){
       else if(st.drawn && st.drawn < st.n)
         s += ' ' + st.drawn + ' of them are inside the view you are looking at. The others are '
            + 'loaded too and simply off screen — pan or zoom out and they draw.';
+      if(on) s += crtAngleClause(e);
       return s + live;
     }
     // HERE, AND NOT YET READ. The store lists it and this console has not pulled the
@@ -1868,11 +1968,18 @@ function crtRenderNet(){
    -------------------------------------------------------------------------- */
 function crtGlyphSvg(e){
   const cls = 'crt-g' + (e.tier===1 || e.hazardish ? ' t1' : e.tier===2 ? ' t2' : ' t3');
-  const shape = (e.tier===1 || e.hazardish)
+  /* THE PANEL KEY HAS TO BE THE MARK THAT IS ON THE MAP. A row showing an octagon beside
+     a map full of chevrons is a key for a different console, and the key is how anybody
+     works out what they are looking at. Drawn pointing EAST, with no claim attached: the
+     row's own sentence says the angle is per-feature and that this swatch is a shape and
+     not a bearing. Same notched-arrowhead outline as _crtChevronPath, at r = 7.5. */
+  const shape = e.angleWhat
+    ? '<polygon points="17.9,10 8.9,16.9 4,16.9 7,10 4,3.1 8.9,3.1"/>'
+    : (e.tier===1 || e.hazardish)
     ? '<polygon points="7,2 13,2 18,7 18,13 13,18 7,18 2,13 2,7"/>'
     : e.tier===2 ? '<rect x="2.5" y="2.5" width="15" height="15" rx="3.5"/>'
                  : '<circle cx="10" cy="10" r="7.5"/>';
-  const fs = (e.mark||'?').length>1 ? 7.5 : 9.5;
+  const fs = (e.mark||'?').length>1 ? 7.5 : (e.angleWhat ? 8.5 : 9.5);
   return '<svg class="'+cls+'" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">'
        + shape + '<text x="10" y="10" text-anchor="middle" dominant-baseline="central" '
        + 'font-size="'+fs+'" font-weight="800">'+(e.mark||'?')+'</text></svg>';
@@ -1936,6 +2043,17 @@ function crtBuildPanel(){
       }
     });
   }
+  /* THE BANK LAYER GETS ITS OWN BLOCK AT THE BOTTOM, AND NOT A FOURTH TIER.
+
+     The three tiers above are a safety ORDER for Canal & River Trust marks — how loudly
+     and in what sequence a point glyph is drawn. This is a raster wash about the LAND,
+     from a different authority, with a different survey date and a different set of ways
+     to be missing, and filing it as "tier 4" would be claiming it sits somewhere in that
+     order when it is not in that order at all: it is painted under every one of them,
+     over the imagery. Its own heading says whose data it is, which matters because "the
+     Trust does not publish this stretch" and "nobody has processed the terrain here" are
+     two different absences with two different fixes. */
+  bankBuildRow(list);
   CRT._rowsBuilt = true;
   CRT._building = false;
   crtRenderRows();
@@ -2001,6 +2119,10 @@ function crtRenderRows(){
     }
     liveTitle(row, crtStateSentence(e));
   });
+  // The bank row is refreshed with the rest of them: it is in the same panel, answering
+  // the same question, and a row that only updated when its own fetch returned would go
+  // stale the moment the operator panned off the end of a processed area.
+  bankRenderRow();
   if(missing) crtBuildPanel();
 }
 
@@ -2371,7 +2493,12 @@ function crtInit(){
   const x = $('crt-close');
   if(x) x.addEventListener('click', (e)=>{ e.stopPropagation(); crtTogglePanel(false); });
   const r = $('crt-refresh');
-  if(r) r.addEventListener('click', (e)=>{ e.stopPropagation(); crtLoadAll('operator asked'); });
+  // REFRESH RE-READS BOTH STORES. The Trust's layers and the LIDAR bank tiles are
+  // separate stores on the same handheld with separate ways of being missing, and a
+  // refresh button that read one of them would leave the operator pressing it at a bank
+  // row that never changes.
+  if(r) r.addEventListener('click', (e)=>{ e.stopPropagation();
+                                           crtLoadAll('operator asked'); bankLoad('operator asked'); });
   /* THE CREDIT, ONE TAP AWAY. The licence asks to be shown wherever the data is; it does
      not ask to be pinned across the panel. Left open it took a quarter of the height and
      pushed the hazard list into a scroll strip, so the credit was crowding out the
@@ -2387,7 +2514,11 @@ function crtInit(){
   // awaits the seen record itself, so an area that arrives before this settles is
   // still classified against the real history and not against an empty object.
   Promise.all([crtLoadPrefs(), crtSeenReady()])
-    .then(()=>{ CRT.ready=true; crtRenderRows(); crtLoadAll('boot'); });
+    .then(()=>{ CRT.ready=true; crtRenderRows(); crtLoadAll('boot');
+                // AFTER THE PREFERENCES, not before: bankIsOn() reads CRT.prefs, and a
+                // bank index read on an empty prefs object would render the row ON for
+                // an operator who switched it off last session and then flip under them.
+                bankLoad('boot'); });
   // A CANNOT TELL is a question, not a verdict: the Pi comes back, the tether is
   // replugged, and the layers should appear without the operator having to know
   // there is a refresh button. Bounded and slow — this is a background retry, not
@@ -2404,6 +2535,11 @@ function crtInit(){
     // re-asked — the one machine most likely to be sitting on a bench waiting for the
     // launch fetch to finish.
     if(CRT._busy) return;
+    // THE BANK LAYER IS RETRIED ON THE SAME RULE AND ONLY ON IT: a store that gave no
+    // answer at all is a question worth re-asking, and one that answered "I hold none of
+    // this" is not — re-issuing that request every 30 s is a poll whose answer cannot
+    // change without a bootstrap run, and the bootstrap reloads the page's data itself.
+    if(bankStatus()==='unavailable') bankLoad('retrying the bank layer, which could not be asked for');
     const held = (s)=>crtAll().some(e=>{ const st=CRT.state[e.id]; return st && st.status===s; });
     if(held('unavailable')) crtLoadAll('retrying the layers that could not be asked for');
     // A DOWNLOAD THAT STARTED AFTER THIS CONSOLE LOOKED. The launch fetch is begun by
@@ -2550,6 +2686,28 @@ function _crtParts(f){
   f._crtParts = {pts, lines, polys, rep};
   return f._crtParts;
 }
+/* THE PUBLISHED ANGLE OF ONE FEATURE, OR NOTHING.
+
+   `angle` is the ONLY direction-carrying field anywhere in the Trust's 27 national
+   layers, and it is on exactly two of them (locks and bridges). Read here rather than in
+   the renderer so the two rules that make it safe live in one place:
+
+   ZERO IS A REAL ANGLE. Locks range 0-392 and 0 is in the data, so `!a` would throw away
+   a published bearing and draw the cannot-tell mark over it — the reverse of the lie this
+   whole feature is guarding against, but a lie all the same.
+
+   AND 392 DEGREES IS A REAL ROW. 17 locks exceed 360 (nothing else does), which is a
+   quirk of whatever wrote the file rather than a second turn of the compass, so it is
+   taken modulo 360. Anything that is not a finite number at all — absent, null, a blank
+   string — comes back null, and null is what the plain mark is drawn from. */
+function _crtAngleOf(f){
+  const p = f && f.properties; if(!p) return null;
+  let a = p.angle;
+  if(typeof a === 'string'){ a = a.trim(); if(!a) return null; a = Number(a); }
+  if(typeof a !== 'number' || !isFinite(a)) return null;
+  a = a % 360;
+  return (a < 0) ? a + 360 : a;
+}
 function _crtEach(gj, fn){
   if(!gj) return;
   const fs = gj.type==='FeatureCollection' ? (gj.features||[]) : (gj.type==='Feature' ? [gj] : []);
@@ -2584,12 +2742,52 @@ function _crtTraceRun(ctx, coords, W, H, m, budget){
   return started && near;
 }
 
+/* THE CHEVRON, AS A CLOSED PATH POINTING AT `phi` RADIANS IN SCREEN SPACE.
+
+   An arrowhead with a NOTCHED tail, which is what makes the silhouette read as > or <
+   rather than as a triangle: the notch is the concave point at (-0.40, 0). The anchor
+   (x, y) — the feature's own position — sits inside the body at local (0, 0), which is
+   where the letter goes, so a rotated mark still has its label in the middle of itself
+   and the label never rotates with it. A rotated 'L' at 200 degrees is not a letter. */
+function _crtChevronPath(ctx, x, y, r, phi){
+  const P = [[1.05,0], [-0.15,0.92], [-0.80,0.92], [-0.40,0], [-0.80,-0.92], [-0.15,-0.92]];
+  const c=Math.cos(phi), s=Math.sin(phi);
+  ctx.beginPath();
+  for(let i=0;i<P.length;i++){
+    const px = x + r*(P[i][0]*c - P[i][1]*s);
+    const py = y + r*(P[i][0]*s + P[i][1]*c);
+    i ? ctx.lineTo(px,py) : ctx.moveTo(px,py);
+  }
+  ctx.closePath();
+}
+/* A PUBLISHED ANGLE, TURNED INTO THE DIRECTION IT POINTS ON THIS SCREEN.
+
+   Two conversions, and both of them have to be here or the mark points somewhere the
+   data never said. `angle` is read as a COMPASS BEARING — degrees clockwise from north,
+   which is what a rotation field on a north-up ArcGIS layer means — so a bearing t points
+   along (sin t, -cos t) in a north-up canvas, i.e. at canvas angle t - 90 degrees. Then
+   the map's own rotation is added, because the collapsed radar is HEADING-UP: north is
+   not up there, and a chevron drawn at the raw bearing would swing away from the canal it
+   is annotating the moment the sub turned. TILES.last.rot is the same rotation the
+   imagery and every other overlay were laid down with. */
+function _crtChevronPhi(angle){
+  const rot = (typeof TILES!=='undefined' && TILES.last) ? (TILES.last.rot||0) : 0;
+  return (angle - 90) * Math.PI/180 + rot;
+}
+
 /* THE KEEP-AWAY MARK. Shape first, colour second — the same rule the leak drop and
    the ROV glyph follow, and for the same reason: an operator who cannot pick orange
-   out of green still has to be able to tell a lock from a slipway. */
-function _crtMark(ctx, e, x, y, dpr, r, count){
+   out of green still has to be able to tell a lock from a slipway.
+
+   `angle` is the published bearing for this ONE feature, or null. Given one, the
+   symmetric glyph is replaced by a chevron turned to it — not decorated with an arrow
+   beside it, because a mark and a separate arrow are two things to read and this is one
+   fact. Given null the glyph is exactly what it always was, which is the honest drawing
+   of "no angle published": a shape with no front. */
+function _crtMark(ctx, e, x, y, dpr, r, count, angle){
   const col=_crtColor(e), t1=(e.tier===1 || e.hazardish);
   if(!(r>0)) r = (t1 ? 9 : e.tier===2 ? 7 : 5.5) * dpr;
+  const pointed = (typeof angle === 'number' && isFinite(angle));
   ctx.save();
   /* NO DISC BEHIND THE GLYPH. A dark circle was drawn under every hazard mark to lift
      it off whatever it landed on, and with everything on it read as a second ring around
@@ -2598,7 +2796,9 @@ function _crtMark(ctx, e, x, y, dpr, r, count){
      does the rest; a casing stroke lifts it off the imagery without adding a ring. */
   ctx.globalAlpha = t1 ? 1 : (e.tier===2 ? 0.92 : 0.78);
   ctx.beginPath();
-  if(t1){                                             // octagon: the stop-sign shape
+  if(pointed){                                        // chevron: the published angle
+    _crtChevronPath(ctx, x, y, r*1.05, _crtChevronPhi(angle));
+  } else if(t1){                                      // octagon: the stop-sign shape
     for(let i=0;i<8;i++){
       const a=(Math.PI/4)*i + Math.PI/8;
       const px=x+r*Math.cos(a), py=y+r*Math.sin(a);
@@ -2621,7 +2821,10 @@ function _crtMark(ctx, e, x, y, dpr, r, count){
   const room = r >= 6*dpr;
   if(e.mark && room && (t1 || e.tier===2)){
     ctx.fillStyle = t1 ? CRT_C.ink : col;
-    ctx.font = '800 '+((e.mark.length>1 ? 7.5 : 9.5)*dpr)+'px '+
+    // A CHEVRON HAS LESS BODY THAN AN OCTAGON, so the letter comes down a point inside
+    // one. It stays — "locks keep their L" is the requirement, and a chevron with no
+    // letter on it is a direction with nothing saying what is pointing.
+    ctx.font = '800 '+((e.mark.length>1 ? 7.5 : (pointed ? 8.5 : 9.5))*dpr)+'px '+
                ((typeof getComputedStyle==='function' && getComputedStyle(document.body).fontFamily) || 'sans-serif');
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.fillText(e.mark, x, y+0.5*dpr);
@@ -2747,28 +2950,39 @@ function _crtDrawLayerBand(ctx, e, band, dpr, ppm, W, H, tally){
   const r = _crtMarkRadius(e, dpr, ppm);
   const cell = _crtDeclutterCell(e, r);
   const bins = new Map();
-  let inview = 0;
+  const angled = !!e.angleWhat;                 // only locks and bridges publish one
+  let inview = 0, hasAngle = 0, noAngle = 0;
   _crtEach(st.data, (f)=>{
     const p=_crtParts(f);
     if(!p.rep) return;
     const s=lonLatToScreen(p.rep[1], p.rep[0]);
     if(!s || !(s[0]>-m && s[0]<W+m && s[1]>-m && s[1]<H+m)) return;
     inview++;
+    const a = angled ? _crtAngleOf(f) : null;
+    if(angled){ if(a===null) noAngle++; else hasAngle++; }
     const k = Math.floor(s[0]/cell)+'|'+Math.floor(s[1]/cell);
     const b = bins.get(k);
-    if(b){ b.n++; }
-    else bins.set(k, {x:s[0], y:s[1], n:1});
+    /* A MERGED MARK LOSES ITS CHEVRON, AND THAT IS THE POINT. This bin now stands for
+       several features whose published angles are not the same number, and one chevron
+       drawn over nine locks would be pointing on behalf of eight it never asked. The
+       plain symmetric glyph with the count on it says exactly what is true: there are
+       this many here and this console is not claiming a direction for them. Zoom in and
+       they separate into their own cells and get their own chevrons back. */
+    if(b){ b.n++; b.a = null; }
+    else bins.set(k, {x:s[0], y:s[1], n:1, a:a});
   });
-  let drawn=0, merged=0;
+  let drawn=0, merged=0, chevrons=0;
   bins.forEach(b=>{
     if(drawn >= CRT_API.maxDraw){ tally.capped = true; return; }
     // The ring is the hazard's own and is drawn under the mark, once per cell: a
     // standoff drawn per merged feature would be the same circle painted nine times.
-    _crtMark(ctx, e, b.x, b.y, dpr, r, b.n);
+    _crtMark(ctx, e, b.x, b.y, dpr, r, b.n, b.a);
     drawn++;
     if(b.n>1) merged++;
+    if(b.a!==null && b.a!==undefined) chevrons++;
   });
   st.drawn = drawn; st.inview = inview; st.merged = merged;
+  st.chevrons = chevrons; st.hasAngle = hasAngle; st.noAngle = noAngle;
   st.capped = !!tally.capped;
 }
 
@@ -2788,7 +3002,8 @@ function crtDraw(ctx, dpr){
   // behind three guards inside it.
   try{ const w = crtEnsureWindow(); if(w && w.catch) w.catch(()=>{}); }catch(err){}
   const live = crtAll().filter(e=>e.kind!=='depth' && crtIsOn(e.id));
-  live.forEach(e=>{ const st=CRT.state[e.id]; if(st){ st.drawn=0; st.inview=0; st.merged=0; st.capped=false; } });
+  live.forEach(e=>{ const st=CRT.state[e.id]; if(st){ st.drawn=0; st.inview=0; st.merged=0; st.capped=false;
+                                                     st.chevrons=0; st.hasAngle=0; st.noAngle=0; } });
   const tally = {};
   for(const band of [CRT_BAND.AREA, CRT_BAND.LINE, CRT_BAND.MARK, CRT_BAND.HAZARD]){
     // WITHIN a band, quiet first: tier 3, then 2, then 1. Two hazards on one screen
@@ -3135,3 +3350,715 @@ function crtAttribution(){ return CRT_ATTRIBUTION; }
 function crtAnyPresent(){
   return crtAll().some(e=>{ const s=CRT.state[e.id]; return s && s.status==='present' && crtIsOn(e.id); });
 }
+
+/* ============================================================================
+   THE LIDAR LAUNCH-BANK LAYER — WHICH BANK YOU COULD GET DOWN, AND WHICH IS A WALL.
+
+   WHAT IT IS FOR. Satellite imagery of a canal is a dark blue ribbon between two
+   textures, and nothing in it says which side you could carry a 5 kg sub and a drum of
+   cable down to the water. This layer paints that on: Environment Agency LIDAR terrain,
+   classified against the water level of the pound it is beside, in TWO colours and no
+   more — amber for bank less than 2 m above the water, dark brown for everything higher
+   and for the urban fabric behind it. It is built once per area on this handheld at
+   bootstrap and drawn here as XYZ tiles in the same scheme the satellite imagery uses,
+   so once it is on the disk it costs no network at all, in real mode or in the simulator.
+
+   AMBER IS A GEOMETRIC FACT AND NOT PERMISSION, and that sentence is the layer. "The
+   ground here is under 2 m above the water" is a measurement; "you can launch here" is a
+   judgement involving a fence, a hedge, a landowner, a drop, whether a car can get within
+   a hundred metres of it, and whether the edge is a bank or something you go through. The
+   recon that validated this layer amber-classified a RAILWAY CUTTING, which is the
+   cleanest possible demonstration: geometrically it is a low bank, operationally it is a
+   place you will be arrested. Every sentence this layer says carries that distinction,
+   because a colour that quietly came to mean "launch here" would be the most dangerous
+   thing on this map.
+
+   AND WATER IS NEVER PAINTED. Not a tint, not an edge, nothing: the imagery shows through
+   unaltered on every water pixel, because anything drawn on the water would be read as a
+   claim about what is under it and this layer knows nothing whatever about depth. The
+   only thing that rides on the water is the detected-level label, which is a height of
+   the SURFACE and says so in its own words.
+
+   NO AREA IN ANY PATH, which is the same decision the national chart store made and for
+   the same reason: the index reports WHICH areas are painted rather than taking one as a
+   parameter, so a console with no launch point still learns what this handheld holds, and
+   the map paints whatever it is looking at without first deciding which area that is.
+
+   THE ABSENCES, AND THERE ARE SEVEN, because they are seven different things to do:
+
+     HERE          this water is inside a painted area and the paint is on the glass
+     PARTIAL       the area covering this view was painted with holes in it, or the view
+                   runs off its edge — part of what you see is unpainted for a reason
+                   about the DATA and not about the bank
+     NOT HERE      the layer is painted for other areas and this water is not in one
+     ABSENT        the handheld was read and no bank layer has been built on it
+     UNREADABLE    the record beside an area's tiles is here and will not parse
+     CANNOT BUILD  this machine cannot build the layer at all — numpy, scipy or Pillow
+                   are not installed, or the module is not in this build. No download
+                   fixes it, and the vehicle is in this state permanently by design
+     NOT DOWNLOADED / CANNOT TELL   the map service itself said nothing, or nothing usable
+
+   NEVER A SILENT FALLBACK TO BARE SATELLITE. Unpainted imagery and "no low banks here"
+   are opposite claims and they look identical, which is exactly the failure the hazard
+   layers' ABSENT/NONE MAPPED split exists to prevent — so this row always says which of
+   those it is, in the same words the hazard rows use.
+   ============================================================================ */
+
+/* THE WIRE. Three paths, in one object, and api/nav/service.py's bank endpoints quote
+   this object back as the reason they are spelled the way they are. That is deliberate:
+   two halves of one feature spelling an endpoint or a field two ways is how this project
+   has silently lost a feature five times, so there is exactly one statement of the
+   contract and both halves point at it.
+
+   THE INDEX IS THE GATE, exactly as it is for the chart layers, and here the reason is
+   sharper. A tile that is not there is a TRANSPARENT HOLE, and a transparent hole over a
+   canal bank reads as "no low bank here" — a survey result nobody produced. So this layer
+   is never discovered by asking for tiles and seeing what comes back: the index is read
+   first, it says per area what is painted and what is not, and only then is anything
+   drawn. The tile TEMPLATE is quoted back by that document and used from there, so the
+   day the endpoint moves the document says where to. */
+const BANK_API = {
+  index:  '/api/bank',                          // what bank paint this handheld holds
+  tiles:  '/api/bank/tiles/{z}/{x}/{y}.png',    // fallback template; the index sends one
+  pounds: '/api/bank/pounds',                   // ?bbox=W,S,E,N — the detected levels
+  timeoutMs: 6000,
+  // Below this many device pixels per metre a level label is wider than the pound it
+  // names and the canal disappears under its own annotation. Suppressed there, and the
+  // row says how many were suppressed — never silently.
+  labelPpm: 0.05,
+  maxLabels: 14,
+  tileBudget: 400,
+};
+/* THE TWO COLOURS, AND THERE ARE ONLY TWO. The renderer that painted the tiles is
+   configured with exactly these (api/nav/config.py lidar_colour_low / lidar_colour_high),
+   so the panel key is painted from what the tiles were painted with rather than from a
+   hex typed into a stylesheet that drifts away from them. There is deliberately NO
+   elevation ramp: a ramp invites reading a height off a colour, and the only claim this
+   layer makes is which side of the threshold a pixel falls. */
+const BANK_AMBER = '#E39A2E';                   // bank UNDER the launch height above water
+const BANK_BROWN = '#453016';                   // higher bank, and the urban fabric
+/* The seen-record's key for the bank store, keyed the way CRT_NATIONAL_KEY is and for the
+   identical reason: it has no area, so it needs a name no real cut can collide with. It
+   is what lets a bank store that HAS answered here go loud when it stops. */
+const BANK_SEEN_KEY = '*lidar-bank*';
+
+const BANK = {
+  asked:false, ok:false, nothing:false, why:'', at:0,
+  status:'',                                    // the index's own word for itself
+  tiles:'', poundsUrl:'', minzoom:null, maxzoom:null, thresholdM:null,
+  vintage:'', attribution:'',
+  libs:{ok:true, why:'', install:''},
+  areas:[],                                     // {area,status,bbox,fetched,built,vintage,tiles,why}
+  cache:new Map(), inflight:0,
+  pounds:null, poundWin:null, poundBusy:false, poundAt:0, poundWhy:'',
+  drew:0, tooWide:false, labels:0, labelsHidden:0, on:'',
+  _busy:false, _row:'',
+};
+
+/* THE OPERATOR'S SWITCH, REMEMBERED WHERE EVERY OTHER LAYER'S IS.
+
+   It rides in CRT.prefs — the same `crt.layers` object in IndexedDB the chart rows use —
+   under the key `bank`, which no Trust layer can collide with because layer ids come from
+   CRT_LAYERS and there is no row of that name. One store means one load, one save and one
+   place a preference can be lost, rather than a second key written by one code path and
+   read by none. Drawn by default like everything else: a layer that is held and hidden
+   might as well not be held. */
+function bankIsOn(){
+  const p = CRT.prefs || {};
+  return (typeof p.bank === 'boolean') ? p.bank : true;
+}
+function bankSetOn(on){
+  CRT.prefs = CRT.prefs || {};
+  CRT.prefs.bank = !!on;
+  crtSavePrefs();
+  LOG.map('LIDAR launch-bank layer ' + (on ? 'shown' : 'hidden'));
+  BANK._row = '';
+  bankRenderRow();
+}
+
+/* ---- geometry ------------------------------------------------------------ */
+function _bankBBox(b){
+  return (Array.isArray(b) && b.length===4 && b.every(n=>typeof n==='number' && isFinite(n))) ? b : null;
+}
+function _bankOverlaps(a, v){ return !(a[2]<v[0] || a[0]>v[2] || a[3]<v[1] || a[1]>v[3]); }
+function _bankContains(a, v){ return a[0]<=v[0] && a[1]<=v[1] && a[2]>=v[2] && a[3]>=v[3]; }
+/* Every painted area, in the index's own vocabulary: bank.py answers `present`, `partial`
+   or `absent` per area and nothing else, and anything it has not been taught is read the
+   conservative way — as PARTIAL, which never claims the layer is whole. */
+function bankPainted(){
+  return (BANK.areas||[]).filter(a=>a.status!=='absent' && a.bbox);
+}
+/* IS THE WATER ON SCREEN INSIDE SOMETHING THAT WAS PAINTED?
+
+   This is the question that decides whether unpainted imagery means "no low bank" or "no
+   data", and it is answered off the bboxes the index publishes rather than off whether
+   any paint happened to arrive. A tile that has not loaded yet, a tile that 404s and a
+   tile that is genuinely all water are three different things, and only a claim built on
+   the published extent can tell them apart. */
+function bankAreaForView(){
+  const v = crtViewBBox(); if(!v) return null;
+  const painted = bankPainted();
+  return painted.find(a=>_bankContains(a.bbox, v) && a.status==='present')
+      || painted.find(a=>_bankOverlaps(a.bbox, v))
+      || null;
+}
+
+/* WHAT THIS ROW IS ENTITLED TO SAY, RIGHT NOW.
+
+   THE SERVER'S VOCABULARY AND THIS CONSOLE'S ARE NOT THE SAME WORDS AND MUST NOT BE
+   MERGED. `libraries.ok === false` means "this machine cannot BUILD the layer — no numpy,
+   no scipy, no Pillow, or no module", which is permanent on the vehicle by design. This
+   file's `unavailable` has meant CANNOT TELL — asked, no answer, and there was reason to
+   expect one — since the day the hazard rows were written, and it is the loudest word the
+   panel has. Spelling both the same way would put the map's alarm on a Pi that is working
+   exactly as intended, so the capability gap is read as `no-library` and rendered CANNOT
+   BUILD: a job for the handheld, never for the tether. */
+function bankStatus(){
+  if(!bankIsOn()) return 'off';
+  if(!BANK.asked) return 'loading';
+  /* WHICH SILENCE IS IT — DECIDED ON THIS STORE'S OWN RECORD, AND NOT THE TRUST'S. Same
+     rule as crtHadReasonToExpectAnAnswer(): a store that answered on this handheld before
+     and cannot be read now is a FAULT and is loud, and one that has never answered has
+     simply not been built here and is quiet. What is deliberately NOT reused is the
+     EVIDENCE. These are two different stores — the Trust's vectors are downloaded, the
+     bank tiles are computed here — and either can be present without the other. Keyed on
+     the shared record, a handheld holding the whole Trust network and no bank paint would
+     raise a fault about work that has never once run. */
+  if(!BANK.ok) return crtSeenArea(BANK_SEEN_KEY) ? 'unavailable' : 'not-downloaded';
+  const painted = bankPainted();
+  if(!painted.length){
+    // CANNOT BUILD outranks ABSENT, because they send you to different places: one is a
+    // job somebody can go and do with an internet connection, and the other is not a job
+    // at all. It is only reached with nothing painted — once tiles are on the card the
+    // libraries stop mattering, which is exactly what makes the layer serveable by a Pi.
+    if(BANK.libs && BANK.libs.ok===false) return 'no-library';
+    if((BANK.areas||[]).some(a=>a.status==='unreadable')) return 'unreadable';
+    return 'absent';
+  }
+  const hit = bankAreaForView();
+  if(!hit) return crtViewBBox() ? 'outside' : 'held';
+  const v = crtViewBBox();
+  return (hit.status!=='present' || !_bankContains(hit.bbox, v)) ? 'partial' : 'present';
+}
+/* The same words the chart rows use, because they are the same facts, plus the three this
+   layer needs that a vector layer does not. Built by COPYING rather than by editing
+   CRT_STATE_WORDS, so a word added for the bank layer can never turn up in a hazard row
+   that has no way to mean it. */
+const BANK_WORDS = Object.assign({}, CRT_STATE_WORDS, {
+  partial:      'PARTIAL',
+  outside:      'NOT HERE',
+  unreadable:   'UNREADABLE',
+  'no-library': 'CANNOT BUILD',
+});
+
+/* ---- the written explanation, which IS the feature -----------------------
+   These sentences are this console's own and are shown whatever the server says,
+   including when it says nothing at all. The server sends its own — `why`, and per area
+   the words bank.py writes — and those are quoted live where they arrive, because the
+   producer knows its real threshold, its survey year and which centreline it buffered,
+   and this file would go stale the day any of them changed. What must never happen is the
+   three claims below being CONDITIONAL on a document turning up: a console showing bare
+   imagery with no caveat attached is exactly the failure this layer is guarding. */
+const BANK_HEAD_HELP =
+  'THE BANK, FROM LIDAR — the one layer on this map that is about the LAND rather than the '
++ 'water, and the only one that does not come from the Canal & River Trust. Environment '
++ 'Agency terrain, classified against the water level of each pound and painted over the '
++ 'imagery in two colours: amber where the bank is under 2 m above the water, dark brown '
++ 'where it is higher or built on. It answers "which side could I get down with the sub and '
++ 'the cable", which is a question a satellite photograph of a canal cannot answer at all. '
++ 'It is built once per area on this handheld and needs no connection to draw.';
+const BANK_WHAT =
+  'LAUNCH BANKS — Environment Agency LIDAR terrain, 1 m, painted over the satellite imagery '
++ 'in TWO colours and no more. AMBER means the ground there is LESS THAN 2 m above the water '
++ 'level of the pound beside it. DARK BROWN means it is higher than that, or it is building '
++ 'and hard urban fabric. The shading is a hillshade off the same terrain, so what reads as '
++ 'texture is real slope. AMBER IS A GEOMETRIC FACT AND NOT PERMISSION TO LAUNCH: it states '
++ 'a height difference and nothing else — not that there is a way in, not that there is a '
++ 'path, not that you are allowed, and it knows nothing about fences, gates, private land, '
++ 'live railway, reed beds or mud. The recon run that proved this layer painted a RAILWAY '
++ 'CUTTING amber, which is geometrically a low bank and operationally a place you will be '
++ 'arrested. THE WATER IS NEVER PAINTED: the imagery shows through unaltered on every water '
++ 'pixel, because nothing here knows anything whatever about depth and a wash over the water '
++ 'would be read as though it did. THE TERRAIN IS A 2022 SURVEY — banks slump, get rebuilt, '
++ 'get piled and get overgrown, and none of that is in this picture. THE PAINTED CORRIDOR IS '
++ 'BUFFERED FROM THE TRUST\'S OWN CANAL CENTRELINE, so an arm, a basin or a marina that is '
++ 'not in that centreline is not in this layer at all. GROUND WITH NO PAINT ON IT HAS NOT '
++ 'BEEN SURVEYED AND FOUND HIGH — it has not been looked at, and the row beside this one '
++ 'says which of NOT HERE, PARTIAL, ABSENT, UNREADABLE, CANNOT BUILD and NOT DOWNLOADED is '
++ 'the reason. Bare imagery is never left to stand in for "no low banks here".';
+const BANK_LABEL_WHAT =
+  'The white figures on the water are the DETECTED WATER LEVEL of each sheet of water in '
++ 'metres above Ordnance Datum — the height of the SURFACE, taken from the flat water in the '
++ 'terrain model itself, which is what every bank beside it is measured against. They step '
++ 'down through a lock flight because the canal does. They are heights OF the water and '
++ 'never depths of it: nothing in this layer has ever measured how much water is under that '
++ 'surface, and a detected surface is not a surveyed pound datum.';
+
+function bankGlyphSvg(){
+  /* THE KEY IS THE LAYER: two swatches, in the two colours actually painted, because there
+     are only ever two. A legend with a ramp on it would invite reading a height off a
+     shade, which is the one thing this classification does not carry. */
+  return '<svg class="crt-g bank" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">'
+       + '<rect x="1.5" y="4" width="8.5" height="12" fill="' + BANK_AMBER + '"/>'
+       + '<rect x="10" y="4" width="8.5" height="12" fill="' + BANK_BROWN + '"/>'
+       + '<rect x="2" y="4.5" width="16" height="11" fill="none" '
+       + 'stroke="rgba(236,227,255,.5)" stroke-width="1"/></svg>';
+}
+
+/* WHAT THE ROW SAYS ABOUT RIGHT NOW, on top of the written explanation above.
+
+   THE SERVER'S OWN SENTENCE IS QUOTED WHERE IT SENT ONE, exactly as the chart rows quote
+   the index's `why`. It is the half that knows the actual numbers — how many tiles, how
+   much of the corridor had terrain behind it, which library is missing, what to type to
+   fix it — and a console that paraphrased it would be inventing a second account of the
+   same fact, in a different voice, that goes stale on its own schedule. */
+function bankSentence(st){
+  const painted = bankPainted();
+  const hit = bankAreaForView();
+  const names = (list)=>list.map(a=>a.area).slice(0,4).join(', ')
+                      + (list.length>4 ? (' and ' + (list.length-4) + ' more') : '');
+  const vint = BANK.vintage ? ('The terrain is the ' + BANK.vintage + ' survey. ') : '';
+  const prov = (a)=>a ? (' Area "' + a.area + '"'
+                       + (a.built ? (', painted ' + String(a.built).slice(0,10)) : '')
+                       + (a.fetched ? (', terrain fetched ' + String(a.fetched).slice(0,10)) : '')
+                       + (a.vintage ? (', from the ' + a.vintage + ' survey') : '')
+                       + (typeof a.tiles==='number' ? (', ' + a.tiles.toLocaleString() + ' tiles') : '')
+                       + '.' + (a.why ? (' It says: ' + a.why) : '')) : '';
+  switch(st){
+    case 'present':
+      return 'HERE — the bank layer is painted over the water you are looking at.' + prov(hit)
+           + (BANK.labels
+              ? (' ' + BANK.labels + ' water level' + (BANK.labels===1?'':'s') + ' labelled on it')
+              : ' No water level is labelled in this view')
+           + (BANK.labelsHidden
+              ? (', ' + BANK.labelsHidden + ' suppressed because they would have landed on top of '
+                 + 'each other at this zoom — zoom in and they come back') : '')
+           + (BANK.poundWhy ? ('. The detected levels could not be read: ' + BANK.poundWhy) : '')
+           + '. ' + vint
+           + 'Remember what the amber is: a height difference under 2 m, which is a '
+           + 'measurement, and not a judgement that anything can be carried down there.';
+    case 'partial':
+      return 'PARTIAL — this handheld holds bank paint for the water on screen and not for all '
+           + 'of it.' + prov(hit)
+           + ' Either the view runs off the edge of the painted box or that area was painted '
+           + 'with holes in it, so some of what you can see is unpainted for a reason that is '
+           + 'about the DATA and not about the bank. Unpainted ground here is NOT bank that was '
+           + 'measured and found high — it has not been looked at. ' + vint;
+    case 'outside':
+      return 'NOT HERE — the bank layer is painted on this handheld for ' + painted.length
+           + ' area' + (painted.length===1?'':'s') + ' (' + names(painted) + ') and the water on '
+           + 'screen is not inside any of them. So this map is showing bare satellite over the '
+           + 'banks in front of you, and bare satellite says nothing at all: it is not "no low '
+           + 'banks here", it is "nobody has looked here". Build the layer for a saved area over '
+           + 'this stretch and it will paint.';
+    case 'held':
+      return 'HELD — this handheld holds the bank layer for ' + painted.length + ' area'
+           + (painted.length===1?'':'s') + ' (' + names(painted) + '), and this map has no '
+           + 'position of any kind yet, so there is nowhere to draw it. Nothing is missing and '
+           + 'nothing has failed: it paints the moment the map knows where it is looking.';
+    case 'no-library':
+      return 'CANNOT BUILD — this machine cannot make a launch-bank layer at all'
+           + ((BANK.libs && BANK.libs.why) ? (': ' + BANK.libs.why) : '') + '. '
+           + ((BANK.libs && BANK.libs.install) ? (BANK.libs.install + ' ') : '')
+           + 'That is a missing CAPABILITY and not a survey result: no download and no '
+           + 'reconnection changes it, and nothing here claims a bank is low or claims it is '
+           + 'high. The classification is arithmetic over a terrain model and the libraries '
+           + 'that do it are a handheld job — the vehicle is in this state permanently and on '
+           + 'purpose, because a Pi 3B+ on the end of a tether has a sub to run. Tiles already '
+           + 'built elsewhere are served here perfectly well; only building needs them.';
+    case 'unreadable':
+      return 'UNREADABLE — the record beside an area\'s bank tiles is on this handheld and will '
+           + 'not parse. Nothing on it can be dated or attributed, so none of it is drawn as a '
+           + 'survey. That is not a claim about the banks in either direction — rebuild the '
+           + 'layer for that area before trusting any paint on it.'
+           + (BANK.why ? (' It says: ' + BANK.why) : '');
+    case 'absent':
+      return 'ABSENT — ' + mapDataName() + ' was read and no launch-bank layer has been built on '
+           + 'this handheld' + (BANK.why ? ('. It says: ' + BANK.why) : '.')
+           + ' Nothing on this map is telling you which bank you could get down, so unpainted '
+           + 'ground means NO DATA and never "no low bank there". It is fixable, at home, with '
+           + 'internet: the terrain is fetched once and painted once, per area.';
+    case 'unavailable':
+      return 'CANNOT TELL — the bank layer has been read on this handheld before and cannot be '
+           + 'read now' + (BANK.why ? (': ' + BANK.why) : '') + '. Something that was working is '
+           + 'not: the map service has stopped, or the paint has been deleted or damaged. '
+           + 'Nothing has been ruled in or out, and this map is not showing banks it was '
+           + 'showing a minute ago.';
+    case 'not-downloaded':
+      return 'NOT DOWNLOADED — nothing this console can reach holds a launch-bank layer'
+           + (BANK.why ? (' (' + BANK.why + ')') : '') + '. Nothing has failed. It is a one-time '
+           + 'job per saved area, done on this handheld, and it needs internet once: the terrain '
+           + 'is fetched, classified and prerendered here, and after that it draws with no '
+           + 'connection at all. Until it has run, the banks on this map are bare satellite, '
+           + 'which is not a statement that there are no low banks.';
+    case 'loading':
+      return 'asking ' + mapDataName() + ' what bank paint this handheld holds';
+    default:
+      return 'NOT ASKED — you switched this layer off on this handheld. It ships on, like every '
+           + 'layer here, so this is your choice and not a default. It is not a claim that the '
+           + 'data is missing and it says nothing about the banks: switch it back on and the row '
+           + 'will report which of HERE, PARTIAL, NOT HERE, ABSENT and NOT DOWNLOADED is true.';
+  }
+}
+
+/* ---- the panel row ------------------------------------------------------- */
+function bankBuildRow(list){
+  if(!list) return;
+  const head = document.createElement('div');
+  head.className = 'crt-head tb';
+  head.id = 'crt-tier-bank';
+  head.textContent = 'THE BANK — LIDAR, NOT THE TRUST';
+  head.dataset.help = BANK_HEAD_HELP;
+  head.title = BANK_HEAD_HELP;
+  head.setAttribute('aria-label', BANK_HEAD_HELP);
+  list.appendChild(head);
+
+  const row = document.createElement('div');
+  row.className = 'crt-row bank';
+  row.id = 'crt-row-bank';
+  row.dataset.layer = 'bank';
+  row.dataset.help = BANK_WHAT + ' ' + BANK_LABEL_WHAT;
+  row.innerHTML =
+    '<span class="crt-glyph">' + bankGlyphSvg() + '</span>' +
+    '<span class="crt-name">LAUNCH BANKS</span>' +
+    '<span class="crt-state" id="crt-state-bank"></span>' +
+    '<button class="crt-toggle" id="crt-toggle-bank" type="button" role="switch"></button>';
+  list.appendChild(row);
+  const b = row.querySelector('.crt-toggle');
+  if(b) b.addEventListener('click', (ev)=>{ ev.stopPropagation(); bankSetOn(!bankIsOn()); });
+  BANK._row = '';
+  bankRenderRow();
+}
+function bankRenderRow(){
+  const row = $('crt-row-bank'); if(!row) return;
+  const st = bankStatus(), on = bankIsOn();
+  row.classList.toggle('on', on);
+  ['absent','unavailable','not-downloaded','partial','outside','held','unreadable','no-library']
+    .forEach(c=>row.classList.toggle(c, st===c));
+  row.classList.toggle('shown', on && st==='present');
+  const pill = $('crt-state-bank');
+  if(pill){
+    const word = BANK_WORDS[st] || String(st).toUpperCase();
+    // The count is AREAS PAINTED, not tiles and not features: it is the only number here
+    // an operator can act on, because it is the one that answers "have I built this for
+    // the cut I am going to".
+    const n = bankPainted().length;
+    pill.textContent = ((st==='present'||st==='held'||st==='partial') && n) ? (word+' · '+n) : word;
+    pill.className = 'crt-state s-' + st;
+  }
+  const btn = $('crt-toggle-bank');
+  if(btn){
+    btn.textContent = on ? 'ON' : 'OFF';
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-checked', on ? 'true' : 'false');
+    const s = (on ? 'DRAWN. Tap to stop painting the LIDAR bank layer over the imagery. '
+                  : 'SWITCHED OFF BY YOU — the tiles are still on this handheld and are simply '
+                  + 'not being painted. Tap to draw them. ')
+            + 'The choice is remembered on this handheld, and this layer ships ON like every '
+            + 'other, so switching it off is always your decision and never a default. '
+            + BANK_WHAT;
+    btn.dataset.help = s; btn.title = s; btn.setAttribute('aria-label', s);
+  }
+  liveTitle(row, bankSentence(st));
+}
+
+/* ---- reading the index --------------------------------------------------- */
+async function bankLoad(why){
+  if(BANK._busy) return;
+  BANK._busy = true;
+  try{
+    /* AWAITED BEFORE ANYTHING IS CLASSIFIED, for the reason crtLoadAll gives: the
+       never-had-it / lost-it decision reads a PERSISTED record, and a read that raced the
+       store would file a handheld which has been painting these banks all month as one
+       that has never held them — the alarm switched off by a timing accident. */
+    await crtSeenReady();
+    LOG.map('LIDAR bank layer: reading what this handheld holds (' + (why||'refresh') + ')');
+    const r = await _crtGet(mapDataBase() + BANK_API.index, BANK_API.timeoutMs);
+    BANK.asked = true; BANK.at = Date.now();
+    if(!r.ok || !r.json || typeof r.json!=='object'){
+      BANK.ok = false;
+      BANK.areas = [];
+      /* A 404 IS AN ANSWER, and it is the same distinction crtFetchIndex draws. This
+         endpoint is documented never to 404 — it answers with a status and a sentence
+         even when it holds nothing — so a 404 here is a build of the map service that
+         predates the layer, which is still "nothing this console can reach holds it".
+         Either way the seen-record decides the VOLUME, and it is not stamped, so a
+         console that has never had a bank document is quiet. */
+      BANK.nothing = (r.status===404 || r.status===501);
+      BANK.why = BANK.nothing
+        ? (mapDataName() + ' answered ' + r.status + ' for the launch-bank layer, which is a '
+           + 'map service that does not serve one')
+        : (r.err || (mapDataName() + ' answered ' + (r.status||'nothing')
+                     + ' for the launch-bank layer'));
+      return;
+    }
+    const j = r.json;
+    BANK.ok = true; BANK.nothing = false;
+    BANK.status  = String(j.status || 'present');
+    BANK.tiles   = String(j.tiles || BANK_API.tiles);
+    // The URL, kept under a name of its own: BANK.pounds is the FeatureCollection
+    // itself, and one field meaning both a document and the address of that document
+    // is exactly the collision this file keeps warning about.
+    BANK.poundsUrl = String(j.pounds || BANK_API.pounds);
+    BANK.minzoom = (typeof j.minzoom==='number') ? j.minzoom : null;
+    BANK.maxzoom = (typeof j.maxzoom==='number') ? j.maxzoom : null;
+    BANK.thresholdM = (typeof j.threshold_m==='number') ? j.threshold_m : null;
+    BANK.vintage = String(j.vintage || '');
+    BANK.why     = String(j.why || '');
+    BANK.attribution = String(j.attribution || '');
+    /* WHETHER THIS MACHINE COULD BUILD THE LAYER AT ALL, which is a different question
+       from whether it holds any. `ok:false` is CANNOT BUILD and carries the exact pip
+       line; `install` is quoted verbatim rather than reworded, because an operator told
+       to install numpy when scipy is what is missing runs the command, sees no change,
+       and concludes the layer is broken. */
+    const L = (j.libraries && typeof j.libraries==='object') ? j.libraries : null;
+    BANK.libs = L ? {ok: L.ok!==false, why:String(L.why||''), install:String(L.install||'')}
+                  : {ok:true, why:'', install:''};
+    BANK.areas = (Array.isArray(j.areas) ? j.areas : []).map(a=>({
+      area:    String((a && (a.area||a.name)) || ''),
+      status:  String((a && (a.status||a.state)) || 'absent'),
+      bbox:    _bankBBox(a && a.bbox),
+      fetched: String((a && a.fetched) || ''),
+      built:   String((a && a.built) || ''),
+      /* PER-AREA VINTAGE OVERRIDES THE INDEX'S. Areas are painted at different times off
+         different survey years, and one date printed over all of them would be a claim
+         about ground nobody looked at in that year. */
+      vintage: String((a && a.vintage) || j.vintage || ''),
+      tiles:   (a && typeof a.tiles==='number') ? a.tiles : null,
+      pounds:  (a && typeof a.pounds==='number') ? a.pounds : null,
+      why:     String((a && a.why) || ''),
+    })).filter(a=>a.area);
+    // The licence line travels with the data, into the same credit box the Trust's does.
+    if(BANK.attribution) crtNoteCredit({attribution: BANK.attribution}, null);
+    /* THE SEEN-RECORD IS STAMPED ONLY BY A DOCUMENT THAT PARSED, never by a 404. Marking
+       a 404 as seen would mean a map service that has told this console it holds no bank
+       paint, and then gone away, produces CANNOT TELL — the map's loudest word — about
+       data that has never once existed here. That is the bench alarm this file spent a
+       round removing, and crtFetchIndex draws the same line. */
+    crtMarkSeen(BANK_SEEN_KEY);
+    const painted = bankPainted();
+    LOG.map('LIDAR bank layer: ' + painted.length + ' of ' + BANK.areas.length
+          + ' area(s) painted' + (BANK.minzoom!==null ? (', zoom '+BANK.minzoom+'-'+BANK.maxzoom) : '')
+          + (BANK.vintage ? (', ' + BANK.vintage + ' survey') : '')
+          + (painted.length ? (' — ' + painted.map(a=>a.area+' ('+a.status+')').join(', ')) : ''));
+  }catch(e){
+    BANK.asked = true; BANK.ok = false;
+    BANK.why = 'the bank index could not be read (' + ((e&&e.message)||e) + ')';
+  }finally{
+    BANK._busy = false;
+    BANK._row = '';
+    bankRenderRow();
+  }
+}
+
+/* ---- the detected water levels -------------------------------------------
+   Windowed exactly like the Trust's vector layers: asked for around where the map is
+   looking, with the same slack, and re-asked when the view leaves it. On a failure the
+   window is recorded ANYWAY, so a map service with no pounds endpoint is asked once per
+   window rather than once per second forever — a poll whose answer cannot change is the
+   thing this file refuses to do everywhere else. */
+async function bankEnsurePounds(){
+  if(!bankIsOn() || !BANK.ok || BANK.poundBusy) return;
+  const view = crtViewBBox(); if(!view) return;
+  if(BANK.poundWin && crtWindowCovers(BANK.poundWin, view)) return;
+  if((Date.now() - BANK.poundAt) < 1500) return;
+  BANK.poundBusy = true; BANK.poundAt = Date.now();
+  const win = crtWindowBBox();
+  try{
+    const url = mapDataBase() + (BANK.poundsUrl || BANK_API.pounds) + '?' + crtBBoxParam(win);
+    const r = await _crtGet(url, BANK_API.timeoutMs);
+    if(r.ok && r.json && r.json.type){ BANK.pounds = r.json; BANK.poundWhy = ''; }
+    else {
+      BANK.pounds = null;
+      BANK.poundWhy = r.err || (mapDataName() + ' answered ' + (r.status||'nothing')
+                                + ' for the detected water levels');
+    }
+    BANK.poundWin = win;
+  }catch(e){
+    BANK.pounds = null; BANK.poundWin = win;
+    BANK.poundWhy = 'the detected water levels could not be read (' + ((e&&e.message)||e) + ')';
+  }finally{ BANK.poundBusy = false; }
+}
+/* The level of one sheet of water, under the name api/nav/bank.py actually writes:
+   `level_m_od`, metres above Ordnance Datum. The two synonyms are read as well because a
+   field one half of a feature writes and the other half does not read is how this project
+   has silently lost a feature five times, and an unlabelled canal is a bad way to find
+   out. `label` is the producer's own rendering of the number and wins for the TEXT, so
+   the figure on the glass is the figure the producer meant to print. */
+function _bankLevelOf(f){
+  const p = (f && f.properties) || {};
+  const v = (typeof p.level_m_od==='number') ? p.level_m_od
+          : (typeof p.level_m==='number') ? p.level_m
+          : (typeof p.water_level_m==='number') ? p.water_level_m : null;
+  return (typeof v==='number' && isFinite(v)) ? v : null;
+}
+function _bankLabelOf(f, lvl){
+  const p = (f && f.properties) || {};
+  return (typeof p.label==='string' && p.label.trim()) ? p.label.trim() : (lvl.toFixed(1)+' m OD');
+}
+
+/* ---- drawing -------------------------------------------------------------
+   ONE TILE CACHE OF ITS OWN, and not tiles.js's. The two layers are different pyramids
+   with different zoom ranges and, crucially, different meanings for a missing tile: a
+   missing SATELLITE tile is drawn from its nearest cached ancestor, because imagery
+   upscaled is still imagery, and a missing BANK tile is drawn as NOTHING, because
+   upscaling a classification paints amber over ground nobody classified. That difference
+   is the whole reason this is not a second call into drawTiles. */
+function bankTileUrl(z, x, y){
+  return mapDataBase() + String(BANK.tiles || BANK_API.tiles)
+    .replace('{z}', z).replace('{x}', x).replace('{y}', y);
+}
+function _bankTile(z, x, y){
+  const n = 1<<z;
+  if(z<0 || x<0 || y<0 || x>=n || y>=n) return null;
+  const key = z+'/'+x+'/'+y;
+  let e = BANK.cache.get(key);
+  if(e) return e;
+  e = { img:new Image(), state:'load' };
+  /* No crossOrigin, for the same reason tiles.js omits it: the map service may be on a
+     different origin on this handheld, and a CORS header nobody here controls must not be
+     what decides whether the operator can see the bank. Nothing reads these pixels back;
+     the screenshot path re-renders without raster layers (map.js drawCanvas noTiles). */
+  e.img.onload  = ()=>{ e.state='ok';  BANK.inflight--; };
+  e.img.onerror = ()=>{ e.state='err'; BANK.inflight--; };
+  BANK.cache.set(key, e);
+  BANK.inflight++;
+  e.img.src = bankTileUrl(z, x, y);
+  return e;
+}
+function bankDraw(ctx, dpr){
+  BANK.drew = 0; BANK.tooWide = false;
+  if(!bankIsOn() || !BANK.ok){ bankNoteRow(); return false; }
+  const L = (typeof TILES!=='undefined') ? TILES.last : null;
+  if(!L || !L.worldTP || !L.k){ bankNoteRow(); return false; }
+  try{ const p = bankEnsurePounds(); if(p && p.catch) p.catch(()=>{}); }catch(err){}
+  /* NOT ONE TILE IS ASKED FOR OVER WATER NO AREA COVERS. The index publishes the painted
+     boxes, so a console looking at a canal nobody has processed spends nothing and says
+     NOT HERE in the panel — rather than firing a screenful of requests to collect a
+     screenful of 404s and leaving a hole that looks exactly like "no low banks". */
+  const a = bankAreaForView();
+  if(!a){ BANK.on=''; bankNoteRow(); return false; }
+  BANK.on = a.area;
+
+  // The zoom the IMAGERY is being drawn at, recovered from the projection it left behind,
+  // so the two layers always reason about the same world and the paint cannot drift off
+  // the photograph it is annotating.
+  const z0 = Math.round(Math.log2(L.worldTP/256));
+  const zmin = (typeof BANK.minzoom==='number') ? BANK.minzoom : 0;
+  const zmax = (typeof BANK.maxzoom==='number') ? BANK.maxzoom : z0;
+  /* PAST THE BOTTOM OF THE PYRAMID, NOTHING IS DRAWN AND THE ROW SAYS SO. The overlay is
+     prerendered down to area-overview zoom and no further; below that there is no level to
+     draw, and synthesising one would mean classifying by arithmetic instead of by terrain.
+     Silence here would be indistinguishable from "no low banks in this county". */
+  if(z0 < zmin){ BANK.tooWide = true; bankNoteRow(); return false; }
+  const z = Math.min(zmax, z0);
+  // Above the pyramid's top level the coarser tile is stretched, which is honest: it is
+  // the classification this handheld holds, drawn softer. It is never sharpened from a
+  // level that does not exist and never invented from a neighbour.
+  const f = Math.pow(2, z0 - z);
+  const k = L.k * f, cx = L.cxTP / f, cy = L.cyTP / f;
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  const halfTP = Math.hypot(W,H)/2 / k + 256;
+  const minTx=Math.floor((cx-halfTP)/256), maxTx=Math.floor((cx+halfTP)/256);
+  const minTy=Math.floor((cy-halfTP)/256), maxTy=Math.floor((cy+halfTP)/256);
+  let drew=0, budget=BANK_API.tileBudget;
+  ctx.save();
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.translate(W/2, H/2); ctx.rotate(L.rot||0);
+  ctx.imageSmoothingEnabled = true;
+  for(let tx=minTx; tx<=maxTx && budget>0; tx++){
+    for(let ty=minTy; ty<=maxTy && budget>0; ty++){
+      budget--;
+      const t = _bankTile(z, tx, ty);
+      if(t && t.state==='ok'){
+        ctx.drawImage(t.img, (tx*256-cx)*k, (ty*256-cy)*k, 256*k, 256*k);
+        drew++;
+      }
+    }
+  }
+  ctx.restore();
+  BANK.drew = drew;
+  // The cache cannot grow without limit on a long pan — the same rule tiles.js follows.
+  if(BANK.cache.size > 900){
+    const it = BANK.cache.keys();
+    for(let i=0;i<220;i++){ const key = it.next().value; if(key===undefined) break; BANK.cache.delete(key); }
+  }
+  bankDrawLabels(ctx, dpr);
+  bankNoteRow();
+  return drew > 0;
+}
+
+/* THE DETECTED WATER LEVEL, ON THE WATER IT BELONGS TO.
+
+   White with a dark halo because it is drawn over satellite imagery of water, which is
+   near-black in one half of a frame and near-white in the other — a single fill colour is
+   legible over one of those and invisible over the other.
+
+   SUPPRESSED WHERE IT WOULD BE CLUTTER RATHER THAN INFORMATION, and the row says how many
+   were suppressed. Two rules: a floor on the zoom, because below it the label is wider
+   than the pound it names; and a greedy collision test, so a lock flight at middling zoom
+   shows the levels it has room for instead of a smear. Nothing is dropped — zoom in and
+   the rest appear. */
+function bankDrawLabels(ctx, dpr){
+  BANK.labels = 0; BANK.labelsHidden = 0;
+  const gj = BANK.pounds;
+  if(!gj) return;
+  const feats = (gj.type==='FeatureCollection') ? (gj.features||[])
+              : (gj.type==='Feature' ? [gj] : []);
+  if(!feats.length) return;
+  const ppm = _crtPpm(dpr);
+  if(!(ppm > BANK_API.labelPpm)){ BANK.labelsHidden = feats.length; return; }
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  const placed = [];
+  ctx.save();
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.font = '700 ' + (11*dpr) + 'px ' +
+             ((typeof getComputedStyle==='function' && getComputedStyle(document.body).fontFamily)
+              || 'sans-serif');
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.lineJoin='round'; ctx.miterLimit=2;
+  for(const feat of feats){
+    const lvl = _bankLevelOf(feat);
+    if(lvl===null) continue;
+    const p = _crtParts(feat);
+    if(!p.rep) continue;
+    const s = lonLatToScreen(p.rep[1], p.rep[0]);
+    if(!s || !(s[0]>0 && s[0]<W && s[1]>0 && s[1]<H)) continue;
+    if(BANK.labels >= BANK_API.maxLabels){ BANK.labelsHidden++; continue; }
+    const txt = _bankLabelOf(feat, lvl);
+    const w = ctx.measureText(txt).width + 10*dpr, h = 15*dpr;
+    if(placed.some(b=>Math.abs(b.x-s[0]) < (b.w+w)/2 && Math.abs(b.y-s[1]) < (b.h+h)/2)){
+      BANK.labelsHidden++;
+      continue;
+    }
+    placed.push({x:s[0], y:s[1], w:w, h:h});
+    ctx.lineWidth = 3.2*dpr; ctx.strokeStyle = 'rgba(6,2,16,.9)';
+    ctx.strokeText(txt, s[0], s[1]);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(txt, s[0], s[1]);
+    BANK.labels++;
+  }
+  ctx.restore();
+}
+
+/* THE ROW FOLLOWS THE MAP. Coverage is a question about WHERE THE VIEW IS, so panning off
+   the end of a painted area changes the honest answer with no fetch involved and no event
+   to hang off. Re-rendered only when the answer actually changes — one string comparison a
+   frame, the same guard crtRenderBadge uses. */
+function bankNoteRow(){
+  const key = bankStatus() + '|' + BANK.labels + '|' + BANK.labelsHidden + '|'
+            + (BANK.tooWide?'w':'') + '|' + BANK.on;
+  if(key === BANK._row) return;
+  BANK._row = key;
+  bankRenderRow();
+}
+
+/* The Environment Agency's licence line, shown wherever their data is — the same rule the
+   Trust's credit follows, on the same strip, for the same reason. The index's own
+   statement wins when it sends one, so a change of terms on the producing side does not
+   need this file edited in the same breath. Drawn only when the layer reached the glass. */
+const BANK_ATTRIBUTION =
+  'Contains Environment Agency LIDAR Composite DTM 1 m data (c) Environment Agency, licensed '
++ 'under the Open Government Licence v3.0';
+function bankAttribution(){ return BANK.attribution || BANK_ATTRIBUTION; }
+function bankAnyDrawn(){ return bankIsOn() && BANK.ok && BANK.drew > 0; }
