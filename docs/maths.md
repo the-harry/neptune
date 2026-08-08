@@ -2554,10 +2554,22 @@ via `scipy.signal.find_peaks`, requiring `lidar_pound_separation_m` (0.6 m) betw
 one pound cannot report as two. The reported level is the **median of the winning bin and its
 immediate neighbours**, not the bin centre — a bin centre quantises every level to the nearest
 10 cm and the phase of that quantisation is an accident of where the histogram happened to
-start. Against the Camden flight the median form reproduces 29.0 / 27.6 / 25.2 / 22.6 to the
-centimetre; bin centres come out half a bin off. `BANK_POUND_MIN_PIXELS` (500) is a guard on
-the whole sample: fewer flat-water cells than that and no levels are reported at all, rather
-than a mode being fitted to a puddle.
+start. `BANK_POUND_MIN_PIXELS` (500) is a guard on the whole sample: fewer flat-water cells
+than that and no levels are reported at all, rather than a mode being fitted to a puddle.
+
+**Checked against the real survey, two ways.** On the held Camden area the detector reports
+seven levels — 29.67, 29.01, 27.64, 25.10, 23.08, 22.12, 20.89 m OD — every one a genuinely
+populated sheet (13,905 to 53,498 flat cells within ±0.25 m of it), with the closest pair
+0.66 m apart and so clearing the 0.6 m separation rule rather than being one pound reported
+twice.
+
+Five of those were measured **independently and by a different method**: taking the 10th
+percentile of elevation within 7 m of the Trust's centreline either side of each lock in the
+flight gives 29.01, 27.64, 25.10, 23.07, 20.89. The histogram agrees with all five, worst
+case 1 cm. The two the lock-based sample never visited (29.67, 22.12) are pounds above and
+below the stretch it walked. Two methods that share no code arriving at the same water levels
+is the strongest evidence available that these are sheets of water and not artefacts of the
+binning.
 
 **Classifying.** With $h$ the cell's elevation and $w$ the elevation of its nearest water
 cell, the height above local water is $\Delta = h - w$, and
