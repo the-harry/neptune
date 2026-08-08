@@ -34,6 +34,42 @@
    this area reports NONE MAPPED; and a Pi that cannot be asked at all reports
    CANNOT TELL. Three states, three different words, and never a quietly empty map.
 
+   AND A FOURTH, BECAUSE CANNOT TELL WAS BEING SHOUTED AT PEOPLE WHO HAD NEVER ASKED
+   ANYBODY ANYTHING. CANNOT TELL is an ALARM: it means this console had reason to
+   expect an answer and did not get one, and on the hazard tier it is the loudest
+   thing on this map. A console opened on a bench — a laptop, the ?sim=1 demo, a
+   handheld that has never been plugged into a Pi — has nobody to ask and never had,
+   and it was raising that alarm on every launch that happened to remember an area
+   from a previous session. An alarm that fires on a healthy console is an alarm that
+   gets ignored, and the one it teaches you to ignore is the one that means hazard
+   data is missing for water somebody is about to put a sub into.
+
+   So the silence is split in two, by evidence and not by wording:
+
+     CANNOT TELL     asked, no answer, AND there was reason to expect one: this
+                     console is POINTED AT A VEHICLE, and either that vehicle has
+                     been answering or this area's chart index has answered before.
+                     Loud, and retried in the background.
+     NOT DOWNLOADED  this console holds no chart data for this area and has nobody
+                     to get it from — either because it has never had any, or
+                     because it is a console with no vehicle behind it at all (the
+                     ?sim=1 demo, a page opened off the disk). Said quietly in the
+                     panel; the map notes it without alarming.
+
+   BOTH HALVES OF THE EVIDENCE ARE GATED ON THERE BEING SOMEBODY TO ASK, and that is
+   the correction the demo forced. The seen-record is a fact about a PI — one answered
+   for this cut once — and ?sim=1 does not inherit it, because ?sim=1 configures no
+   vehicle, asks nobody, and therefore has nothing that could have gone quiet. What
+   it does NOT relax: a console that IS pointed at its Pi, on a cut that has answered
+   before, is loud the moment the answers stop, whether or not the socket ever came up
+   this session. That is the console the alarm was written for.
+
+   NOTHING IS RELAXED BY THAT. Absent is still never drawn as present, NOT DOWNLOADED
+   is still an absence and still says in its own words that an empty stretch means NO
+   DATA rather than clear water, and every layer still says what happened to it. The
+   only thing that changed is WHICH true sentence is said and HOW LOUDLY. What decides
+   it is crtHadReasonToExpectAnAnswer(), further down, and the evidence it reads.
+
    TWO-PHASE, like areas.py and satellite.py: nothing here touches the internet.
    Every request goes to the Pi over the tether, carries its own timeout, and a Pi
    that does not answer produces CANNOT TELL rather than a hung overlay.
@@ -312,7 +348,10 @@ const CRT_LAYERS = [
        + 'depth and not the depth of the bed — there may well be more water below it, and there is '
        + 'certainly no less. The map starts nominal everywhere and turns solid where the sub has '
        + 'been. Cells measured during THIS session are included the moment they are driven, before '
-       + 'any dive log has been saved, and the row says how many of each you are looking at.' },
+       + 'any dive log has been saved, and the row says how many of each you are looking at — but '
+       + 'ONLY while a real hull is on the link reporting its own sensors. A simulated dive '
+       + 'measures nothing and paints no cells at all: this treatment means the sub touched that '
+       + 'water, so there is no version of it that a simulator is entitled to draw.' },
 ];
 
 /* Words that make an unknown layer a hazard until somebody says otherwise.
@@ -335,8 +374,11 @@ const CRT = {
   bind:{},                   // wire id -> the console id it was bound to
   claimed:{},                // console id -> the wire id holding it (one file, one row)
   credits:[],                // extra attribution lines carried by the layers themselves
+  indexRaw:null,             // the index's own status/why/remedy for the AREA (see crtFetchIndex)
+  seen:{},                   // area name -> when its chart index last ANSWERED (persisted)
   live:{cells:null, at:0},   // this session's own soundings, binned
   _busy:false, _badge:'', _rowsBuilt:false, _building:false,
+  _fetchBuilt:false, _fetchBadge:'',        // the download block above the layer list
 };
 
 /* THE SENTENCE, ASSEMBLED IN ONE PLACE.
@@ -473,22 +515,26 @@ function crtSetOn(id, on){
 }
 
 /* ---- status vocabulary --------------------------------------------------
-   off          the layer is switched off, so nothing has been ASKED. Not a claim.
-   loading      asked, waiting
-   present      the Pi has the file and it has features in this area
-   empty        the Pi has the file and there is nothing here — "none mapped"
-   absent       the Pi looked and the file is not on the disk
-   unavailable  nobody could be asked at all — CANNOT TELL
-   no-area      there is no active map area, so there is nothing to ask about
+   off             the layer is switched off, so nothing has been ASKED. Not a claim.
+   loading         asked, waiting
+   present         the Pi has the file and it has features in this area
+   empty           the Pi has the file and there is nothing here — "none mapped"
+   absent          the Pi looked and the file is not on the disk
+   unavailable     asked, no answer, and there WAS reason to expect one — CANNOT TELL,
+                   and it is an alarm
+   not-downloaded  this console holds no chart data for this area and has nobody on this
+                   link to get it from — NOT DOWNLOADED, and it is not a fault
+   no-area         there is no active map area, so there is nothing to ask about
    -------------------------------------------------------------------------- */
 const CRT_STATE_WORDS = {
-  off:         'NOT ASKED',
-  loading:     'ASKING…',
-  present:     'SHOWN',
-  empty:       'NONE MAPPED',
-  absent:      'ABSENT',
-  unavailable: 'CANNOT TELL',
-  'no-area':   'NO AREA',
+  off:              'NOT ASKED',
+  loading:          'ASKING…',
+  present:          'SHOWN',
+  empty:            'NONE MAPPED',
+  absent:           'ABSENT',
+  unavailable:      'CANNOT TELL',
+  'not-downloaded': 'NOT DOWNLOADED',
+  'no-area':        'NO AREA',
 };
 /* This session's own soundings are counted SEPARATELY from the Pi's saved survey,
    wherever the surveyed row is described. They are drawn identically because they
@@ -499,11 +545,46 @@ const CRT_STATE_WORDS = {
    measured cells are visibly painted on the map. */
 function crtLiveClause(e){
   if(e.id!=='depth_surveyed') return '';
+  /* REPLAY IS ITS OWN REASON, AND IT USED TO BE GIVEN SOMEBODY ELSE'S. During replay
+     this row said the depth "is coming from the simulator rather than from a sensor in
+     the water", which is simply not what happened: MAP.track is a saved dive log, and
+     the depths in it were whatever the console was showing at the time. The reason no
+     cells are painted is narrower and quite different — navui.js saveCurrentDive writes
+     each point as {x, y, depth} and nothing else, so the per-point `measured` stamp that
+     crtLiveCells gates on (map.js pushTrack) is not in the file. A log carries no record
+     of where its depths came from, so this console cannot show any of them as measured,
+     and it will not guess: that is the same rule as every absent layer on this panel.
+     Tested BEFORE the count, not after, because a log that one day DOES carry the stamp
+     must not be described as "measured by the sub during THIS session" — the sub in a
+     replay is not diving, and the session that took those soundings was somebody's
+     afternoon last month. */
+  if(typeof MAP!=='undefined' && MAP && MAP.replay)
+    return ' No cells are being added from THIS session because this is a REPLAY of a saved dive '
+         + 'log, and the log records each point as a position and a depth with no stamp saying '
+         + 'where that depth came from. That is not a claim that the depths in it are false — they '
+         + 'are what this console was reading at the time — it is that the file cannot tell this '
+         + 'console WHICH of them a sensor in the water produced, and solid outlined cells on this '
+         + 'map mean MEASURED. Unstamped points are therefore drawn as the track they are and never '
+         + 'as survey, and that goes for every saved dive: the log format holds position and depth '
+         + 'only. EXIT REPLAY for the live map, where cells are painted as the sub sounds them.';
   const n = (typeof crtLiveCells==='function') ? crtLiveCells().length : 0;
-  if(!n) return '';
-  return ' Plus ' + n + ' cell' + (n===1?'':'s') + ' measured by the sub during THIS session, '
-       + 'drawn the same way because they are the same kind of measurement, and counted apart '
-       + 'because no dive log has been written for them yet.';
+  if(n)
+    return ' Plus ' + n + ' cell' + (n===1?'':'s') + ' measured by the sub during THIS session — '
+         + 'each one a HULL DEPTH: the deepest this vehicle got in that cell, which is a floor '
+         + 'UNDER the water there and not the depth of the bed. Drawn the same way as the saved '
+         + 'ones because they are the same measurement by the same sensor, and counted apart '
+         + 'because no dive log has been written for them yet.';
+  // NOTHING, AND WHY NOTHING — said in words as well as by drawing nothing. A row that
+  // simply reported no cells would read as "the sub has not been anywhere yet", which
+  // is a claim about the water; this is a statement about where the numbers come from.
+  if(typeof crtLiveMeasured==='function' && !crtLiveMeasured())
+    return ' No cells are being added from THIS session: the depth on this console is coming from '
+         + 'the simulator rather than from a sensor in the water, and a simulated dive measures '
+         + 'nothing, so nothing is painted for it. When they are drawn, each is a HULL DEPTH — the '
+         + 'deepest this vehicle got in that cell, a floor under the water there and not the depth '
+         + 'of the bed — and solid outlined cells on this map mean MEASURED, which is why there is '
+         + 'no simulated version of them.';
+  return '';
 }
 function crtStateSentence(e){
   const st = CRT.state[e.id] || {status:'off'};
@@ -541,12 +622,169 @@ function crtStateSentence(e){
     case 'unavailable':
       return 'CANNOT TELL — ' + (st.why || 'the Pi could not be asked') + '. Nothing has been '
            + 'ruled in or out; this is the console admitting it does not know.' + live;
+    // THE QUIET ABSENCE, AND IT IS STILL AN ABSENCE. It says the same thing CANNOT
+    // TELL says about the map — an unmarked stretch is not a surveyed empty one — and
+    // differs only in naming what actually happened: this console holds none of this
+    // data and has nobody to get it from, as opposed to somebody who was answering and
+    // stopped. The second is a fault to chase; the first is a console that has not been
+    // given the data yet. The REMEDY is split for the same reason the opening is: on
+    // the demo there is no tether to plug in and no REFRESH that can reach anything,
+    // and an instruction that cannot work is another way of not being believed.
+    case 'not-downloaded':
+      return 'NOT DOWNLOADED — ' + crtNeverHadClause() + '; ' + crtNobodyToAskClause()
+           + (st.why ? (' (' + st.why + ')') : '') + '. Nothing has been ruled in or out, so an '
+           + 'unmarked stretch of this map still means NO DATA and never "nothing there" — it is '
+           + 'said quietly because nothing has failed, not because it matters less. '
+           + crtRemedyClause() + live;
     case 'loading':  return 'asking the Pi for it now';
     case 'no-area':  return 'no map area is active, so there is nothing to ask about yet';
     default:
       return 'NOT ASKED — this layer is switched off, so the console has not requested it. That is '
            + 'not a claim that it is missing; switch it on and it will say which.';
   }
+}
+
+/* ============================================================================
+   WHICH SILENCE IS IT? — the evidence behind CANNOT TELL versus NOT DOWNLOADED.
+
+   The index failing is ONE event with two opposite meanings, and getting them the
+   same way round as the operator's world is the whole of this block. It is decided by
+   a GATE and then two pieces of evidence, none of them a guess, and the gate coming
+   first is the fix described below it:
+
+     0  IS THERE ANYBODY TO ASK AT ALL?  A vehicle has to be CONFIGURED before any
+        silence from it can mean anything. ?sim=1 deliberately resolves no host (see
+        core.js resolveHost) and a page opened off the disk with no stored host has
+        none either. Those consoles did not fail to get an answer — they never
+        addressed a question to anyone, and no evidence below can change that.
+
+     1  HAS THIS AREA'S CHART INDEX EVER ANSWERED?  Recorded per area name the moment
+        an index comes back readable, and PERSISTED on purpose. "The Pi answered for
+        this cut last week and does not today" is precisely the fault that has to stay
+        loud, and closing the console is not a reason to forget it ever worked.
+
+     2  IS THERE A PI ON THIS LINK NOW?  A control socket that has opened, a telemetry
+        frame that has arrived, or a /api/healthz probe the Pi answered — any one of
+        them is a vehicle that exists on this link, so a vehicle that exists and goes
+        quiet is a fault worth alarming about.
+
+   Step 0 AND either of 1 or 2 means the console HAD REASON TO EXPECT AN ANSWER, and a
+   silence after that is CANNOT TELL — loud, and re-asked in the background exactly as
+   before. Anything else is NOT DOWNLOADED, said in the panel rather than shouted on
+   the map.
+
+   WHY STEP 0 EXISTS, AND WHAT IT IS NOT ALLOWED TO COST. The seen-record used to stand
+   on its own, and it is a fact about a PI rather than about this console: "an index for
+   this cut answered here once". Open the ?sim=1 demo on a handheld that has worked this
+   cut before and that record was still in IndexedDB, so the demo — a page that looks
+   for no vehicle whatsoever — raised the map's loudest alarm about a Pi it had never
+   tried to reach. A record of somebody having answered is not an addressee, and an
+   explicitly simulated console does not inherit one.
+
+   It buys that quiet from the DEMO only, never from a real console. Step 0 asks whether
+   a vehicle is CONFIGURED, not whether it is responding: a handheld that boots on the
+   towpath with the Pi switched off has a wsBase, has nothing answering, and — on a cut
+   whose index answered before — is loud, exactly as it must be. Buying the demo's
+   silence with that console's would be a far worse defect than the one it fixes.
+
+   WHAT IS DELIBERATELY NOT EVIDENCE: how the fetch failed. A 404, a four-second
+   timeout and "the request never reached the Pi" all happen to a bench laptop and
+   all three happen to a dead Pi on a real towpath, so the failure mode cannot
+   separate them. The question is never how the ask failed — it is whether there was
+   ever anybody there to ask.
+   ============================================================================ */
+let _crtSeenP = null;
+function crtSeenReady(){
+  if(!_crtSeenP) _crtSeenP = (async ()=>{
+    try{
+      if(typeof STORE!=='undefined' && STORE.get){
+        const s = await STORE.get('crt.seen', null);
+        if(s && typeof s==='object') CRT.seen = s;
+      }
+    }catch(e){}
+    return CRT.seen;
+  })();
+  return _crtSeenP;
+}
+function crtSeenArea(area){ return !!(area && CRT.seen && CRT.seen[area]); }
+function crtMarkSeen(area){
+  if(!area || (CRT.seen && CRT.seen[area])) return;      // once per area, not once per refresh
+  CRT.seen = CRT.seen || {};
+  CRT.seen[area] = Date.now();
+  try{ if(typeof STORE!=='undefined' && STORE.set) STORE.set('crt.seen', CRT.seen); }catch(e){}
+  LOG.map('CRT: the chart index answered for area "'+area+'" — from now on, silence from a Pi this '
+        + 'console is pointed at is a fault here and says CANNOT TELL rather than "not downloaded"');
+}
+/* STEP 0 — IS THERE ANYBODY TO ASK? Not "is it answering": is a vehicle configured on
+   this console at all. Both of these are decided once at boot by core.js resolveHost
+   and cannot change without a reload, which is what makes them safe to reason from. */
+function crtHasSomebodyToAsk(){
+  if(typeof state==='undefined' || !state) return false;
+  if(state.demo) return false;                          // ?sim=1: no vehicle is even looked for
+  if(!state.wsBase) return false;                       // disk mode: no vehicle configured at all
+  return true;
+}
+/* A Pi on this link, now or at any point since this console started. */
+function crtLinkIsReal(){
+  if(!crtHasSomebodyToAsk()) return false;              // nothing addressed, nothing to answer
+  if(state.wsOpenAt) return true;                       // the control socket has been open
+  if(state.realTel) return true;                        // a real telemetry frame has arrived
+  if(state.piProbe && state.piProbe.ok) return true;    // /api/healthz answered
+  return false;
+}
+function crtHadReasonToExpectAnAnswer(){
+  // The gate first, and it is not a special case for the demo: nothing that follows is
+  // evidence about a console that addressed no vehicle. The seen-record in particular
+  // is a fact about a PI ("an index for this cut answered here once"), and it is only
+  // a reason to EXPECT an answer if there is somebody on this link it could come from.
+  if(!crtHasSomebodyToAsk()) return false;
+  return crtLinkIsReal() || crtSeenArea(CRT.area);
+}
+/* The status for "asked, and nothing answered". One line, one decision, one place —
+   every caller that cannot reach the index goes through here so the map badge, the
+   panel row and the background retry can never disagree about which silence it is. */
+function crtNoAnswerStatus(){ return crtHadReasonToExpectAnAnswer() ? 'unavailable' : 'not-downloaded'; }
+
+/* THE TWO CLAUSES NOT DOWNLOADED IS MADE OF, in one place because the panel row, the
+   map badge and the log line all have to say the same true thing and there are now
+   several trues to choose between.
+
+   THE TRAP THIS AVOIDS. NOT DOWNLOADED used to open "no chart data has ever been
+   downloaded for this area on this handheld", which was safe while the status could
+   only be reached by a console that had never seen an index. Since the demo stopped
+   inheriting the seen-record it is also reached by a handheld that HAS worked this cut
+   — and telling that operator nothing was ever downloaded here would be trading one
+   false sentence for another, which is not a fix. So the opening states what this
+   console holds, and the second clause states why nobody can supply it. */
+function crtNeverHadClause(){
+  return crtSeenArea(CRT.area)
+    ? 'this console has read this area\'s chart index from a Pi before, but chart layers are never '
+      + 'kept on the handheld: they are read from the Pi every time, and it holds none of them now'
+    : 'no chart data has ever been downloaded for this area on this handheld';
+}
+function crtNobodyToAskClause(){
+  if(crtHasSomebodyToAsk())
+    return 'there is no Pi answering on this link to download it from';
+  if(typeof state!=='undefined' && state && state.demo)
+    return 'this is the ?sim=1 demo, which looks for no vehicle at all, so there is nothing on this '
+         + 'link to download it from';
+  return 'no vehicle is configured on this console, so there is nothing on this link to download it '
+       + 'from';
+}
+/* AND WHAT WOULD ACTUALLY FIX IT, which is not the same instruction on all three. A
+   demo has no tether to push home and no REFRESH that can reach anything, and telling
+   somebody to plug in a cable that would change nothing is how the rest of the sentence
+   stops being believed. */
+function crtRemedyClause(){
+  if(crtHasSomebodyToAsk())
+    return 'Connect the Pi that holds this area\'s chart data, or press REFRESH once it is on the '
+         + 'tether.';
+  if(typeof state!=='undefined' && state && state.demo)
+    return 'Nothing on this page can load them: REFRESH has no Pi to ask. Open the same console '
+         + 'against the Pi that holds this area\'s charts — the same URL without ?sim=1 — and the '
+         + 'layers appear.';
+  return 'Nothing on this page can load them until it is pointed at a vehicle: open the console '
+       + 'from the Pi that holds this area\'s charts, or set the host, and the layers appear.';
 }
 
 /* ---- fetching (two-phase safe: timeout, no hostnames, no internet) ------- */
@@ -597,6 +835,15 @@ function _featureCount(j){
 /* THE INDEX. Its own answer is what licenses every per-layer claim below it. */
 async function crtFetchIndex(){
   const r = await _crtGet(_crtUrl(CRT_API.index));
+  // THE INDEX'S OWN ACCOUNT OF THE WHOLE AREA, kept rather than thrown away after the
+  // per-layer rows are built. It carries `status`, `why` and — the load-bearing one —
+  // `remedy`, which is the Pi telling this console the exact command that fixes a
+  // missing hazard fetch. The download panel quotes it verbatim instead of hard-coding
+  // a command that would go stale the day the CLI is renamed.
+  CRT.indexRaw = r.ok && r.json && typeof r.json==='object'
+    ? {status:r.json.status||'', why:r.json.why||'', means:r.json.means||'', remedy:r.json.remedy||'',
+       fetched:r.json.fetched||null, failed:r.json.failed||[], unreadable:r.json.unreadable||[]}
+    : null;
   if(!r.ok){
     if(r.status===404 || r.status===501)
       return { ok:false, why:'this Pi has no chart service on it (the layer index answered '+r.status+')' };
@@ -666,7 +913,10 @@ async function crtFetchIndex(){
 async function crtFetchLayer(e, idxMeta){
   if(!CRT.area){ _crtSet(e.id, 'no-area'); return; }
   if(!CRT.indexOk){
-    _crtSet(e.id, 'unavailable', {why: CRT.indexWhy || 'the chart index could not be read'});
+    // Reached when a layer is switched ON while the index is down. Same decision as
+    // crtLoadAll's, through the same function: a row toggled on by hand must not be
+    // the one that alarms on a bench console the rest of the panel is quiet about.
+    _crtSet(e.id, crtNoAnswerStatus(), {why: CRT.indexWhy || 'the chart index could not be read'});
     return;
   }
   if(idxMeta && idxMeta.present===false){
@@ -733,6 +983,12 @@ async function crtLoadAll(why){
   if(CRT._busy) return;
   CRT._busy = true;
   try{
+    // AWAITED BEFORE ANYTHING IS CLASSIFIED. The never-had-it / lost-it decision reads
+    // a PERSISTED record, and a refresh that raced the store would file a Pi which has
+    // been answering for this cut all month as a console that has never seen one — the
+    // hazard alarm switched off by a timing accident, which is a far worse failure
+    // than the bench alarm this whole change exists to stop.
+    await crtSeenReady();
     if(!CRT.area){
       crtAll().forEach(e=>_crtSet(e.id, 'no-area'));
       CRT.indexOk=false; CRT.indexWhy='no map area is active';
@@ -741,10 +997,15 @@ async function crtLoadAll(why){
     LOG.map('CRT: fetching chart layers for area "'+CRT.area+'" ('+(why||'refresh')+')');
     const idx = await crtFetchIndex();
     CRT.indexOk = !!idx.ok; CRT.indexWhy = idx.why || '';
+    if(idx.ok) crtMarkSeen(CRT.area);
     if(!idx.ok){
-      // NOT "absent". Nobody was asked, so nothing may be reported as missing.
-      crtAll().forEach(e=>_crtSet(e.id, 'unavailable', {why:idx.why, data:null}));
-      LOG.warn('CRT: chart layers CANNOT TELL — '+idx.why);
+      // NOT "absent". Nobody answered, so nothing may be reported as missing. WHICH
+      // silence this is decides the volume and nothing else — see crtNoAnswerStatus.
+      const quiet = crtNoAnswerStatus();
+      crtAll().forEach(e=>_crtSet(e.id, quiet, {why:idx.why, data:null}));
+      if(quiet==='unavailable') LOG.warn('CRT: chart layers CANNOT TELL — '+idx.why);
+      else LOG.map('CRT: no chart data is loaded for "'+CRT.area+'" — ' + crtNobodyToAskClause()
+                 + ', so the layer panel says so quietly ('+idx.why+')');
       return;
     }
     for(const e of crtAll()){
@@ -788,7 +1049,7 @@ function crtSetArea(name){
   // OLD area's files. Carrying them over would leave the last canal's layer list on
   // screen over this one's water, which is the same class of error as leaving its
   // hazards drawn.
-  CRT.extra = []; CRT.bind = {}; CRT.claimed = {}; CRT.credits = [];
+  CRT.extra = []; CRT.bind = {}; CRT.claimed = {}; CRT.credits = []; CRT.indexRaw = null;
   crtRenderCredits();
   crtAll().forEach(e=>_crtSet(e.id, n ? 'off' : 'no-area', {data:null, n:0}));
   crtBuildPanel(); crtRenderBadge();
@@ -884,6 +1145,7 @@ function crtRenderRows(){
     row.classList.toggle('on', on);
     row.classList.toggle('absent', st.status==='absent');
     row.classList.toggle('unavailable', st.status==='unavailable');
+    row.classList.toggle('not-downloaded', st.status==='not-downloaded');
     row.classList.toggle('empty', st.status==='empty');
     row.classList.toggle('shown', on && st.status==='present');
     const pill = $('crt-state-'+e.id);
@@ -892,8 +1154,15 @@ function crtRenderRows(){
       // The saved survey and this session's own soundings are two counts, never one:
       // "+6" is the water this sub has been through since the last dive log was
       // written, and the row's sentence says so in full.
+      //
+      // MATCH, NOT REPLACE. `live.replace(/^ Plus (\d+) cell.*$/, ' +$1')` hands back
+      // the WHOLE STRING when it does not match, so the moment the live clause said
+      // anything other than a count — it now explains a simulated dive measuring
+      // nothing — a paragraph landed inside a 9 px pill. A count is extracted or it
+      // is not there.
       const live = on ? crtLiveClause(e) : '';
-      const n2 = live ? live.replace(/^ Plus (\d+) cell.*$/, ' +$1') : '';
+      const cnt  = live && live.match(/^ Plus (\d+) cell/);
+      const n2   = cnt ? (' +' + cnt[1]) : '';
       pill.textContent = ((st.status==='present' && on) ? (word+' · '+st.n) : word) + n2;
       pill.className = 'crt-state s-'+st.status + (n2 ? ' live' : '');
     }
@@ -917,12 +1186,27 @@ function crtRenderRows(){
    readable as a stretch of water with nothing in it, and a panel the operator has
    to open first cannot deliver that. Tier 1 gets its own, louder wording: if the
    hazard layers are not on this Pi then the map is not showing hazards at all, and
-   that has to be the first thing anybody notices about it. */
+   that has to be the first thing anybody notices about it.
+
+   THREE VOLUMES, AND THE VOLUME IS THE CLAIM. The hazard alarm is for data that
+   SHOULD be here and is not. The plain badge is for the operational and extra layers.
+   The quiet one is for a console with no chart data loaded for this area and nobody on
+   the link to get it from — still said, because an unmarked stretch must never read as a
+   surveyed empty one, and still said on the map rather than only in a panel nobody
+   opened; just not dressed as a fault, because nothing has failed. A bench console
+   and the ?sim=1 demo used to raise the LOUDEST badge on this map on every launch,
+   which is how an operator learns to look past the badge that means something. */
 function crtRenderBadge(){
+  // The download badge is a SEPARATE element and is refreshed here because this is the
+  // function every layout transition already calls — both badges word themselves
+  // differently depending on how much room the current view has.
+  crtRenderFetchBadge();
   const el = $('crt-absent'); if(!el) return;
   if(!CRT.area){ el.classList.remove('on'); CRT._badge=''; return; }
-  const t1 = crtTierList(1).filter(e=>{ const s=CRT.state[e.id]||{}; return s.status==='absent'||s.status==='unavailable'; });
-  const rest = crtAll().filter(e=>e.tier!==1).filter(e=>{ const s=CRT.state[e.id]||{}; return s.status==='absent'||s.status==='unavailable'; });
+  const lost = (id)=>{ const s=CRT.state[id]||{}; return s.status==='absent'||s.status==='unavailable'; };
+  const t1 = crtTierList(1).filter(e=>lost(e.id));
+  const rest = crtAll().filter(e=>e.tier!==1).filter(e=>lost(e.id));
+  const never = crtAll().filter(e=>(CRT.state[e.id]||{}).status==='not-downloaded');
   const roomy = MAP.expanded || MAP.blind;
   let text='', cls='', help='';
   if(t1.length){
@@ -947,6 +1231,21 @@ function crtRenderBadge(){
     help = 'These chart layers are not being drawn because the Pi does not have them or could not be '
          + 'asked: ' + rest.map(e=>e.name).join(', ') + '. The hazard layers ARE loaded — this is '
          + 'about the operational and extra layers. Open the LAYERS panel to see which is which.';
+  } else if(never.length){
+    text = roomy ? 'NO&nbsp;CHART&nbsp;DATA&nbsp;DOWNLOADED' : 'NO&nbsp;CHART&nbsp;DATA';
+    cls  = 'quiet';
+    // Same two clauses as the panel row, from the same two functions, because a badge
+    // and a row disagreeing about why the map is empty is a third thing to work out on
+    // a towpath. The badge's own sentence carries on from where they leave off.
+    help = 'NO CHART DATA IS LOADED FOR THIS AREA: ' + crtNeverHadClause() + '; '
+         + crtNobodyToAskClause() + ' — so nothing on this map is telling you where the '
+         + 'locks, weirs, sluices, culverts, tunnels, portals or outfalls are. An unmarked stretch '
+         + 'therefore means NO DATA and not "nothing there": do not read the absence of a mark as '
+         + 'clear water. It is drawn quietly rather than as an alarm because nothing has gone '
+         + 'wrong — this console simply has not been given the data and has nobody on this link to '
+         + 'ask for it, which is a different fact from a Pi that was answering and stopped, and '
+         + 'THAT one alarms. ' + crtRemedyClause()
+         + ' Open the LAYERS panel for the row-by-row answer.';
   }
   const key = text+'|'+cls;
   if(key !== CRT._badge){
@@ -957,32 +1256,264 @@ function crtRenderBadge(){
   }
 }
 
+/* ============================================================================
+   THE DOWNLOAD, SHOWN WHERE THE LAYER STATES ALREADY LIVE.
+
+   DOWNLOADING IS ITS OWN STATE. The panel below already draws the difference between
+   a layer that is absent, one that is present, and one nobody could be asked about —
+   and a fetch in flight is none of those three. Left unsaid it reads as the second
+   ("the map is filling in, so it must be fine") right up until it stops half way,
+   and a map that looks complete and is not is the single failure this whole surface
+   was built against.
+
+   IT SITS ABOVE THE LAYER LIST, IN THE SAME PANEL, on purpose: an operator asking
+   "why is there nothing on my map" opens one thing, and the answer — not downloaded,
+   downloading now, downloaded, or downloaded except for the part that failed — is at
+   the top of it before the row-by-row detail starts.
+
+   NOTHING HERE DRIVES THE PI. The first row is this handheld's own download and this
+   console runs it. The other two are read and reported, because the Pi fills its own
+   card and the Trust layers are fetched by a command on it — see navui.js. A row that
+   showed a spinner for work this console cannot start would be the worst kind of
+   dishonest: it would look like it was happening.
+   ============================================================================ */
+function crtFetchRowText(j){
+  const w = (typeof BOOT_WORDS!=='undefined' && BOOT_WORDS[j.state]) || j.state.toUpperCase();
+  if(j.state==='running' && j.total)
+    return w + ' ' + (typeof bootPct==='function' ? bootPct(j) : 0) + '%';
+  if((j.state==='done' || j.state==='held') && j.total)
+    return w + ' · ' + j.total.toLocaleString();
+  return w;
+}
+function crtBuildFetch(){
+  const box = $('crt-fetch-rows'); if(!box || typeof BOOTFETCH==='undefined') return false;
+  if(CRT._fetchBuilt) return true;
+  box.innerHTML = '';
+  BOOTFETCH.order.forEach(id=>{
+    const j = BOOTFETCH.jobs[id]; if(!j) return;
+    const row = document.createElement('div');
+    row.className = 'crt-fetch-row';
+    row.id = 'crt-fetch-row-'+id;
+    row.dataset.source = id;
+    row.innerHTML =
+      '<div class="crt-fetch-line">'+
+        '<span class="crt-fetch-src" id="crt-fetch-name-'+id+'">'+j.name+'</span>'+
+        '<span class="crt-fetch-dest">→ '+j.where+'</span>'+
+        '<span class="crt-fetch-pill" id="crt-fetch-pill-'+id+'"></span>'+
+      '</div>'+
+      '<div class="crt-fetch-bar" id="crt-fetch-bar-'+id+'"><i class="crt-fetch-fill"></i></div>';
+    box.appendChild(row);
+  });
+  CRT._fetchBuilt = true;
+  return true;
+}
+function crtRenderFetch(){
+  if(typeof BOOTFETCH==='undefined') return;
+  if(!crtBuildFetch()) return;
+  const top = BOOTFETCH.state;
+  const word = (typeof BOOT_TOP_WORDS!=='undefined' && BOOT_TOP_WORDS[top]) || top.toUpperCase();
+  const wrap = $('crt-fetch');
+  if(wrap) wrap.className = 'crt-fetch f-'+top;
+  const pill = $('crt-fetch-state');
+  if(pill){ pill.textContent = word; pill.className = 'crt-fetch-pill f-'+top; }
+  const why = $('crt-fetch-why');
+  if(why){
+    why.textContent = BOOTFETCH.why || '';
+    // The sentence is ON the element as well as in it: the panel is 330 px wide and a
+    // failure reason runs to two or three lines, so the readable copy has to survive
+    // the box being small. Same rule every glyph and number in this console follows.
+    why.title = BOOTFETCH.why || ''; why.setAttribute('aria-label', BOOTFETCH.why || '');
+  }
+  BOOTFETCH.order.forEach(id=>{
+    const j = BOOTFETCH.jobs[id]; if(!j) return;
+    const row = $('crt-fetch-row-'+id);
+    if(row){
+      row.className = 'crt-fetch-row f-'+j.state;
+      const s = j.name+' → '+j.where+'. '+(j.drives
+        ? 'This handheld downloads this one itself. '
+        : 'This row REPORTS what the Pi holds; it is not driven from this console. ')
+        + (j.why||'');
+      row.dataset.help = s; row.title = s; row.setAttribute('aria-label', s);
+    }
+    const p = $('crt-fetch-pill-'+id);
+    if(p){ p.textContent = crtFetchRowText(j); p.className = 'crt-fetch-pill f-'+j.state; }
+    const bar = $('crt-fetch-bar-'+id);
+    if(bar){
+      const fill = bar.querySelector('.crt-fetch-fill');
+      const pc = (j.state==='running') ? (typeof bootPct==='function' ? bootPct(j) : 0)
+               : (j.state==='done' || j.state==='held') ? 100
+               : (j.state==='stopped' || j.state==='failed') ? (typeof bootPct==='function' ? bootPct(j) : 0)
+               : 0;
+      if(fill) fill.style.width = pc + '%';
+      bar.classList.toggle('on', pc>0);
+    }
+  });
+  const go = $('crt-fetch-go');
+  if(go){
+    const plan = BOOTFETCH.plan;
+    // THE SIZE GOES ON THE BUTTON. "Download" with no number is how somebody on a
+    // metered hotspot finds out what it cost afterwards.
+    // NOTHING MISSING IS NOT "~0.0 MB". A number that rounds to nothing reads as a
+    // download too small to bother reporting, when the fact is that there is nothing
+    // left to fetch at all — which is the answer an operator re-tapping a launch point
+    // they have already downloaded actually wants. The button stays live: pressing it
+    // walks the box and confirms, at the cost of no requests whatsoever.
+    const nothing = !!(plan && plan.tiles > 0 && (plan.held||0) >= plan.tiles);
+    go.textContent = BOOTFETCH.running ? 'DOWNLOADING…'
+                   : nothing ? 'NOTHING TO DOWNLOAD'
+                   : (plan ? ('DOWNLOAD ~'+(typeof bootMB==='function'?bootMB(plan.mb):Math.round(plan.mb))+' MB')
+                           : 'DOWNLOAD NOW');
+    go.disabled = !!BOOTFETCH.running;
+    // THE WHOLE SIZE AND THE REMAINING SIZE ARE DIFFERENT NUMBERS, and a resume must
+    // quote the second: "about 19 MB" over a box that is 90% downloaded sends somebody
+    // on a metered hotspot hunting for a way to avoid bytes that were never going to be
+    // spent. plan.held is what is already on this handheld, counted before the run.
+    const mbOf = (n)=>(typeof bootMB==='function' ? bootMB(n) : String(Math.round(n)));
+    const s = BOOTFETCH.running
+      ? 'A download is already running — press STOP to end it.'
+      : ('DOWNLOAD EVERYTHING THIS CONSOLE CAN, for the current launch point, now'
+         + (plan
+            ? (nothing
+               ? (': there is nothing to fetch. All '+plan.tiles.toLocaleString()+' imagery tiles of the '
+                  +'saved area "'+plan.resuming+'" are already on this handheld, so pressing this walks '
+                  +'the box, finds every tile present and requests none of them.')
+               : plan.resuming
+               ? (': the saved area "'+plan.resuming+'" already holds '+(plan.held||0).toLocaleString()
+                  +' of its '+plan.tiles.toLocaleString()+' imagery tiles, so this fetches the '
+                  +Math.max(0, plan.tiles-(plan.held||0)).toLocaleString()+' that are missing — about '
+                  +mbOf(plan.mb)+' MB.')
+               : (': a '+Math.round(plan.radiusM*2)+' m square, '+plan.tiles.toLocaleString()
+                  +' imagery tiles, about '+mbOf(plan.mb)+' MB.'))
+            : '.')
+         + ' It runs in the background and the console stays flyable throughout. Tiles already saved '
+         + 'are never fetched again, so pressing this after a failure only re-requests what is missing.');
+    go.dataset.help = s; go.title = s; go.setAttribute('aria-label', s);
+  }
+  const stop = $('crt-fetch-stop');
+  if(stop){
+    stop.disabled = !BOOTFETCH.running;
+    const s = 'STOP the download now. Everything already saved is kept and nothing is undone — the '
+            + 'next run resumes from exactly where this one stopped and re-requests no tile it '
+            + 'already has. This stops THIS handheld\'s download; a fetch running on the Pi is the '
+            + 'Pi\'s own and is not affected.';
+    stop.dataset.help = s; stop.title = s; stop.setAttribute('aria-label', s);
+  }
+  const auto = $('crt-fetch-auto');
+  if(auto){
+    auto.textContent = BOOTFETCH.auto ? 'AUTO ON' : 'AUTO OFF';
+    auto.classList.toggle('on', !!BOOTFETCH.auto);
+    auto.setAttribute('aria-checked', BOOTFETCH.auto ? 'true' : 'false');
+    const s = (BOOTFETCH.auto
+      ? 'AUTOMATIC DOWNLOADING IS ON: setting a launch point starts the download by itself, but only '
+      + 'when the launcher reports this handheld actually has internet. Tap to switch it off — '
+      + 'which is what somebody on a metered phone hotspot wants, and the choice is remembered on '
+      + 'this handheld.'
+      : 'AUTOMATIC DOWNLOADING IS OFF: nothing is fetched unless you press DOWNLOAD. Tap to switch it '
+      + 'back on, and a launch point will fetch its own map again whenever there is internet.');
+    auto.dataset.help = s; auto.title = s; auto.setAttribute('aria-label', s);
+  }
+  crtRenderFetchBadge();
+}
+/* ON THE MAP, NOT ONLY IN A PANEL NOBODY OPENED — the same reasoning as the absence
+   badge beside it, and deliberately a SEPARATE element from it. A download in flight
+   must never be able to replace or soften "HAZARD LAYERS ABSENT": the two facts are
+   independent, they can be true at the same time, and the one that says the map is
+   not showing hazards is the one that must never be crowded out.
+
+   THIS BADGE IS ABOUT THE PICTURE UNDER THE SUB AND NOTHING ELSE, which is why the
+   incomplete case reads the IMAGERY JOB and not the panel's top line. Those two came
+   apart in the obvious way: the top line goes PARTLY DOWNLOADED when the Trust chart
+   layers are outstanding, or FAILED when the PI's own second copy failed, and neither
+   of those is a hole in the imagery this map draws from. Keyed on the top line, the
+   badge lit red over a complete map and said "blank squares are imagery that never
+   arrived, not open water" — a false statement about the water, made by the one
+   element on this console whose entire job is to stop that sentence being needed. The
+   chart side has its own badge two lines up and says it in its own words. */
+function crtRenderFetchBadge(){
+  const el = $('crt-fetch-badge'); if(!el || typeof BOOTFETCH==='undefined') return;
+  const j = BOOTFETCH.jobs.imagery;
+  let text='', cls='', help='';
+  if(BOOTFETCH.state==='running'){
+    const pc = (typeof bootPct==='function') ? bootPct(j) : 0;
+    text = (MAP.expanded || MAP.blind) ? ('DOWNLOADING&nbsp;THE&nbsp;MAP&nbsp;·&nbsp;'+pc+'%')
+                                       : ('MAP&nbsp;'+pc+'%');
+    cls  = 'busy';
+    help = 'DOWNLOADING THE OFFLINE MAP FOR THIS LAUNCH POINT — '+pc+'% of '
+         + (j.total||0).toLocaleString()+' imagery tiles. It is running in the background and the '
+         + 'console is fully flyable while it does. What has landed is drawn; what has not is not '
+         + 'there yet, so a blank square right now means "not downloaded yet" and not open water. '
+         + 'Open the LAYERS panel to see every source, or to stop it.';
+  } else if(BOOTFETCH.state==='holding'){
+    text = (MAP.expanded || MAP.blind) ? 'MAP&nbsp;DOWNLOAD&nbsp;NEEDS&nbsp;CONFIRMING' : 'MAP&nbsp;·&nbsp;CONFIRM';
+    cls  = 'ask';
+    help = BOOTFETCH.why + ' Open the LAYERS panel and press the download button, which carries the size.';
+  } else if(j.state==='failed' || j.state==='stopped'){
+    // STOPPED IS HERE TOO, and it was the quieter half of the same hole: an operator
+    // who presses STOP half way is left with a map that has holes in it, and a badge
+    // that said nothing at all about that is the silent half-finish this surface
+    // exists to make impossible. It is the operator's own doing, so it is worded as a
+    // fact about the map rather than as a fault.
+    const part = (j.state==='stopped');
+    text = (MAP.expanded || MAP.blind)
+      ? (part ? 'MAP&nbsp;DOWNLOAD&nbsp;STOPPED' : 'MAP&nbsp;DOWNLOAD&nbsp;INCOMPLETE')
+      : (part ? 'MAP&nbsp;STOPPED' : 'MAP&nbsp;INCOMPLETE');
+    // Amber for the operator's own STOP, red for a download that broke. Both say the
+    // map has holes; only one of them is something going wrong, and spending the fault
+    // colour on a deliberate act is how the fault colour stops meaning anything.
+    cls  = part ? 'part' : 'bad';
+    help = (part ? 'THE OFFLINE DOWNLOAD WAS STOPPED BEFORE IT FINISHED. '
+                 : 'THE OFFLINE DOWNLOAD DID NOT FINISH. ') + (j.why || BOOTFETCH.why)
+         + ' Blank squares on this map are imagery that never arrived, not open water. Open the '
+         + 'LAYERS panel for the source-by-source account'
+         + (part ? ', or press DOWNLOAD NOW to pick up from exactly where it stopped.' : '.');
+  }
+  const key = text+'|'+cls;
+  if(key === CRT._fetchBadge) return;
+  CRT._fetchBadge = key;
+  el.innerHTML = text;
+  el.className = 'crt-fetch-badge' + (cls?(' '+cls):'') + (text?' on':'');
+  if(help){ el.dataset.help = help; el.title = help; el.setAttribute('aria-label', help); }
+}
+
 function crtTogglePanel(force){
   const p = $('crt-panel'); if(!p) return;
   CRT.open = (force===undefined) ? !CRT.open : !!force;
   p.classList.toggle('on', CRT.open);
   const b = $('map-crt-toggle');
   if(b){ b.classList.toggle('on', CRT.open); liveTitle(b, CRT.open ? 'panel open' : 'panel closed'); }
-  if(CRT.open){ crtRenderRows(); crtRenderBadge(); }
+  if(CRT.open){ crtRenderRows(); crtRenderBadge(); crtRenderFetch(); }
 }
 
 function crtInit(){
   crtBuildPanel();
+  crtRenderFetch();
   const b = $('map-crt-toggle');
   if(b) b.addEventListener('click', (e)=>{ e.stopPropagation(); crtTogglePanel(); });
   const x = $('crt-close');
   if(x) x.addEventListener('click', (e)=>{ e.stopPropagation(); crtTogglePanel(false); });
   const r = $('crt-refresh');
   if(r) r.addEventListener('click', (e)=>{ e.stopPropagation(); crtLoadAll('operator asked'); });
-  crtLoadPrefs().then(()=>{ CRT.ready=true; crtRenderRows(); crtLoadAll('boot'); });
+  // Both reads are started here rather than inside crtLoadAll's hot path; crtLoadAll
+  // awaits the seen record itself, so an area that arrives before this settles is
+  // still classified against the real history and not against an empty object.
+  Promise.all([crtLoadPrefs(), crtSeenReady()])
+    .then(()=>{ CRT.ready=true; crtRenderRows(); crtLoadAll('boot'); });
   // A CANNOT TELL is a question, not a verdict: the Pi comes back, the tether is
   // replugged, and the layers should appear without the operator having to know
   // there is a refresh button. Bounded and slow — this is a background retry, not
   // a poll, and it never runs while a fetch is already in flight.
+  //
+  // NOT DOWNLOADED is not a question, so it is not re-asked on the clock: a bench
+  // console re-issuing the whole index-and-layers walk every 30 s against a link that
+  // does not exist is a poll with nothing at the other end of it. It IS re-asked the
+  // moment a Pi appears, because that is the event which changes the answer — and
+  // that arrival is exactly what crtLinkIsReal() has started returning true for.
   setInterval(()=>{
     if(CRT._busy || !CRT.area) return;
-    const stale = crtAll().some(e=>{ const s=CRT.state[e.id]; return s && s.status==='unavailable'; });
-    if(stale) crtLoadAll('retrying the layers that could not be asked for');
+    const held = (s)=>crtAll().some(e=>{ const st=CRT.state[e.id]; return st && st.status===s; });
+    if(held('unavailable')) crtLoadAll('retrying the layers that could not be asked for');
+    else if(held('not-downloaded') && crtLinkIsReal())
+      crtLoadAll('a Pi has appeared on this link — asking it for the charts this console never had');
   }, CRT_API.retryMs);
   LOG.state('CRT chart layers initialised ('+CRT_LAYERS.length+' known layers, hazards always on)');
 }
@@ -1270,18 +1801,81 @@ function _crtCellPath(ctx, f, dpr, ppm, layerCellM){
    which is a floor under the water depth and not the depth of the bed. The row in
    the panel counts these separately from the saved ones so the two can never be
    confused for each other. */
+const CRT_LIVE_CELL_M = 3;               // the live bin, metres — and the drawn cell's side
+
+/* IS THE DEPTH ON THIS CONSOLE A MEASUREMENT, OR THE MODEL?
+
+   THE DEFECT THIS CLOSES: crtLiveCells binned MAP.track wherever depth > 0.05 with no
+   check on where the depth came from, and painted the result with the SURVEYED
+   treatment — solid fill, white outline, the drawing that on this console means "the
+   sub touched this". Drive the bench simulator and it painted measured-style survey
+   cells over water nothing has ever been in. That is the exact class of claim the rest
+   of the file refuses to make.
+
+   NOT A NEW RULE, and deliberately not one. vehicleLinked() is the console's own
+   one-second "a real hull is on the other end and nothing here may be synthesised over
+   it" test — the same test map.js's mapTick uses to decide whether the client
+   integrator is allowed to advance the sub at all, so this agrees with the thing that
+   produced the track by construction. vehicleHasSensors() is the second half: a Pi
+   running its own bench mock sends telemetry with `mock:true`, which main.js already
+   treats as simulated and flags with the SIM badge. A mocked hull is a simulator with
+   a longer wire, and a floor under the water is not something either of them measured. */
+function crtLiveMeasured(){
+  return (typeof vehicleLinked==='function' && vehicleLinked())
+      && (typeof vehicleHasSensors==='function' && vehicleHasSensors());
+}
+
+/* THE FOUR CORNERS OF A LIVE CELL, as a polygon in lat/lon.
+
+   NOT TWO. Each cell used to be an AXIS-ALIGNED screen rect built over the min/max of
+   two DIAGONALLY OPPOSITE projected corners — the SW and the NE and nothing else. The
+   axis-aligned extent of a diagonal is not the extent of the square it belongs to: at
+   heading θ the rect comes out 3·ppm·|cosθ+sinθ| by 3·ppm·|sinθ−cosθ|, whose area is
+   9·ppm²·|cos 2θ|. That is the full 9 m² at 0° and 90°, half of it at 30° and 60°, and
+   EXACTLY ZERO at 45°. Under the radar's heading-up rotation the whole survey overlay
+   therefore thinned to slivers and swelled again as the sub turned, and panning did it
+   too because a pan re-projects every corner.
+
+   Four corners, filled as a quad, makes the painted area a property of the CELL and
+   not of the compass. The projection is _crtCellPath's — the same one every other
+   depth cell on this map already goes through — because a second copy of the
+   lat/lon-to-screen walk living here is a second one to get wrong. */
+function _crtLiveCellPoly(cell){
+  const h = CRT_LIVE_CELL_M/2, o = MAP.origin;
+  const ring = [[-h,-h], [h,-h], [h,h], [-h,h], [-h,-h]].map(d=>{
+    const g = toLatLon(cell.x+d[0], cell.y+d[1], o.lat, o.lon);
+    return [g.lon, g.lat];                       // GeoJSON order, as _crtCellPath reads it
+  });
+  return { type:'Feature', properties:{}, geometry:{type:'Polygon', coordinates:[ring]} };
+}
+
 function crtLiveCells(){
   if(!MAP.hasOrigin || !MAP.origin || !MAP.track.length) return [];
-  if(CRT.live.cells && (performance.now()-CRT.live.at) < 1000 && CRT.live.n===MAP.track.length) return CRT.live.cells;
-  const c = 3, bins = new Map();
+  // THE CACHE HOLDS METRES AND A LAT/LON RING, so it belongs to ONE datum. rebaseFrame
+  // moves the origin and every track point together, which leaves both halves of a
+  // cached cell describing water it is no longer about — the corners most of all,
+  // because they were baked against the old origin. The origin is part of the key.
+  const okey = MAP.origin.lat + ',' + MAP.origin.lon;
+  if(CRT.live.cells && (performance.now()-CRT.live.at) < 1000
+     && CRT.live.n===MAP.track.length && CRT.live.origin===okey) return CRT.live.cells;
+  const c = CRT_LIVE_CELL_M, bins = new Map();
   for(const p of MAP.track){
+    // THE GATE. Provenance is recorded ON THE POINT by pushTrack, at the moment the
+    // depth arrived, rather than decided here from whatever the link happens to be
+    // doing now — and that is the difference between a rule and a rule that works. A
+    // track routinely mixes both: a real dive that loses the tether has simulated
+    // points appended to it, and asking "is a hull linked?" at draw time would have
+    // adopted those the moment it came back. It also means genuinely measured cells
+    // STAY on the map after the link drops, which is right: the sub really did go
+    // there, and that fact does not expire with the socket.
+    if(p.measured !== true) continue;
     if(!(typeof p.depth==='number') || p.depth<=0.05) continue;   // at the surface it says nothing about the water
     const k = Math.floor(p.x/c)+'|'+Math.floor(p.y/c);
     const prev = bins.get(k);
     if(!prev || p.depth>prev.depth) bins.set(k, {x:(Math.floor(p.x/c)+0.5)*c, y:(Math.floor(p.y/c)+0.5)*c, depth:p.depth});
   }
   const out=[]; bins.forEach(v=>out.push(v));
-  CRT.live = {cells:out, at:performance.now(), n:MAP.track.length};
+  CRT.live = {cells:out, at:performance.now(), n:MAP.track.length, origin:okey};
   return out;
 }
 function crtDrawDepth(ctx, dpr){
@@ -1357,16 +1951,18 @@ function crtDrawDepth(ctx, dpr){
         ctx.globalAlpha=0.9; ctx.strokeStyle=CRT_C.surveyEdge; ctx.lineWidth=1.2*dpr; ctx.stroke();
       });
     }
+    // THIS SESSION'S OWN CELLS, in the SAME treatment as the Pi's saved survey above —
+    // same alpha, same white edge, same width — because they are the same measurement
+    // by the same sensor and a second-looking treatment would invite the reading that
+    // they are worth less. crtLiveCells returns nothing at all unless the depth behind
+    // them was measured, so in sim this loop is empty and the panel row says why.
     const live = crtLiveCells();
     if(live.length && MAP.origin){
-      const half = 1.5;                                  // the 3 m bin, halved
       for(const cell of live){
-        const a=toLatLon(cell.x-half, cell.y-half, MAP.origin.lat, MAP.origin.lon);
-        const b=toLatLon(cell.x+half, cell.y+half, MAP.origin.lat, MAP.origin.lon);
-        const s0=lonLatToScreen(a.lat, a.lon), s1=lonLatToScreen(b.lat, b.lon);
-        if(!s0 || !s1) continue;
-        ctx.beginPath(); ctx.rect(Math.min(s0[0],s1[0]), Math.min(s0[1],s1[1]),
-                                  Math.abs(s1[0]-s0[0]), Math.abs(s1[1]-s0[1]));
+        // Cached per cell: the ring is four toLatLon calls and the cells are rebinned
+        // (and the cache dropped) whenever the track grows or the datum moves.
+        const f = cell.poly || (cell.poly = _crtLiveCellPoly(cell));
+        if(!_crtCellPath(ctx, f, dpr, ppm, CRT_LIVE_CELL_M)) continue;
         ctx.globalAlpha=0.62; ctx.fillStyle=_crtDepthColor(cell.depth); ctx.fill();
         ctx.globalAlpha=0.9; ctx.strokeStyle=CRT_C.surveyEdge; ctx.lineWidth=1.2*dpr; ctx.stroke();
       }

@@ -192,7 +192,13 @@ function initMap(){
   MAP.canvas.addEventListener('pointerup', endDrag);
   MAP.canvas.addEventListener('pointercancel', ()=>{ MAP.drag=null; });
   // full empty-state action (expanded) → area manager (§5) or origin flow (§4)
-  const eb=$('map-empty-btn'); if(eb) eb.addEventListener('click', (e)=>{ e.stopPropagation(); if(!MAP.hasArea) openAreaManager(); else openOriginModal(); });
+  const eb=$('map-empty-btn'); if(eb) eb.addEventListener('click', (e)=>{ e.stopPropagation();
+    // While a download is running the honest destination is the download, not the
+    // area manager: the operator was just told the map is filling itself in, and a
+    // button under that sentence which opens a "download an area" dialog reads as a
+    // contradiction of it.
+    if(typeof BOOTFETCH!=='undefined' && BOOTFETCH.state==='running' && typeof crtTogglePanel==='function'){ crtTogglePanel(true); return; }
+    if(!MAP.hasArea) openAreaManager(); else openOriginModal(); });
 
   tryInitMapLibre();                 // real basemap when vendored + area active (§3)
   // CHART LAYERS (crt.js): the CRT hazard/operations/extras overlays and the depth
@@ -344,7 +350,12 @@ function setRovLatLon(lat, lon){
   // stays on the map without a line implying the sub swam there.
   breakTrack('ROV placed by hand');
   MAP.x=p.x; MAP.y=p.y;
-  pushTrack(MAP.x, MAP.y, MAP.depth);
+  // NOT a sounding, whatever the depth readout says. The depth may well be a real
+  // measurement, but the POSITION is a fingertip on a photograph — binning the pair
+  // into a surveyed cell would claim the sub had been to the bottom somewhere it has
+  // never been. Explicitly false rather than left to the default, because the default
+  // is about the link and this is about the placement.
+  pushTrack(MAP.x, MAP.y, MAP.depth, false);
   LOG.map('ROV placed by hand at '+p.x.toFixed(1)+','+p.y.toFixed(1)+' m from the datum'+
           ' — tether now '+tetherRangeM().toFixed(1)+' m');
   return true;
@@ -445,9 +456,10 @@ function afterResize(){   // two rAFs so the panel is at its final size before w
 async function refreshBootstrap(){
   // CLIENT-FIRST (architectural rule): areas + origin come from local storage and work
   // with the Pi off. The Pi is never consulted here — its data is the mirror, not the source.
+  let areas = null;
   try{
     if(typeof STORE!=='undefined'){
-      const areas = await STORE.areas();
+      areas = await STORE.areas();
       if(!MAP.activeArea && areas.length){                     // default-activate the most recent save
         const newest = areas.slice().sort((a,b)=>(b.savedAt||0)-(a.savedAt||0))[0];
         MAP.activeArea = newest.name; MAP.viewLat=(newest.bbox[1]+newest.bbox[3])/2; MAP.viewLon=(newest.bbox[0]+newest.bbox[2])/2;
@@ -469,6 +481,15 @@ async function refreshBootstrap(){
   }catch(e){}
   renderOriginTile();
   updateEmptyState();
+  // THE SECOND TRIGGER FOR THE BOOTSTRAP FETCH (navui.js). setOrigin fires the first
+  // one the instant a launch point is tapped; this one exists because the OTHER half
+  // of the condition arrives on its own schedule — the operator sets the origin in a
+  // car park with no signal, joins a hotspot ten minutes later, and nothing would ever
+  // notice. Deliberately not awaited: this function is the map's own bootstrap and must
+  // not be held up by a download. It is also free to call at this rate — everything it
+  // reads before deciding is already in memory or in IndexedDB, so a console at the
+  // canal reaches "no connection" without spending a single request.
+  try{ if(typeof bootConsider==='function') bootConsider(areas, MAP.origin, 'a periodic check found a connection'); }catch(e){}
 }
 async function loadCentreline(name){
   MAP.centreline=null; if(!name) return;
@@ -525,7 +546,17 @@ function updateEmptyState(){
   const suppress = MAP.expanded && (MAP.originTap || MAP.rovTap || MAP.mockMeTap || MAP.selectMode);
   if(full){
     full.classList.toggle('on', empty && !suppress);
-    if(!MAP.hasArea){ if(msg)msg.textContent='NO MAP AREA LOADED'; if(btn)btn.textContent='LOAD OR DOWNLOAD'; }
+    // A DOWNLOAD IN FLIGHT IS NOT THE SAME EMPTY. "NO MAP AREA LOADED / LOAD OR
+    // DOWNLOAD" over a map that is at that moment downloading itself tells the
+    // operator to go and start the thing that is already running, and the button
+    // opens a manager that says nothing about it. Say which of the two it is.
+    const busy = (typeof BOOTFETCH!=='undefined') && BOOTFETCH.state==='running';
+    if(!MAP.hasArea && busy){
+      const pc = (typeof bootPct==='function') ? bootPct(BOOTFETCH.jobs.imagery) : 0;
+      if(msg)msg.textContent='DOWNLOADING THIS LAUNCH POINT — '+pc+'%';
+      if(btn)btn.textContent='SEE THE DOWNLOAD';
+    }
+    else if(!MAP.hasArea){ if(msg)msg.textContent='NO MAP AREA LOADED'; if(btn)btn.textContent='LOAD OR DOWNLOAD'; }
     else if(!MAP.hasOrigin){ if(msg)msg.textContent='ORIGIN NOT SET'; if(btn)btn.textContent='SET ORIGIN'; }
   }
   // NO NAV — a vehicle IS on the link but no navigation is coming back from it: no
@@ -650,6 +681,15 @@ function connectNavWs(){
   MAP.navWs=ws;
   ws.onopen=()=>{ _navBackoff=0; };
   ws.onmessage=(ev)=>{ let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
+    // THE PI'S OWN DOWNLOAD, AS IT HAPPENS. api/nav/service.py broadcasts area_progress
+    // on this same socket while it fills its card, and the panel's Pi row would
+    // otherwise only learn about it on its 20 s re-read — long enough for a fetch that
+    // starts and fails to be invisible from end to end. Handled here rather than by
+    // opening a second /ws/nav: one socket per Pi, and this one is already up.
+    if(m.type==='area_progress'){
+      if(typeof bootPiProgress==='function'){ try{ bootPiProgress(m); }catch(e){} }
+      return;
+    }
     if(m.type==='nav'){ MAP.x=m.x_m; MAP.y=m.y_m; setMapHeading(m.heading_deg); MAP.depth=m.depth_m;
       // THE ESTIMATOR'S ACCOUNT OF ITSELF TRAVELS WITH THE POSITION.
       //
@@ -713,7 +753,13 @@ function connectNavWs(){
       if(typeof m.confidence==='number') MAP.confidence=m.confidence;
       if(typeof m.range_m==='number') MAP.rangeM=m.range_m;
       if(typeof m.payout_m==='number') MAP.payoutM=m.payout_m;   // §5.5 an UPPER bound on range, never a position
-      MAP.lastNavAt=performance.now(); state.navOkAt=Date.now(); pushTrack(m.x_m,m.y_m,m.depth_m); }
+      MAP.lastNavAt=performance.now(); state.navOkAt=Date.now();
+      // `aboutThisHull` is already the answer to "is this frame a reading of this
+      // vehicle, or a scripted path the estimator was fed" — the gate this handler
+      // uses for everything else it does with the frame — so the surveyed overlay
+      // gets the same answer rather than a second opinion. With NAV_SENSORS=sim the
+      // estimator never looks at the sub, and the depth in this frame is a script.
+      pushTrack(m.x_m, m.y_m, m.depth_m, aboutThisHull && crtLiveMeasured()); }
   };
   ws.onclose=()=>{ MAP.navWs=null; scheduleNavWs(); };
   ws.onerror=()=>{ try{ ws.close(); }catch(e){} };
@@ -779,13 +825,30 @@ function decimatedTrack(){
   return out;
 }
 
-function pushTrack(x,y,depth){
+/* WHERE THIS POINT'S DEPTH CAME FROM, RECORDED WITH THE POINT.
+
+   The surveyed-depth overlay bins this track into 3 m cells and paints them with the
+   treatment that means "the sub touched this" (crt.js crtLiveCells). Whether that is
+   true is a fact about the MOMENT the depth arrived, not about what the link is doing
+   whenever somebody next redraws — and the track routinely mixes the two, because a
+   real dive that loses the tether has simulated points appended to it and then joins
+   back up. Asking the question at draw time adopted those sim points as measurements
+   the instant the vehicle came back; asking it here cannot, and it also means the
+   cells the sub really did measure stay drawn after the link drops, which is right.
+
+   `measured` defaults to the console's own real-hull test and is passed explicitly by
+   the callers that know better — a hand-placed ROV has a real depth at an invented
+   position, which is not a sounding of anywhere. */
+function pushTrack(x,y,depth,measured){
   if(MAP.replay || !MAP.hasOrigin) return;                // no track without an origin (§6); frozen during replay
   const t=MAP.track, last=t[t.length-1];
   // The dedupe is skipped on a break: the first point of a new segment must be kept
   // even if it happens to land near the last point of the old one.
   if(!MAP.trackBreak && last && Math.hypot(x-last.x,y-last.y)<0.25) return;
   const p={x,y,depth};
+  p.measured = (measured===undefined)
+    ? ((typeof crtLiveMeasured==='function') && crtLiveMeasured())
+    : !!measured;
   if(MAP.trackBreak){ p.brk=true; MAP.trackBreak=false; }
   t.push(p);
   // Thin the stored track when it gets long — but never drop a break marker.
@@ -899,7 +962,11 @@ function mapTick(){
       const r=Math.hypot(dx,dy), lim=tetherHorizLimitM();
       if(r>lim && r>0){ const k=lim/r; MAP.x=a.x+dx*k; MAP.y=a.y+dy*k; }
     }
-    pushTrack(MAP.x,MAP.y,MAP.depth);
+    // This whole branch only runs with no vehicle linked, so the depth here is the
+    // model's and pushTrack's own test says so — but say it at the call site too, so
+    // the one place that KNOWS these points are synthetic is not relying on a
+    // predicate somewhere else agreeing with it.
+    pushTrack(MAP.x,MAP.y,MAP.depth,false);
   }
   renderTether();
   // Right stick pans the map while the map IS the view (see computeInput).

@@ -230,6 +230,29 @@
         <button id="crt-refresh" class="crt-btn" title="ASK THE PI AGAIN for every chart layer. Worth pressing after the tether has been replugged or the Pi has been restarted: layers that said CANNOT TELL are re-requested and will report what they actually find." aria-label="ASK THE PI AGAIN for every chart layer. Worth pressing after the tether has been replugged or the Pi has been restarted: layers that said CANNOT TELL are re-requested and will report what they actually find.">REFRESH</button>
         <button id="crt-close" class="crt-btn" title="CLOSE this panel. The layers themselves keep being drawn on the map exactly as they are now - closing the list does not switch anything off." aria-label="CLOSE this panel. The layers themselves keep being drawn on the map exactly as they are now - closing the list does not switch anything off.">CLOSE</button>
       </div>
+      <!-- OFFLINE DATA — the download, shown where the layer states already live.
+           DOWNLOADING is a state in its own right: it is not "absent" and it is not
+           "present", and a fetch that half-finishes with nobody saying so leaves a map
+           that looks complete and is not. Setting the launch point starts this by
+           itself whenever the launcher reports real internet; the rows below name
+           which source is being fetched and how far through, the sentence says what
+           failed and what to do about it, and the three buttons mean an operator on a
+           metered hotspot is never trapped in it. Written by navui.js + crt.js
+           (crtRenderFetch). -->
+      <div id="crt-fetch" class="crt-fetch">
+        <div class="crt-fetch-head">
+          <span id="crt-fetch-title" class="crt-fetch-title" title="OFFLINE DATA - everything this console needs at the canal has to be downloaded BEFORE you get there, because the tether has no internet on it. Setting the launch point is what starts that: it is the first moment this system knows where it is going to be, which is the only thing an offline area needs. Each row below is one source, says whether it is downloading, downloaded, already held or missing, and says which of those it is in words rather than leaving a blank map to be read as clear water." aria-label="OFFLINE DATA - everything this console needs at the canal has to be downloaded BEFORE you get there, because the tether has no internet on it. Setting the launch point is what starts that: it is the first moment this system knows where it is going to be, which is the only thing an offline area needs. Each row below is one source, says whether it is downloading, downloaded, already held or missing, and says which of those it is in words rather than leaving a blank map to be read as clear water.">OFFLINE DATA</span>
+          <span id="crt-fetch-state" class="crt-fetch-pill" title="WHAT THE DOWNLOAD IS DOING RIGHT NOW, as one word. DOWNLOADING means it is running; DOWNLOADED means everything that could be fetched for this launch point is on this handheld; ALREADY DOWNLOADED means the launch point is inside an area that was fetched before and nothing needed re-requesting; NO CONNECTION is the normal state at the water and is not a fault; CANNOT TELL means nothing here knows whether there is internet, so nothing was started on a guess; TOO BIG means it is waiting for you to confirm the size; PARTLY DOWNLOADED and FAILED mean some sources landed and some did not, and the sentence underneath names which." aria-label="WHAT THE DOWNLOAD IS DOING RIGHT NOW, as one word. DOWNLOADING means it is running; DOWNLOADED means everything that could be fetched for this launch point is on this handheld; ALREADY DOWNLOADED means the launch point is inside an area that was fetched before and nothing needed re-requesting; NO CONNECTION is the normal state at the water and is not a fault; CANNOT TELL means nothing here knows whether there is internet, so nothing was started on a guess; TOO BIG means it is waiting for you to confirm the size; PARTLY DOWNLOADED and FAILED mean some sources landed and some did not, and the sentence underneath names which."></span>
+        </div>
+        <!-- The reason, in a sentence, never a spinner that simply stops. -->
+        <div id="crt-fetch-why" class="crt-fetch-why"></div>
+        <div id="crt-fetch-rows" class="crt-fetch-rows"></div>
+        <div class="crt-fetch-acts">
+          <button id="crt-fetch-go" class="crt-fetch-btn crt-fetch-primary" type="button" title="DOWNLOAD EVERYTHING THIS CONSOLE CAN for the current launch point, now. The size is on the button before you press it. It runs in the background and the console stays fully flyable throughout. Tiles already saved are never fetched twice, so pressing this after a failure or a stop only re-requests what is actually missing." aria-label="DOWNLOAD EVERYTHING THIS CONSOLE CAN for the current launch point, now. The size is on the button before you press it. It runs in the background and the console stays fully flyable throughout. Tiles already saved are never fetched twice, so pressing this after a failure or a stop only re-requests what is actually missing.">DOWNLOAD NOW</button>
+          <button id="crt-fetch-stop" class="crt-fetch-btn" type="button" title="STOP the download now. Everything already saved is kept and nothing is undone - the next run resumes from exactly where this one stopped. This stops THIS handheld's download; a fetch running on the Pi is the Pi's own and is not affected." aria-label="STOP the download now. Everything already saved is kept and nothing is undone - the next run resumes from exactly where this one stopped. This stops THIS handheld's download; a fetch running on the Pi is the Pi's own and is not affected.">STOP</button>
+          <button id="crt-fetch-auto" class="crt-fetch-btn crt-fetch-auto" type="button" role="switch" title="AUTOMATIC DOWNLOADING. When it is ON, setting a launch point fetches that launch point's map by itself - but only when the launcher reports this handheld actually has internet, so a console at the canal never sits there retrying. Switch it OFF if you are on a metered phone hotspot; the choice is remembered on this handheld and DOWNLOAD NOW still works by hand." aria-label="AUTOMATIC DOWNLOADING. When it is ON, setting a launch point fetches that launch point's map by itself - but only when the launcher reports this handheld actually has internet, so a console at the canal never sits there retrying. Switch it OFF if you are on a metered phone hotspot; the choice is remembered on this handheld and DOWNLOAD NOW still works by hand.">AUTO ON</button>
+        </div>
+      </div>
       <div id="crt-list" class="crt-list"></div>
       <!-- CREDITS. The licence asks for these words wherever the data is used, and
            this console's credits are the map's attribution strip - so they appear
@@ -271,6 +294,13 @@
        and a stretch with no marks on it then means NO DATA, not "nothing there".
        Text and explanation are written by crt.js (crtRenderBadge). -->
   <div id="crt-absent" class="crt-absent"></div>
+  <!-- THE DOWNLOAD, ON THE MAP. A SEPARATE badge from the one above it, deliberately:
+       a fetch in flight and "this map is not showing hazards" are independent facts
+       that can both be true, and the one that means the map is not showing hazards
+       must never be crowded out by a progress figure. While this is lit, a blank
+       square on the map is imagery that has not arrived yet - not open water. Text
+       and explanation are written by crt.js (crtRenderFetchBadge). -->
+  <div id="crt-fetch-badge" class="crt-fetch-badge"></div>
   <div id="hdg-warning" class="hdg-warning" title="HEADING TRUST ON THE MAP - MAG? means the sub's compass is not calibrated, so this map's rotation and the bearing it is drawn on are both suspect. GYRO means the heading filter is ignoring the compass on purpose while the thrusters swamp it, and is coasting on the spin sensor. NO BEARING means the compass has stopped answering: this picture is still being rotated, by the last angle it reported, so its ring is drawn broken and amber to say so." aria-label="HEADING TRUST ON THE MAP - MAG? means the sub's compass is not calibrated, so this map's rotation and the bearing it is drawn on are both suspect. GYRO means the heading filter is ignoring the compass on purpose while the thrusters swamp it, and is coasting on the spin sensor. NO BEARING means the compass has stopped answering: this picture is still being rotated, by the last angle it reported, so its ring is drawn broken and amber to say so."></div>
 </div>
 <div id="radar-scale" class="radar-scale">10&nbsp;m</div>

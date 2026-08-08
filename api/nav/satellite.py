@@ -166,9 +166,17 @@ async def fetch_centreline(bbox: list[float]) -> dict | None:
 
 
 # ---- the download job -------------------------------------------------------
-async def download_area(name: str, bbox: list[float], zmin: int, zmax: int, progress) -> dict:
+async def download_area(name: str, bbox: list[float], zmin: int, zmax: int, progress,
+                        refresh: bool = False) -> dict:
     """Fetch the imagery pyramid → areas/<name>.mbtiles, streaming progress via the
-    async progress(dict) callback. Enforces the tile cap and rate limit (§3.2)."""
+    async progress(dict) callback. Enforces the tile cap and rate limit (§3.2).
+
+    RESUMES BY DEFAULT. A tile already in the archive is not asked for again, because
+    the situation this runs in is a hotspot at a canal that has already dropped once:
+    the retry used to start at tile one and re-request the lot — measured at 981
+    requests for an area that already had tiles on the card — which is slow, rude to a
+    free public service, and on a metered connection expensive. `refresh=True` is the
+    way to deliberately re-fetch imagery that has gone stale."""
     settings.areas_dir.mkdir(parents=True, exist_ok=True)
     est = estimate(bbox, zmin, zmax)
     if est["tiles"] > settings.sat_tile_cap:
@@ -179,21 +187,52 @@ async def download_area(name: str, bbox: list[float], zmin: int, zmax: int, prog
     _init_mbtiles(con)
     tiles = list(tiles_for_bbox(bbox, zmin, zmax))
     total = len(tiles)
-    await progress({"name": name, "state": "starting", "total": total, "est_mb": est["mb"]})
+    # WHAT IS ALREADY HERE, read once. Asked per tile this would be a query per
+    # request; asked not at all — which is what it was — every resume starts from the
+    # beginning. mbtiles rows are keyed on the TMS row, so the comparison happens in
+    # that coordinate system rather than converting the whole archive back.
+    have: set[tuple[int, int, int]] = set()
+    if not refresh:
+        try:
+            have = {(z, x, r) for z, x, r in
+                    con.execute("SELECT zoom_level, tile_column, tile_row FROM tiles")}
+        except Exception as exc:  # noqa: BLE001 — a resume that cannot read is a full fetch
+            log.warning("could not read the existing tiles for %s (%s); fetching all", name, exc)
+    await progress({"name": name, "state": "starting", "total": total, "est_mb": est["mb"],
+                    "already": len(have)})
 
     delay = 1.0 / max(0.5, settings.sat_rate_per_s)
-    ok = 0
-    for i, (z, x, y) in enumerate(tiles):
-        data = await _fetch_retry(_tile_url(z, x, y))
-        if data:
+    ok = skipped = 0
+    # EVERY TILE THAT ARRIVES IS KEPT, even if the next one kills the download. The
+    # commit used to happen only every 25 tiles, so a hotspot that dropped after five
+    # left FOUR of them in an uncommitted transaction that sqlite then rolled back —
+    # the archive kept one tile out of five, and the resume this whole path exists for
+    # had almost nothing to resume from. Committing per tile on a local eMMC costs
+    # microseconds against a network fetch that costs hundreds of milliseconds; the
+    # rate limit dwarfs it either way.
+    try:
+        for i, (z, x, y) in enumerate(tiles):
             tms_y = (1 << z) - 1 - y
-            con.execute("INSERT OR REPLACE INTO tiles VALUES (?,?,?,?)", (z, x, tms_y, data))
-            ok += 1
-        if i % 25 == 0:
+            if (z, x, tms_y) in have:
+                skipped += 1
+                ok += 1                  # it IS on the card; that is what ok counts
+                continue                 # no request, and no rate-limit sleep either
+            data = await _fetch_retry(_tile_url(z, x, y))
+            if data:
+                con.execute("INSERT OR REPLACE INTO tiles VALUES (?,?,?,?)", (z, x, tms_y, data))
+                con.commit()             # this tile is now survivable
+                ok += 1
+            if i % 25 == 0:
+                await progress({"name": name, "state": "running", "done": i + 1, "total": total,
+                                "ok": ok, "skipped": skipped})
+            await asyncio.sleep(delay)
+    finally:
+        # Whatever happened — a dropped hotspot, a cancel, a cap — what arrived is on
+        # the card before this returns or raises.
+        try:
             con.commit()
-            await progress({"name": name, "state": "running", "done": i + 1, "total": total, "ok": ok})
-        await asyncio.sleep(delay)
-    con.commit()
+        except Exception:  # noqa: BLE001
+            pass
 
     # waterway centreline (§3.5) + auto-name (§4) — best-effort, don't fail the download
     centre = await fetch_centreline(bbox)

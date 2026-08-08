@@ -5,6 +5,11 @@
   python -m nav.cli speed-cal --distance 20 --pairs 0.25:36,0.5:19,0.75:13,1.0:10 --id hullA
   python -m nav.cli calibrate data/dives/dive-*.jsonl [--ground-truth 20]
   python -m nav.cli calibrate --selftest
+  python -m nav.cli area-fetch --at 52.4785,-1.9105   # CREATE an area at a launch
+                                                      # point and download everything
+                                                      # for it — BOOTSTRAP, needs internet
+  python -m nav.cli area-fetch gas-street [--refresh] [--radius-m 1000] [--detail high]
+  python -m nav.cli area-fetch gas-street --dry-run   # what is on the card, fetch nothing
   python -m nav.cli crt-fetch gas-street          # CRT hazards — BOOTSTRAP, needs internet
   python -m nav.cli crt-fetch --list             # what the Trust publishes (needs internet)
   python -m nav.cli soundings data/dives/dive-*.jsonl [--area gas-street] [--dry-run]
@@ -13,11 +18,17 @@
   python -m nav.cli state     [--base ...]
   python -m nav.cli readiness [--base ...]
 
-WHICH OF THESE NEED THE INTERNET (§3, the two-phase rule). Exactly one:
-`crt-fetch`, which is a BOOTSTRAP-time command and says so before it does
-anything. Everything else — including `soundings`, which reads a journal off the
-card and writes to a store on the same card — runs unchanged in the isolated
+WHICH OF THESE NEED THE INTERNET (§3, the two-phase rule). Exactly two, and both
+are BOOTSTRAP-time commands that say so before they do anything: `area-fetch`,
+which fills a whole offline area, and `crt-fetch`, which fills in the hazard
+layers alone. Everything else — including `soundings`, which reads a journal off
+the card and writes to a store on the same card — runs unchanged in the isolated
 canal-side segment, where there is no WAN and no hostname resolution.
+
+`area-fetch` IS THE ONE TO RUN BEFORE A TRIP. It is the same job the console runs
+by itself when a launch point is set (nav/service.py, AreaFetch), driven from a
+terminal instead of a WebSocket, so a card filled at home and a card filled by
+tapping the map are the same card.
 """
 from __future__ import annotations
 
@@ -33,6 +44,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from . import areas as areamod
 from . import nominal as nominalmod
 from .calibrate import read_dive
 from .config import settings
@@ -883,6 +895,234 @@ def _crt_fetch(args) -> int:
     return 0 if res.get("ok") else 1
 
 
+# ===========================================================================
+# area-fetch (§3) — the WHOLE bootstrap for one area, in one command
+# ===========================================================================
+#
+# WHY THIS EXISTS ALONGSIDE crt-fetch. crt-fetch fills in ONE of the three things
+# an offline area needs, and it requires an area that already exists to fill in —
+# which, until this round, nothing in the repo ever created. data/areas/ was empty,
+# data/crt/gas-street/ held 26 perfectly good hazard layers belonging to no area,
+# and the console said "no chart data is downloaded" forever. This is the command
+# that creates the area and fills all three: the waterway centreline, the hazard
+# charts and the imagery, in that order.
+#
+# IT IS THE SAME JOB THE CONSOLE RUNS. Not a parallel implementation of it —
+# nav/service.py's AreaFetch, driven with a printer instead of a WebSocket, so a
+# fetch done at the kitchen table the night before and a fetch started by tapping
+# a launch point produce byte-identical cards and identical records on disk. The
+# alternative is two code paths that agree until the day they do not, and the day
+# they do not is at the water.
+#
+# SO IT NEEDS THE INTERNET, and it says so first, using the same probe crt-fetch
+# uses (_reachable, above) — and it hands the answer to the job rather than letting
+# the job probe again, so one command means one probe.
+
+# How often the progress printer is allowed to speak while a source grinds through
+# a thousand tiles. Every status CHANGE prints regardless; this only throttles the
+# "still going" line, because a terminal scrolling at six lines a second is a
+# terminal nobody reads the failures out of.
+_PROGRESS_GAP_S = 2.0
+
+
+def _print_sources(snap: dict) -> None:
+    """The per-source table. NOT one percentage — see nav/service.py's FETCH_SOURCES.
+
+    "charts done, imagery failed" tells an operator to drive anyway and expect a
+    blank background. "73%" tells them nothing they can act on, and 73% of an
+    imagery pyramid and 73% of the hazard layers are not remotely the same news.
+    """
+    for key in snap.get("order") or sorted(snap.get("sources") or {}):
+        s = (snap.get("sources") or {}).get(key) or {}
+        n, of = s.get("done"), s.get("total")
+        count = f"{n}/{of}" if (n is not None and of) else ""
+        line = f"  {key:<11} {s.get('status', '?'):<8} {count:>10}  {s.get('detail', '')}"
+        print(line.rstrip())
+        if s.get("why"):
+            print(f"  {'':<11} {'':<8} {'':>10}  {s['why']}")
+
+
+def _area_fetch(args) -> int:
+    """Create/complete one offline area: centreline + hazard charts + imagery."""
+    try:
+        from . import service as svcmod
+    except Exception as exc:  # noqa: BLE001 — reported, never raised
+        print(f"error: api/nav/service.py could not be imported ({_brief(exc)}). This "
+              f"command drives the same job the API serves, so it needs the API's "
+              f"dependencies (fastapi, pydantic) installed.", file=sys.stderr)
+        return 2
+
+    print("area-fetch: everything one offline area needs, downloaded in one go")
+    print("  BOOTSTRAP-time (§3). The waterway centreline, the Canal & River Trust")
+    print("  hazard layers and the satellite imagery — in that order, so a hotspot")
+    print("  that dies half way leaves you the two that keep the sub out of a")
+    print("  culvert and loses only the picture. There is no internet at the canal.\n")
+
+    lat = lon = None
+    if args.at:
+        try:
+            lat, lon = (float(v) for v in args.at.replace(" ", "").split(","))
+        except ValueError:
+            print("error: --at must be LAT,LON in degrees, e.g. --at 52.4785,-1.9105",
+                  file=sys.stderr)
+            return 2
+    name = args.name or args.area
+    meta = svcmod._area_meta(areamod.slugify(name)) if name else None
+    if meta is None:
+        # NO AREA BY THAT NAME YET, so nav/areas.py defines one. It owns the radius,
+        # the reuse rule and both caps — and its plan_area/create_area is what the
+        # console calls when a launch point is tapped, so a card filled from this
+        # terminal and one filled at the water are the same card. `plan` is printed
+        # first because a refusal here is a sentence to read, not a traceback.
+        if lat is None:
+            print("error: name an area that exists, or give a launch point with "
+                  "--at LAT,LON. An offline area needs to know where it is.",
+                  file=sys.stderr)
+            return 2
+        plan = areamod.plan_area(lat, lon, radius_m=args.radius_m, name=name,
+                                 detail=args.detail or "standard")
+        print(f"plan     : {plan['action']} — {plan['why']}")
+        if plan["action"] == "refuse":
+            print("\nnothing was created and nothing was fetched.", file=sys.stderr)
+            return 2
+        if args.dry_run:
+            print("\n--dry-run: no area was created and nothing was fetched.")
+            return 0
+        try:
+            plan = areamod.create_area(lat, lon, radius_m=args.radius_m, name=name,
+                                       detail=args.detail or "standard")
+        except ValueError as exc:
+            print(f"\nerror: {exc}", file=sys.stderr)
+            return 2
+        name = plan["name"]
+        meta = svcmod._area_meta(name) or {}
+    else:
+        name = meta["name"]
+    bbox = meta.get("bbox")
+    if not bbox:
+        print(f"error: area {name!r} has no usable bbox, so there is no box to fetch. "
+              f"Nothing here will guess one.", file=sys.stderr)
+        return 2
+    if args.detail is None:
+        # Not asked for, so keep whatever pyramid this area already has — mixing
+        # zoom ranges into one archive leaves the completeness check counting tiles
+        # against a range no run ever fetched.
+        zmin = int(meta.get("minzoom") or settings.sat_min_zoom)
+        zmax = int(meta.get("maxzoom") or settings.sat_max_zoom)
+    else:
+        zmin, zmax = areamod.zooms_for(args.detail)
+    cap = svcmod.fetch_cap(bbox, zmin, zmax)
+
+    print(f"area     : {name}" + (f"  ({meta['label']})" if meta.get("label") else ""))
+    print(f"store    : {settings.areas_dir / name}.mbtiles  +  {settings.crt_dir / name}/")
+    print(f"bbox     : {bbox[0]:.5f},{bbox[1]:.5f} .. {bbox[2]:.5f},{bbox[3]:.5f}")
+    o = meta.get("origin") or {}
+    if o.get("lat") is not None:
+        print(f"launch   : {o['lat']:.5f},{o['lon']:.5f}  "
+              f"(a {float(o.get('radius_m') or settings.area_radius_m):.0f} m box around it)")
+    # THE CAP, BEFORE ANYTHING IS DOWNLOADED. An operator who taps a launch point on
+    # a metered hotspot is entitled to see the number first, not to discover it in
+    # their data bill.
+    print(f"size     : {cap['tiles']} tiles ~{cap['mb']} MB at z{zmin}-{zmax}  "
+          f"(cap {cap['tile_cap']} tiles ~{cap['mb_cap']} MB)")
+    if not cap["within"]:
+        print(f"\nrefused: {cap['title']}", file=sys.stderr)
+        return 2
+
+    before = svcmod.area_completeness(name)
+    print(f"state    : {before.get('state')} — {before['title']}")
+    print("\non this card already (read off the disk):")
+    for key in [k for k, _, _ in svcmod.FETCH_SOURCES]:
+        src = before["sources"].get(key) or {}
+        print(f"  {key:<11} {src.get('status', '?')}")
+    if args.dry_run:
+        print("\n--dry-run: nothing was fetched and nothing was written.")
+        return 0
+
+    return asyncio.run(_area_fetch_run(svcmod, name, bbox, zmin, zmax,
+                                       (meta.get("origin") or {}).get("radius_m"),
+                                       bool(args.refresh)))
+
+
+async def _area_fetch_run(svcmod, name: str, bbox, zmin: int, zmax: int,
+                          radius, refresh: bool) -> int:
+    # ONE PROBE PER COMMAND. internet_available() is the service's gate and it is
+    # nothing but a call to _reachable above; resolving it here and handing the
+    # answer to the job means the operator sees the verdict in the preflight, where
+    # the rest of this file puts it, and the job does not go and ask again.
+    ok, why = await svcmod.internet_available()
+    print(f"\ninternet : {('available — ' + why) if ok else ('UNAVAILABLE — ' + why)}")
+    if not ok:
+        print("\nnothing was fetched. What is on this card is unchanged, and an ABSENT")
+        print("layer is not an empty one — nothing above claims this water is clear.")
+        return 2
+
+    last: dict[str, tuple[str, float]] = {}
+
+    async def say(snap: dict) -> None:
+        # Persisted on every step, not only at the end. The area's own metadata is
+        # what the NEXT process reads, and a fetch killed by Ctrl-C at the bank has
+        # to leave a record saying it was killed — otherwise the console shows a
+        # download that is not running and nobody is coming back to finish.
+        svcmod._record_fetch(name, snap)
+        now = time.monotonic()
+        for key, s in (snap.get("sources") or {}).items():
+            st = s["status"]
+            if st == "pending":
+                continue
+            was, at = last.get(key, (None, 0.0))
+            if st == was:
+                # A SOURCE THAT HAS FINISHED SAYS SO ONCE. The first version of this
+                # throttled on time alone, so every finished source re-announced
+                # itself every two seconds for the rest of the job — a terminal in
+                # which "centreline done" scrolled thirteen times while the imagery
+                # ran, and the one line that mattered (a failure) had to be found
+                # among them. Only a RUNNING source ticks.
+                if st != "running" or (now - at) < _PROGRESS_GAP_S:
+                    continue
+            last[key] = (st, now)
+            n, of = s.get("done"), s.get("total")
+            count = f"{n}/{of}" if (n is not None and of) else ""
+            print(f"  {key:<11} {st:<8} {count:>10}  {s.get('detail', '')}".rstrip(),
+                  flush=True)
+
+    print("\nfetching (sequential and rate-limited — these are free public services):")
+    job = svcmod.AreaFetch(name, bbox, zmin, zmax, refresh=refresh, radius_m=radius,
+                           reason="python -m nav.cli area-fetch", on_change=say)
+    try:
+        snap = await job.run(net=(ok, why))
+    except KeyboardInterrupt:
+        job.crash(KeyboardInterrupt("stopped at the keyboard"))
+        snap = job.snapshot()
+        print("\nstopped. What landed is on the card; the rest is not.", file=sys.stderr)
+    # THE FINAL STATE, WRITTEN BEFORE ANYTHING IS ASKED ABOUT THE CARD. Progress is
+    # persisted by the callback above, so the last thing on disk while the job was
+    # alive says DOWNLOADING — and area_completeness() reads that and quite correctly
+    # refuses to call an area complete while a download is in flight. Miss this line
+    # and a fetch in which every single source succeeded reports "a fetch still
+    # downloading" and exits non-zero. It did, on the first real run of this command;
+    # the server path had the equivalent line in NavService._fetch_ended and this one
+    # did not.
+    svcmod._record_fetch(name, snap)
+
+    print("\nwhat each source did:")
+    _print_sources(snap)
+
+    # THE VERDICT IS READ OFF THE DISK, not off the job's own report — the same rule
+    # crt-fetch follows for the same reason. A driver that printed its own optimism
+    # would be the one place in this chain where a layer that never landed looks
+    # fetched.
+    after = svcmod.area_completeness(name)
+    print(f"\non this card now:")
+    for key in [k for k, _, _ in svcmod.FETCH_SOURCES]:
+        s = after["sources"].get(key) or {}
+        print(f"  {key:<11} {s.get('status', '?'):<10} {s.get('title', '')}")
+    print(f"\n{after['title']}")
+    print(f"activate  : POST /api/areas/{name}/activate")
+    print(f"check     : GET  /api/areas/{name}/complete")
+    return 0 if after["complete"] else 1
+
+
 # --- soundings --------------------------------------------------------------
 # A pass-through, on purpose and by invitation: nav/soundings.py's own docstring
 # specifies this wiring ("main(argv) parses its own argv and returns an exit code,
@@ -1065,6 +1305,32 @@ def main(argv=None) -> int:
     sc.add_argument("--distance", type=float, required=True, help="measured run length in metres")
     sc.add_argument("--pairs", required=True, help="throttle:seconds,throttle:seconds,…")
     sc.add_argument("--id", default="default")
+    af = sub.add_parser("area-fetch",
+                        help="create/complete one offline area — centreline, CRT "
+                             "hazard layers and satellite imagery "
+                             "(BOOTSTRAP-time: needs internet)")
+    af.add_argument("area", nargs="?",
+                    help="an area name; with --at, an existing area covering that "
+                         "point is used instead of making a second one")
+    af.add_argument("--at", default=None,
+                    help="LAT,LON launch point — creates the area around it if none "
+                         "covers it yet")
+    af.add_argument("--name", default=None, help="name the area explicitly")
+    # The default is NOT quoted here. It lives in nav/service.py beside the job that
+    # uses it, and a number copied into a help string is a number that will one day
+    # advertise a cap the code no longer applies. The command prints the effective
+    # radius, the tile count and the ceiling in its preflight, before it fetches.
+    af.add_argument("--radius-m", type=float, default=None,
+                    help="half-width of the box around --at, in metres. The preflight "
+                         "prints the value used, the resulting tile count and the cap")
+    af.add_argument("--detail", choices=["standard", "high"], default=None,
+                    help="'high' adds one zoom level, which roughly quadruples the "
+                         "tiles. Omitted means: keep the detail this area already has")
+    af.add_argument("--refresh", action="store_true",
+                    help="re-download sources that are already on the card "
+                         "(by default they are skipped and nothing is re-requested)")
+    af.add_argument("--dry-run", action="store_true",
+                    help="report what is on the card and fetch nothing")
     cf = sub.add_parser("crt-fetch",
                         help="download the CRT hazard layers for an area "
                              "(BOOTSTRAP-time: needs internet)")
@@ -1108,6 +1374,7 @@ def main(argv=None) -> int:
             if args.ground_truth is not None: argv2 += ["--ground-truth", str(args.ground_truth)]
         return _cal(argv2)
     if args.cmd == "speed-cal":  return _speed_cal(args)
+    if args.cmd == "area-fetch": return _area_fetch(args)
     if args.cmd == "crt-fetch":  return _crt_fetch(args)
     if args.cmd == "soundings":  return _soundings(args)
     if args.cmd == "mag-cal":    return _mag_cal(args)

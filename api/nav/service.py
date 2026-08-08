@@ -5,9 +5,12 @@ readiness check (§9). Mounts into the existing FastAPI app.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import os
 import re
+import sqlite3
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -91,6 +94,21 @@ class NavService:
         self.centreline: list[tuple[float, float]] | None = None   # [lon,lat]
         self._subs: set[WebSocket] = set()
         self._task: asyncio.Task | None = None
+        # ---- the bootstrap fetch (§3), which is NOT part of the runtime path ----
+        # ONE job at a time, deliberately: every source it drives is rate-limited
+        # against somebody's free public service, and two jobs racing would double
+        # the request rate while halving the chance of either finishing. It lives
+        # on the service rather than in a module global so a test can build a
+        # second NavService without inheriting the first one's download.
+        self.fetch: AreaFetch | None = None
+        self._fetch_task: asyncio.Task | None = None
+        self._autofetch_task: asyncio.Task | None = None
+        self.last_fetch: dict | None = None     # the last FINISHED job's snapshot
+        # Until when each area is left alone after a no-internet verdict. The
+        # console re-POSTs the stored origin on every page load (navui.js does it in
+        # autoRequestOrigin, and again from the location watch), so without this a
+        # handheld sitting on a bank would buy a four-second DNS timeout per fix.
+        self._offline_until: dict[str, float] = {}
 
     async def start(self) -> None:
         for d in (settings.data_dir, settings.areas_dir, settings.dives_dir, settings.speed_lut_dir):
@@ -140,6 +158,11 @@ class NavService:
             log.warning("dive recovery scan failed: %s", exc)
 
     async def stop(self) -> None:
+        # The fetch goes first. It is the only task here that holds a half-written
+        # area on disk, and AreaFetch.run records "cancelled" into the area's own
+        # metadata on the way out — so a Pi shut down mid-download says so next
+        # boot instead of leaving a record that reads as a download still running.
+        await self.cancel_fetch()
         if self._task:
             self._task.cancel()
             try:
@@ -442,6 +465,262 @@ class NavService:
             except Exception as exc:  # noqa: BLE001
                 log.warning("centreline parse failed for %s: %s", name, exc)
 
+    # ---- the bootstrap fetch, driven from here ----------------------------
+    #
+    # WHY ALL OF THIS IS A TASK AND NONE OF IT IS AN AWAIT ON A REQUEST. The one
+    # thing this console may never do is stop flying the sub. A satellite pyramid
+    # is a thousand rate-limited HTTP requests and a full CRT run is a few hundred
+    # more; at six a second that is minutes, and any endpoint that awaited it would
+    # hold a worker for the whole of it while the operator's finger is on the
+    # throttle. So every entry point below returns as soon as it has WRITTEN DOWN
+    # what it is going to do, and the doing happens on a task that shares the loop
+    # with the dead reckoner exactly the way _loop does — every network call inside
+    # satellite.py and crt.py already goes through asyncio.to_thread, and both
+    # sleep between requests, so the 10 Hz tick keeps its slot throughout.
+
+    def fetch_state(self) -> dict:
+        """What the fetch job is doing, or what the last one did. Never None-shaped.
+
+        One document whether or not anything is running, because the console binds
+        a panel to this and a missing key is a panel that renders blank — which
+        looks like "nothing is wrong" and is indistinguishable from "nobody asked".
+        """
+        if self.fetch is not None:
+            return {**self.fetch.snapshot(), "running": self.fetch.is_running}
+        if self.last_fetch is not None:
+            return {**self.last_fetch, "running": False}
+        return {
+            "state": "idle", "running": False, "area": None, "sources": {},
+            "title": ("No offline-data fetch has run in this session. That does not mean "
+                      "the card is empty and it does not mean it is full — ask "
+                      "/api/areas/<name>/complete which of the three sources are "
+                      "actually on it."),
+            "aria_label": ("No download job has run since this service started. The state "
+                           "of the card is a separate question, answered by the area "
+                           "completeness endpoint."),
+        }
+
+    async def _fetch_changed(self, snap: dict) -> None:
+        """One progress step: to the card, then to every console watching.
+
+        The card first, on purpose. A broadcast reaches whoever happens to be
+        connected right now; the area's own metadata is what the NEXT process
+        reads, and an interrupted download that left no trace on disk is one the
+        operator finds out about by noticing a hole in the map.
+        """
+        try:
+            _record_fetch(snap["area"], snap)
+        except Exception as exc:  # noqa: BLE001 — a fetch must not die of its own bookkeeping
+            log.warning("could not record fetch progress for %s: %s", snap.get("area"), exc)
+        await self._broadcast(json.dumps({"type": "area_fetch", **snap}))
+
+    async def start_fetch(self, area: str, bbox: list[float], zmin: int, zmax: int,
+                          *, refresh: bool = False, reason: str = "",
+                          radius_m: float | None = None,
+                          net: tuple[bool, str] | None = None) -> dict:
+        """Begin one background fetch. Returns immediately, with what it started."""
+        if self.fetch is not None and self.fetch.is_running:
+            # NOT an error, and not a queue either. A second request for the SAME
+            # area while the first is still running is what a double-tap looks
+            # like, and the honest answer to it is the job that is already going.
+            return {**self.fetch.snapshot(), "running": True, "started": False,
+                    "why": f"a fetch for {self.fetch.area!r} is already running — "
+                           f"this one was not started, because these are rate-limited "
+                           f"public services and two jobs would halve the rate each"}
+        job = AreaFetch(area, bbox, zmin, zmax, refresh=refresh, reason=reason,
+                        radius_m=radius_m, on_change=self._fetch_changed)
+        self.fetch = job
+        self._fetch_task = asyncio.create_task(job.run(net=net))
+        self._fetch_task.add_done_callback(self._fetch_ended)
+        return {**job.snapshot(), "running": True, "started": True}
+
+    def _fetch_ended(self, task: asyncio.Task) -> None:
+        """The download task is over, however it ended.
+
+        Same reasoning as _loop_ended: nobody awaits this task, so an exception in
+        it would be swallowed and the job would sit at "running" forever — a
+        progress bar that never moves and never says why, which is the exact shape
+        of failure this whole subsystem refuses. AreaFetch.run is written not to
+        raise; this is what catches it being wrong about that.
+        """
+        job = self.fetch
+        if job is None:
+            return
+        if not task.cancelled():
+            exc = task.exception()
+            if exc is not None:
+                job.crash(exc)
+                log.error("area fetch for %s DIED: %s", job.area, exc, exc_info=exc)
+        self.last_fetch = job.snapshot()
+        try:
+            _record_fetch(job.area, self.last_fetch)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not record the finished fetch for %s: %s", job.area, exc)
+        # Re-read the card. The centreline this job may have just downloaded is the
+        # estimator's snapping target, and activate_area is the only thing that
+        # loads it — without this the operator has to restart the service to use
+        # data that is already sitting on the disk.
+        if self.active_area == job.area:
+            self.activate_area(job.area)
+
+    async def cancel_fetch(self) -> dict | None:
+        """Stop the running job and wait for it to write down that it was stopped."""
+        task, job = self._fetch_task, self.fetch
+        if task is None or task.done():
+            return None
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001 — _fetch_ended has already recorded it
+            pass
+        return job.snapshot() if job else None
+
+    def autofetch(self, origin: Origin) -> dict:
+        """A launch point was set. Make sure this water's offline data exists.
+
+        THIS IS THE WHOLE POINT OF THE ROUND, so it is worth saying what it is not:
+        it is not a download. It is a decision, taken on a background task, about
+        whether a download is needed — and on a canal bank the answer is almost
+        always no, because the area is already complete or there is no internet to
+        change that with. The origin is the trigger because it is the first moment
+        anything on this vehicle knows WHERE it is going to be, which is the one
+        fact an offline area needs and the reason data/areas/ has been empty since
+        the day this console was written: nothing ever created one.
+        """
+        if not settings.area_auto:
+            return {"scheduled": False,
+                    "why": "automatic areas and fetching are switched off "
+                           "(NAV_AREA_AUTO=0 / NAV_AUTOFETCH=0)"}
+        # ---- 1. THE AREA, MADE HERE AND NOW, WITH NO NETWORK INVOLVED --------
+        # Defining an area is writing down a plan: a box, a name and a state of
+        # ABSENT. It needs a launch point and nothing else, which is exactly why it
+        # must not wait behind an internet probe — the case with no signal is the
+        # case where the area is created empty at the water and filled in later at
+        # home, from a list, and an area that could not exist without a hotspot
+        # would be missing from that list precisely when it was needed.
+        # areas.create_area also decides REUSE: the same launch point twice is one
+        # area, which matters because the console re-POSTs its stored origin on
+        # every page load.
+        try:
+            plan = areamod.create_area(origin.lat, origin.lon)
+        except ValueError as exc:      # not a place, or the box would be too big
+            log.info("no area for %s,%s: %s", origin.lat, origin.lon, exc)
+            return {"scheduled": False, "why": str(exc)}
+        except Exception as exc:  # noqa: BLE001 — setting a datum must never fail here
+            log.warning("area creation failed: %s", exc, exc_info=True)
+            return {"scheduled": False, "why": f"the area could not be written: {exc}"}
+        name = plan["name"]
+        if self.active_area != name:
+            self.activate_area(name)
+
+        # ---- 2. IS ANYTHING ACTUALLY MISSING? Disk only. ---------------------
+        # The canal-side steady state, and it has to be free: a console at the
+        # water with a complete area must not spend one socket finding that out.
+        comp = area_completeness(name)
+        if comp["complete"]:
+            return {"scheduled": False, "area": name, "action": plan["action"],
+                    "why": (f"{name} is already complete — imagery, hazard charts and "
+                            f"centreline are all on this card, so nothing was fetched "
+                            f"and nothing was asked of the network"),
+                    "complete": True}
+        until = self._offline_until.get(name)
+        if until is not None and time.monotonic() < until:
+            return {"scheduled": False, "area": name, "action": plan["action"],
+                    "why": (f"there was no internet {int(_OFFLINE_RETRY_GAP_S)}s ago and "
+                            f"{name} is not being re-probed yet. No signal is the normal "
+                            f"state here, and retrying it on every origin fix is how a "
+                            f"console spends a dive on DNS timeouts")}
+
+        # ---- 3. SAY DOWNLOADING BEFORE RETURNING -----------------------------
+        # DOWNLOADING IS ITS OWN STATE and the operator has to be able to watch it
+        # start. The probe that decides whether there is anything to download takes
+        # up to four seconds, and this endpoint has a controller on the other end of
+        # it, so the state is written here and the checking happens behind it. If
+        # the probe then says there is no signal the job puts the area back to
+        # ABSENT within those few seconds, with the reason on it — and areas.py's
+        # own staleness rule catches the case where this process dies in between.
+        try:
+            areamod.set_area_state(
+                name, "downloading",
+                why=("checking for internet, then downloading this area's imagery, "
+                     "hazard charts and centreline"))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not mark %s downloading: %s", name, exc)
+        try:
+            # Kept on the service, not dropped on the floor: asyncio holds only a
+            # weak reference to a task, and a fire-and-forget one can be collected
+            # mid-await — which would look exactly like a fetch that decided to do
+            # nothing and said nothing about why.
+            self._autofetch_task = asyncio.create_task(self._autofetch(origin, name))
+        except RuntimeError:            # no running loop — nav embedded in a sync test
+            areamod.set_area_state(name, "absent",
+                                   why="no event loop was running to fetch on")
+            return {"scheduled": False, "area": name,
+                    "why": "no event loop is running to schedule it on"}
+        return {"scheduled": True, "area": name, "action": plan["action"],
+                "missing": comp["missing"], "bbox": plan.get("bbox"),
+                "est_tiles": plan.get("est_tiles"), "est_mb": plan.get("est_mb"),
+                "why": (f"{name} is missing {', '.join(comp['missing'])}. A background "
+                        f"fetch was scheduled; it checks for internet first and does "
+                        f"nothing at all if there is none"),
+                "watch": "/api/areas/fetch"}
+
+    async def _autofetch(self, origin: Origin, name: str) -> None:
+        """The download decision, off the request path. Network only if needed."""
+        try:
+            if self.fetch is not None and self.fetch.is_running:
+                return
+            ok, why = await internet_available()
+            if not ok:
+                # THE NORMAL CANAL-SIDE OUTCOME, AND IT IS NOT A FAILURE. Nothing
+                # was attempted, so nothing failed and nothing is in progress: the
+                # area goes back to ABSENT, which is the true and useful claim that
+                # there is a plan on this card and no data behind it yet. Reporting
+                # it as a failed download would send the operator to try again;
+                # what they actually need is to be somewhere with signal.
+                self._offline_until[name] = time.monotonic() + _OFFLINE_RETRY_GAP_S
+                rec = _offline_record(name, why, reason="a launch point was set")
+                self.last_fetch = rec
+                areamod.set_area_state(
+                    name, "absent",
+                    why=(f"nothing has been downloaded into this area yet, and there is "
+                         f"no internet here to do it with: {why}"), fetch=rec)
+                await self._broadcast(json.dumps({"type": "area_fetch", **rec}))
+                log.info("auto-fetch not started for %s: %s", name, why)
+                return
+            self._offline_until.pop(name, None)
+            meta = _area_meta(name) or {}
+            bbox = meta.get("bbox")
+            if not bbox:
+                log.warning("area %s has no bbox — nothing to fetch for it", name)
+                return
+            zmin = int(meta.get("minzoom") or settings.sat_min_zoom)
+            zmax = int(meta.get("maxzoom") or settings.sat_max_zoom)
+            await self.start_fetch(name, bbox, zmin, zmax,
+                                   radius_m=(meta.get("origin") or {}).get("radius_m"),
+                                   reason="a launch point was set", net=(ok, why))
+        except asyncio.CancelledError:
+            # THE DECISION WAS KILLED BEFORE IT DECIDED, and the area is sitting
+            # there saying DOWNLOADING because autofetch() said so before handing
+            # over. A process shut down in this window — or an event loop closed
+            # under it — would leave that word on the card with nothing behind it,
+            # and areas.py would go on believing it for the whole of its staleness
+            # window. Nothing was attempted, so the honest state is ABSENT: a plan
+            # on the card with no data behind it yet.
+            with contextlib.suppress(Exception):
+                areamod.set_area_state(
+                    name, "absent",
+                    why=("the download was stopped before it started, so nothing has "
+                         "been downloaded into this area yet"))
+            raise
+        except Exception as exc:  # noqa: BLE001 — setting an origin must never fail here
+            log.warning("auto-fetch decision failed: %s", exc, exc_info=True)
+            with contextlib.suppress(Exception):
+                areamod.set_area_state(name, "failed",
+                                       why=f"the fetch could not be started: {exc}")
+
     # ---- readiness (§9) ---------------------------------------------------
     def _hw(self):
         """The live vehicle's hardware layer, or None when nav runs standalone.
@@ -536,6 +815,24 @@ class NavService:
                       f"{len(crt_block.get('skipped') or [])} skipped on purpose")
         add("CRT hazard layers cached AND readable (absent is not 'no hazards', "
             "and neither is corrupt)", hz_ok, hz_why)
+        # 2c IS THIS AREA ACTUALLY FINISHED? The three items above each answer about
+        # ONE source, and an operator reading three greens still has to work out
+        # whether that is all of them — which is the question they actually have at
+        # the water's edge, because everything above is downloaded at bootstrap and
+        # NONE of it can be fixed once the hotspot is gone. This is the roll-up:
+        # imagery, hazard charts and the waterway centreline, each present or not,
+        # in one line with the missing ones named.
+        #
+        # A FETCH STILL RUNNING IS NOT A PASS AND IS NOT A FAILURE EITHER — it is
+        # "not yet", and it fails this gate on purpose. Diving on a half-downloaded
+        # card is exactly the thing the honesty doctrine above is written against:
+        # the map draws what landed, and what has not landed yet draws as clear
+        # water. area_completeness() reports downloading, interrupted and cancelled
+        # as their own states so the sentence can say which.
+        comp = area_completeness(self.active_area or "")
+        add("offline area COMPLETE — imagery, hazard charts and centreline all on "
+            "this card and nothing still downloading",
+            bool(comp["complete"]), comp["detail"])
         # 3 origin + accuracy
         add("origin set within accuracy threshold",
             bool(self.origin) and (self.origin.accuracy <= settings.max_origin_accuracy_m if self.origin else False),
@@ -1223,11 +1520,936 @@ def _feature_from_journal(path):
         "samples": out,
     }
 
+# ==========================================================================
+# THE BOOTSTRAP FETCH — one background job that fills an area from the network
+# ==========================================================================
+#
+# WHAT WAS WRONG. Every piece of this already worked and NONE of it was automatic.
+# satellite.py could download an imagery pyramid, crt.py could download two dozen
+# hazard layers, satellite.fetch_centreline could pull the waterway — and data/areas/
+# was empty, because nothing in the repo ever created an area. `grep -rn create_area`
+# found nothing. The console therefore opened on "no chart data is downloaded", which
+# was true, was nobody's bug, and could only be fixed by an operator who already knew
+# to run `nav.cli crt-fetch <area>` — a command that REQUIRES an area name, for an
+# area that did not exist. The chart data sitting in data/crt/gas-street/ belonged to
+# no area at all.
+#
+# WHAT THIS IS. A sequencer. It does not download anything itself: it calls
+# satellite.download_area, satellite.fetch_centreline and crt.download_hazards, in
+# order, one at a time, and keeps a per-source record of what each one did. The three
+# modules keep their own rate limits, their own retries, their own atomic writes and
+# their own refusal to write a partial file. Nothing here duplicates any of that.
+#
+# THE TWO-PHASE MODEL IS UNTOUCHED. This is the bootstrap half, and it is reached
+# only from an explicit endpoint or from the origin trigger below. The runtime path —
+# every endpoint that SERVES a layer, the readiness check, the dead-reckoning loop —
+# still stats and reads files and resolves no hostname, exactly as before. A card with
+# no internet behind it loses nothing and waits for nothing: internet_available() is
+# asked once per job, before any of it starts, and its NO is a normal answer.
+
+# The three sources, in the order they are fetched, with what each one costs and what
+# its absence costs.
+#
+# THE ORDER IS SAFETY-FIRST AND NOT ALPHABETICAL. A hotspot at the water's edge dies
+# mid-job as a matter of routine, so what an interrupted fetch leaves behind is a
+# design decision and not an accident. The centreline is ONE request and it is what
+# the estimator snaps to; the hazard layers are a few hundred small requests and they
+# are what keeps the sub out of a culvert mouth; the imagery is a thousand requests
+# and it is a picture to look at. Losing the picture is a disappointment. Losing the
+# other two is the dive.
+FETCH_SOURCES: tuple[tuple[str, str, str], ...] = (
+    ("centreline", "the waterway centreline (OpenStreetMap, via Overpass)",
+     "the estimator has nothing to snap the track to and the map has no water drawn "
+     "on it — which is missing data, not a stretch with no canal in it"),
+    ("charts", "the Canal & River Trust hazard layers",
+     "nothing is known about sluices, weirs, culverts, stop-plank grooves, outfalls "
+     "or safety gates on this water, and an absent hazard layer draws exactly like an "
+     "empty one"),
+    ("imagery", "the satellite basemap tiles (Esri World Imagery)",
+     "the map has no picture under the track — the track and the hazards still draw, "
+     "on a blank background"),
+)
+
+# A source is in exactly one of these. "skipped" is the successful idempotent case —
+# it was already on the card and nothing was re-downloaded — and it is deliberately
+# NOT called "done", so a console can show the difference between what this run
+# fetched and what this run found.
+_SRC_STATES = ("pending", "running", "done", "skipped", "failed")
+
+# Job states. "offline" is separated from "failed" on purpose: a canal-side console
+# with no signal has not suffered a fault, it is in the condition this whole
+# subsystem was designed around, and reporting that as an error would train the
+# operator to ignore the one word that matters.
+_JOB_LIVE = ("queued", "checking", "running")
+
+# WHAT MAKES AN AREA, AND HOW BIG IT MAY BE, IS NOT DECIDED HERE. nav/areas.py owns
+# it: plan_area/create_area turn a launch point into a box, area_for_point decides
+# whether one already covers it, and the radius, the reuse margin and both caps are
+# settings.area_* with the reasoning written beside them in config.py. This module
+# sequences the DOWNLOAD, and a second opinion about how big an area is would be a
+# second cap — the console would show one number and the refusal would quote another.
+#
+# The four-state area model (absent / downloading / present / failed) is areas.py's
+# too, and every state change below goes through areas.set_area_state so there is one
+# writer. That call is also a HEARTBEAT: list_areas() reports a "downloading" that has
+# said nothing for settings.area_state_stale_s as FAILED, which is how a fetch killed
+# by a flat battery stops reading as one still running.
+
+# How long after a no-internet verdict the SAME area is left alone by the automatic
+# path. The console re-POSTs its stored origin on every page load and again from the
+# location watch, and at the canal every one of those would otherwise buy another
+# four-second DNS timeout. A minute is long enough that a console sitting on a bank
+# is not probing, and short enough that walking back into signal is noticed on the
+# next fix rather than on the next dive.
+#
+# NOTHING ELSE IS CACHED. An earlier version remembered the last probe globally for
+# two minutes, which made the answer depend on what had happened before — a fetch
+# asked for explicitly could be refused because an automatic one had failed while the
+# operator was still in the car park. A probe is four seconds on a daemon thread; an
+# explicit request pays it every time.
+_OFFLINE_RETRY_GAP_S = 60.0
+
+# How long the imagery download may go without a single tile arriving before the
+# link is declared gone. See AreaFetch._imagery for the measurement that set it.
+_IMAGERY_STALL_S = 15.0
+
+# WHAT AN IMAGERY DOWNLOAD DESTROYS, AND THIS JOB PUTS BACK. satellite.download_area
+# writes areas/<name>.json from scratch when it finishes — bbox, zooms, tiles_ok,
+# attribution and nothing else — so every field nav/areas.py's create_area put there
+# is gone the moment the last tile lands. nav/areas.py's set_area_state docstring
+# says so in as many words and tells the fetch driver to re-apply them; this is the
+# list. `origin` is the load-bearing one: it is where the operator actually stood,
+# it is what this file prints as the launch point and what a later geocode is asked
+# about, and losing it makes an area that can never be told where it came from.
+_PRESERVE_ACROSS_IMAGERY = ("label", "origin", "created_by", "est_tiles", "est_mb",
+                            "extended_at", "extended_from")
+
+
+def _iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def fetch_cap(bbox: list[float], zmin: int, zmax: int) -> dict:
+    """What downloading this box would cost, and the ceilings it is measured against.
+
+    ONE EXPRESSION, THREE CALLERS — the job carries it on every progress snapshot,
+    the endpoint refuses on it, and the CLI prints it in its preflight. The two
+    ceilings are settings.sat_tile_cap and settings.area_size_cap_mb, which are the
+    same pair nav/areas.py's planner refuses on: a cap invented here would be a
+    third number, and the console would show one while the refusal quoted another.
+    The estimate itself is satellite.py's, from the tile walk that will actually run.
+    """
+    est = satmod.estimate(bbox, zmin, zmax)
+    cap_tiles, cap_mb = int(settings.sat_tile_cap), float(settings.area_size_cap_mb)
+    within = est["tiles"] <= cap_tiles and est["mb"] <= cap_mb
+    return {
+        "tiles": est["tiles"], "mb": est["mb"], "zmin": zmin, "zmax": zmax,
+        "tile_cap": cap_tiles, "mb_cap": cap_mb, "within": within,
+        "title": (f"This area is {est['tiles']} satellite tiles, about {est['mb']} MB at "
+                  f"zoom {zmin}-{zmax}. The ceiling for one area is {cap_tiles} tiles / "
+                  f"{cap_mb:.0f} MB, and this is "
+                  + ("inside it." if within else "OVER it, so nothing will be downloaded "
+                     "until the area is made smaller or the detail is lowered.")),
+        "aria_label": (f"Estimated download: {est['tiles']} tiles, about {est['mb']} "
+                       f"megabytes. The limit is {cap_tiles} tiles or {cap_mb:.0f} "
+                       f"megabytes. This area is "
+                       + ("within the limit." if within else "over the limit.")),
+    }
+
+
+def _area_meta(name: str) -> dict | None:
+    """One area's metadata as areas.py reports it — including its derived state.
+
+    Read through list_areas() rather than off the file, so this sees the same
+    document the console does: `state` there is disk truth first (an area whose
+    archive was deleted is absent whatever the record says) and the record only for
+    the two things a filesystem cannot show.
+    """
+    if not name:
+        return None
+    try:
+        return next((a for a in areamod.list_areas() if a.get("name") == name), None)
+    except Exception as exc:  # noqa: BLE001 — an unreadable card is an answer
+        log.warning("could not read area %s: %s", name, exc)
+        return None
+
+
+def _record_fetch(name: str, snap: dict) -> None:
+    """Put a job's progress on the card, as the area's own state plus the detail.
+
+    THE AREA STATE AND THE PER-SOURCE RECORD ARE WRITTEN TOGETHER, in one call, on
+    purpose. They are two views of one fact and the failure mode of keeping them
+    apart is precise: an area left saying "downloading" with a finished job beside
+    it, or the reverse. set_area_state stamps state_at as it goes, which is the
+    heartbeat list_areas() uses to call a dead download dead.
+
+    `offline` maps to ABSENT and not to failed, because nothing was attempted —
+    there is a plan on this card and no data behind it yet, which is a different
+    thing from a download that died, and it sends the operator somewhere different.
+    """
+    state = {"done": "present", "offline": "absent",
+             "failed": "failed", "cancelled": "failed"}.get(snap.get("state"), "downloading")
+    try:
+        areamod.set_area_state(name, state, why=snap.get("title"), fetch=snap)
+    except Exception as exc:  # noqa: BLE001 — a fetch must not die of its own bookkeeping
+        log.warning("could not record fetch state for %s: %s", name, exc)
+
+
+# ---- is there actually any internet -----------------------------------------
+async def internet_available() -> tuple[bool, str]:
+    """(ok, why) — asked ONCE per job, never per request, and never on the hot path.
+
+    THE PROBE IS NOT A THIRD NOTION OF "ONLINE". It is nav/cli.py's `_reachable`,
+    which is the only place in this repo that does anything about the isolated
+    segment having no resolver at all: a getaddrinfo with nobody to ask does not
+    fail, it sits, and a socket timeout bounds the connect and not the lookup. That
+    function runs the lookup on a daemon thread and enforces its own deadline. The
+    console's half of the same question is the launcher's /__net (wifi.internet),
+    which is about the HANDHELD's radios and is the right thing for the client to
+    gate its buttons on; this is about the machine that will do the downloading.
+
+    Imported lazily and run in a thread. Lazily because nav/cli.py is the terminal
+    driver and pulls in the simulator and the calibrator, which the API process has
+    no reason to carry; in a thread because _reachable blocks on a join and this is
+    the loop that flies the sub.
+    """
+    try:
+        from .cli import _reachable
+    except Exception as exc:  # noqa: BLE001 — a build without the CLI still serves
+        return False, (f"nav/cli.py is not importable ({exc}), so nothing here can tell "
+                       f"whether there is internet — and a fetch that guessed would hang")
+    return await asyncio.to_thread(_reachable, settings.crt_hub_search_url)
+
+
+# ---- what is actually on the card, per source --------------------------------
+#
+# Cached against a signature of the files themselves, exactly like _layer_cache and
+# _nominal_cache above and for the same reason: the readiness check is polled, and
+# counting rows in a tile archive on every poll is work a Pi 3B+ does not have
+# spare. A signature rather than a timer, so the answer can never be stale — the
+# moment a download writes a tile the archive's mtime moves and the next question
+# is answered from the disk.
+_pyramid_cache: dict[str, tuple[tuple, int, int, str | None]] = {}
+
+
+def _tiles_present(name: str, bbox, zmin: int, zmax: int) -> tuple[int, int, str | None]:
+    """(have, want, error) for one area's imagery pyramid.
+
+    Counted out of the archive, not out of the metadata. satellite.download_area
+    records tiles_ok when it finishes, and that number describes the run rather than
+    the card: a download killed at tile 700 of 900 writes no metadata at all, and one
+    whose archive was later truncated still has its old number sitting there. The
+    question before a dive is what is ON THIS CARD.
+    """
+    want = satmod.count_tiles(bbox, zmin, zmax)
+    path = settings.areas_dir / f"{name}.mbtiles"
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return 0, want, None
+    except OSError as exc:
+        return 0, want, f"{type(exc).__name__}: {exc}"
+    sig = (st.st_mtime_ns, st.st_size, tuple(bbox), zmin, zmax)
+    key = str(path)
+    hit = _pyramid_cache.get(key)
+    if hit is not None and hit[0] == sig:
+        return hit[1], hit[2], hit[3]
+    have, err = 0, None
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            minlon, minlat, maxlon, maxlat = bbox
+            for z in range(zmin, zmax + 1):
+                xa, ya = satmod.deg2num(minlat, minlon, z)
+                xb, yb = satmod.deg2num(maxlat, maxlon, z)
+                x0, x1 = min(xa, xb), max(xa, xb)
+                y0, y1 = min(ya, yb), max(ya, yb)
+                # MBTiles rows are TMS-flipped — y counted from the bottom. The flip
+                # is satellite.read_tile's, and reproducing it here rather than
+                # importing it is deliberate: read_tile answers about one tile and
+                # this needs a range, and the two must agree about which row is which
+                # or a full archive reads as an empty one.
+                r0, r1 = (1 << z) - 1 - y1, (1 << z) - 1 - y0
+                have += con.execute(
+                    "SELECT COUNT(*) FROM tiles WHERE zoom_level=? AND tile_column "
+                    "BETWEEN ? AND ? AND tile_row BETWEEN ? AND ?",
+                    (z, x0, x1, r0, r1)).fetchone()[0]
+        finally:
+            con.close()
+    except Exception as exc:  # noqa: BLE001 — a corrupt archive is an answer, never a 500
+        have, err = 0, f"{type(exc).__name__}: {exc}"
+    _pyramid_cache[key] = (sig, have, want, err)
+    return have, want, err
+
+
+def _src(status: str, title: str, aria: str, **extra) -> dict:
+    return {"status": status, "title": title, "aria_label": aria, **extra}
+
+
+def area_completeness(name: str) -> dict:
+    """Is this area's offline data ALL here — per source, and in one word.
+
+    The three questions an operator has at the water's edge, answered off the disk
+    with no network involved: is there a picture, are the hazards on the card, is
+    there a channel to snap to. Everything below distinguishes "not downloaded"
+    from "downloaded and unreadable", because they send somebody to two different
+    places and only one of them is fixable at the bank.
+    """
+    if not name:
+        return {"area": None, "complete": False, "sources": {}, "fetch": None,
+                "detail": "no area is activated, so there is nothing to be complete",
+                "title": ("No offline area is active. Nothing here claims this water is "
+                          "charted or that it is not — there is simply no area to ask "
+                          "about."),
+                "aria_label": ("No offline area is active, so its completeness cannot be "
+                               "reported.")}
+    meta = _area_meta(name) or {}
+    bbox = meta.get("bbox")
+    zmin = int(meta.get("minzoom", settings.sat_min_zoom) or settings.sat_min_zoom)
+    zmax = int(meta.get("maxzoom", settings.sat_max_zoom) or settings.sat_max_zoom)
+    sources: dict[str, dict] = {}
+
+    # --- imagery -------------------------------------------------------------
+    if not bbox or len(bbox) != 4:
+        sources["imagery"] = _src(
+            "absent",
+            f"No area metadata for {name}, so there is no box to have downloaded "
+            f"imagery for and none can be checked.",
+            f"Satellite imagery for area {name} cannot be checked: the area has no "
+            f"stored bounding box.",
+            why="areas/%s.json carries no bbox" % name)
+    else:
+        have, want, err = _tiles_present(name, bbox, zmin, zmax)
+        if err is not None:
+            sources["imagery"] = _src(
+                "unreadable",
+                f"The tile archive for {name} is on the card and cannot be read ({err}). "
+                f"That is not an empty map and it is not a missing download — delete "
+                f"areas/{name}.mbtiles and fetch again while there is internet.",
+                f"The satellite tile archive for area {name} exists and cannot be read.",
+                have=0, want=want, why=err)
+        elif have >= want:
+            sources["imagery"] = _src(
+                "present",
+                f"All {want} satellite tiles for {name} are on this card, zoom "
+                f"{zmin} to {zmax}. Nothing about the imagery needs the internet again.",
+                f"All {want} satellite tiles for area {name} are downloaded.",
+                have=have, want=want)
+        else:
+            sources["imagery"] = _src(
+                "partial" if have else "absent",
+                f"{have} of {want} satellite tiles are on this card for {name}. The map "
+                f"will draw the ones it has and blank the rest — which is missing "
+                f"imagery, not water with nothing in it.",
+                f"{have} of {want} satellite tiles are downloaded for area {name}.",
+                have=have, want=want)
+
+    # --- charts (CRT) --------------------------------------------------------
+    crt_block = _crt_layers(name)
+    failed = list(crt_block.get("failed") or [])
+    corrupt = list(crt_block.get("unreadable") or [])
+    n_layers = len(crt_block.get("layers") or [])
+    if crt_block["status"] != "present":
+        sources["charts"] = _src(
+            "absent",
+            f"No Canal & River Trust hazard layer has been downloaded for {name}. "
+            f"{crt_block.get('means', '')}",
+            f"No hazard charts are downloaded for area {name}. This is missing data, "
+            f"not a clear channel.",
+            why=crt_block.get("why"), layers=0, failed=[], unreadable=[])
+    elif failed or corrupt:
+        sources["charts"] = _src(
+            "partial",
+            f"{n_layers} hazard layer(s) are on the card for {name}, and "
+            f"{len(failed)} did not download while {len(corrupt)} cannot be read. "
+            f"Nothing is known about the hazards those would have shown.",
+            f"Hazard charts for area {name} are incomplete: {len(failed)} missing, "
+            f"{len(corrupt)} unreadable.",
+            layers=n_layers, failed=failed, unreadable=corrupt)
+    else:
+        sources["charts"] = _src(
+            "present",
+            f"{n_layers} hazard layer(s) are on this card for {name} and every one of "
+            f"them was parsed, not merely found. Fetched {crt_block.get('fetched')}.",
+            f"All {n_layers} hazard chart layers for area {name} are downloaded and "
+            f"readable.",
+            layers=n_layers, failed=[], unreadable=[], fetched=crt_block.get("fetched"))
+
+    # --- centreline ----------------------------------------------------------
+    cl = settings.areas_dir / f"{name}.geojson"
+    state, err, feats, _bytes = _read_layer(cl)
+    if state == "present":
+        sources["centreline"] = _src(
+            "present",
+            f"The waterway centreline for {name} is on this card: {feats} way(s). The "
+            f"estimator can snap to it and the map has water drawn on it.",
+            f"The waterway centreline for area {name} is downloaded, with {feats} ways.",
+            features=feats)
+    elif state == "unreadable":
+        sources["centreline"] = _src(
+            "unreadable",
+            f"The centreline file for {name} is on the card and will not parse ({err}). "
+            f"Delete areas/{name}.geojson and fetch again while there is internet.",
+            f"The centreline file for area {name} exists and cannot be read.", why=err)
+    else:
+        sources["centreline"] = _src(
+            "absent",
+            f"No waterway centreline has been downloaded for {name}. Snapping has "
+            f"nothing to snap to and the published depth guidance has nothing to hang "
+            f"on — that is missing data, not a stretch with no canal in it.",
+            f"No waterway centreline is downloaded for area {name}.")
+
+    # THE AREA'S OWN WORD FOR WHAT IT IS comes from nav/areas.py and is not
+    # recomputed here. Its _derive_state() reads disk first and the record only for
+    # what a filesystem cannot show, and it is the thing that turns a "downloading"
+    # left behind by a dead process into FAILED once it has gone quiet. A second
+    # opinion in this file would eventually disagree with the console's.
+    state = meta.get("state") or ("absent" if meta else "no-such-area")
+    rec = meta.get("fetch") if isinstance(meta.get("fetch"), dict) else None
+    live = state == "downloading"
+    missing = [k for k, s in sources.items() if s["status"] != "present"]
+    # A DOWNLOAD IN FLIGHT IS NOT COMPLETE EVEN IF EVERY SOURCE HAPPENS TO READ
+    # PRESENT AT THIS INSTANT. The imagery archive gains rows as it goes and the
+    # counts are only a snapshot; "still coming" is its own answer and the pre-dive
+    # gate must refuse it rather than round it up to yes.
+    complete = not missing and not live
+    if live:
+        detail = (f"area={name}: state=downloading — "
+                  f"{', '.join(missing) if missing else 'finishing up'}. Not yet.")
+    elif missing:
+        detail = (f"area={name}: {', '.join(missing)} not on this card (area state="
+                  f"{state}"
+                  + (f", {meta.get('state_why')}" if meta.get("state_why") else "") + ")")
+    else:
+        detail = (f"area={name}: imagery, hazard charts and centreline all present and "
+                  f"readable (area state={state})")
+    return {
+        "area": name, "complete": complete, "missing": missing,
+        "state": state, "downloading": live, "sources": sources, "fetch": rec,
+        "bbox": bbox, "zmin": zmin, "zmax": zmax, "detail": detail,
+        "title": (f"Offline data for {name}: "
+                  + ("everything is on this card." if complete else
+                     f"{', '.join(missing) or 'a fetch'} still "
+                     + ("downloading." if live else "missing."))),
+        "aria_label": (f"Area {name} is "
+                       + ("complete: imagery, hazard charts and waterway centreline are "
+                          "all downloaded and readable."
+                          if complete else
+                          f"incomplete. Missing or unfinished: "
+                          f"{', '.join(missing) or 'a download is in progress'}.")),
+    }
+
+
+async def _reverse_label(lat: float, lon: float) -> str | None:
+    """A human title for a new area, best-effort. Only ever called WITH internet.
+
+    A LABEL, NEVER A RENAME. nav/areas.py names an area the moment it is created,
+    which is before this can be asked — the geocode needs a network and creating an
+    area does not, and an area that could not be created without one would be
+    useless at the canal. Its docstring says the name is permanent for good reason:
+    the .mbtiles, the hazard directory and every dive journal hang off it. So what
+    arrives late goes in `label`, which is what a console shows beside the name.
+    """
+    try:
+        gc = await satmod.reverse_geocode(lat, lon)
+    except Exception as exc:  # noqa: BLE001 — a nameless area still works
+        log.info("reverse geocode failed (%s) — the area keeps its date-based name", exc)
+        return None
+    return gc or None
+
+
+def _offline_record(area: str, why: str, reason: str = "") -> dict:
+    """The record of a fetch that never started because there is no internet.
+
+    A REAL ANSWER AND NOT AN ERROR. This is what the canal looks like: the whole
+    subsystem exists because there is no signal at the water, so "did not start" is
+    the expected outcome of every trigger that fires at the bank, and it has to read
+    that way or the operator learns to dismiss it.
+    """
+    return {
+        "area": area, "state": "offline", "reason": reason,
+        "started": _iso(), "finished": _iso(), "pid": os.getpid(),
+        "net": {"ok": False, "why": why},
+        "sources": {k: _src("pending", f"Not started: {label} needs internet.",
+                            f"{label} was not downloaded because there is no internet.",
+                            why=why)
+                    for k, label, _ in FETCH_SOURCES},
+        "title": (f"Nothing was downloaded for {area}: there is no internet here. "
+                  f"{why}. This is the normal state at the water's edge and not a "
+                  f"fault — but anything missing from this card stays missing until "
+                  f"you are back on a connection."),
+        "aria_label": (f"No download was started for area {area} because there is no "
+                       f"internet connection. {why}"),
+    }
+
+
+class AreaFetch:
+    """One background job that brings ONE area's offline data up to date.
+
+    Sequential by construction: three sources, one after another, each driven by the
+    module that owns it. It exists to be watched — snapshot() is a complete document
+    at every instant, per source, so a console can render "charts done, imagery
+    failed" instead of a single percentage that says nothing an operator can act on.
+
+    IT DOES NOT RAISE. Same rule crt.download_hazards states for itself, for the same
+    reason one layer up: a Trust server having a bad afternoon must not throw away an
+    imagery pyramid that already succeeded. Every source failure is caught, recorded
+    with its reason, and the next source is attempted.
+    """
+
+    def __init__(self, area: str, bbox: list[float], zmin: int, zmax: int, *,
+                 refresh: bool = False, reason: str = "", radius_m: float | None = None,
+                 on_change=None) -> None:
+        self.area = area
+        self.bbox = [float(v) for v in bbox]
+        self.zmin, self.zmax = int(zmin), int(zmax)
+        self.refresh = bool(refresh)
+        self.reason = reason
+        self.radius_m = radius_m
+        self._on_change = on_change
+        self.state = "queued"
+        self.started: str | None = None
+        self.finished: str | None = None
+        self.error: str | None = None
+        self.net: dict | None = None
+        # WHAT THIS WILL COST, carried on every progress snapshot rather than
+        # computed by whoever renders one: "say what the cap is and make it visible"
+        # means visible before the first request, not explainable after the last.
+        self.cap = fetch_cap(self.bbox, self.zmin, self.zmax)
+        self.sources: dict[str, dict] = {
+            key: {"status": "pending", "label": label, "absence_means": means,
+                  "done": 0, "total": None, "why": "", "detail": ""}
+            for key, label, means in FETCH_SOURCES
+        }
+
+    # ---- state ----------------------------------------------------------
+    @property
+    def is_running(self) -> bool:
+        return self.state in _JOB_LIVE
+
+    def snapshot(self) -> dict:
+        done = [k for k, s in self.sources.items() if s["status"] in ("done", "skipped")]
+        failed = [k for k, s in self.sources.items() if s["status"] == "failed"]
+        return {
+            "area": self.area, "state": self.state, "reason": self.reason,
+            "started": self.started, "finished": self.finished,
+            "error": self.error, "net": self.net, "pid": os.getpid(),
+            "bbox": self.bbox, "zmin": self.zmin, "zmax": self.zmax,
+            "radius_m": self.radius_m, "refresh": self.refresh, "cap": self.cap,
+            "sources": {k: dict(v) for k, v in self.sources.items()},
+            "order": [k for k, _, _ in FETCH_SOURCES],
+            "done": done, "failed": failed,
+            "title": self._title(done, failed),
+            "aria_label": self._aria(done, failed),
+        }
+
+    def _settled(self) -> dict:
+        """Stamp the finish time and WRITE THE CARD, then hand back the snapshot.
+
+        Every terminal path goes through here. `_fetch_ended` also records, and that
+        is deliberately kept — it is the backstop for run() raising after all — but
+        it is an add_done_callback, which the loop schedules for a LATER turn. So
+        between a job finishing and its callback running there was a window in which
+        the task was done, the state said "done", and the card on disk still said
+        "downloading". Anything polling in that window read a finished download as a
+        live one, which is the same shape of lie as a frozen sensor reading: the
+        number is stale and nothing on screen says so. Recording synchronously here
+        closes the window rather than making it small.
+        """
+        self.finished = self.finished or _iso()
+        snap = self.snapshot()
+        try:
+            _record_fetch(self.area, snap)
+        except Exception as exc:  # noqa: BLE001 — a fetch must not die of bookkeeping
+            log.warning("could not record the settled fetch for %s: %s", self.area, exc)
+        return snap
+
+    def _title(self, done: list[str], failed: list[str]) -> str:
+        running = [k for k, s in self.sources.items() if s["status"] == "running"]
+        if self.state == "offline":
+            return (f"Nothing was downloaded for {self.area}: there is no internet here. "
+                    f"{(self.net or {}).get('why', '')}")
+        if self.state == "cancelled":
+            return (f"The fetch for {self.area} was stopped. What had already landed is on "
+                    f"the card; the rest is not, and the map will draw the difference as "
+                    f"blank rather than as empty water.")
+        if self.state in _JOB_LIVE:
+            what = ", ".join(f"{k} ({self.sources[k]['detail']})" for k in running) or "starting"
+            return (f"Downloading offline data for {self.area}: {what}. "
+                    f"{len(done)} of {len(self.sources)} source(s) finished. The console "
+                    f"stays flyable throughout — this runs in the background.")
+        if failed:
+            return (f"Offline data for {self.area}: {', '.join(done) or 'nothing'} finished, "
+                    f"{', '.join(failed)} FAILED. What failed was not written, so the map is "
+                    f"missing it rather than showing it as empty.")
+        return (f"Offline data for {self.area} is up to date: "
+                f"{', '.join(done)} — nothing here needs the internet again.")
+
+    def _aria(self, done: list[str], failed: list[str]) -> str:
+        if self.state in _JOB_LIVE:
+            return (f"Downloading offline data for area {self.area}. {len(done)} of "
+                    f"{len(self.sources)} sources finished.")
+        if self.state == "offline":
+            return f"No download was started for area {self.area}: there is no internet."
+        if failed:
+            return (f"Download for area {self.area} finished with failures. Completed: "
+                    f"{', '.join(done) or 'none'}. Failed: {', '.join(failed)}.")
+        return f"Download for area {self.area} is complete. Sources: {', '.join(done)}."
+
+    def crash(self, exc: BaseException) -> None:
+        """The job died of something it did not catch. Say so where it will be seen."""
+        self.state = "failed"
+        self.error = f"{type(exc).__name__}: {exc}"
+        self.finished = self.finished or _iso()
+        for s in self.sources.values():
+            if s["status"] in ("pending", "running"):
+                s["status"] = "failed"
+                s["why"] = f"the fetch job itself died: {self.error}"
+
+    # ---- progress -------------------------------------------------------
+    def _set(self, key: str, **fields) -> None:
+        status = fields.get("status")
+        if status is not None and status not in _SRC_STATES:
+            # Warned, not raised: a mistyped status is a bug in this file and it
+            # must not be the thing that ends a download the operator is waiting
+            # for. It is worth saying out loud, though — the console switches on
+            # these words, and one it does not know renders as nothing at all,
+            # which is the silent-blank failure this whole subsystem is against.
+            log.warning("fetch source %s given an unknown status %r (not one of %s)",
+                        key, status, list(_SRC_STATES))
+        self.sources[key].update(fields)
+
+    async def _emit(self) -> None:
+        if self._on_change is None:
+            return
+        try:
+            await self._on_change(self.snapshot())
+        except Exception as exc:  # noqa: BLE001 — a watcher must not stop a download
+            log.warning("fetch progress callback failed: %s", exc)
+
+    # ---- the run --------------------------------------------------------
+    async def run(self, net: tuple[bool, str] | None = None) -> dict:
+        self.started = _iso()
+        try:
+            self.state = "checking"
+            await self._emit()
+            # GATED ONCE, HERE. Not per request and not per source: a job that
+            # re-probed between layers would spend a canal-side afternoon on
+            # timeouts, and a job that probed nothing would hand every one of a
+            # thousand tile requests to a resolver that is not there.
+            ok, why = net if net is not None else await internet_available()
+            self.net = {"ok": ok, "why": why}
+            if not ok:
+                self.state = "offline"
+                for key in self.sources:
+                    self._set(key, status="pending",
+                              why=f"not started — there is no internet: {why}")
+                return self._settled()
+            if not self.cap["within"]:
+                self.state = "failed"
+                self.error = self.cap["title"]
+                for key in self.sources:
+                    self._set(key, status="failed", why=self.cap["title"])
+                return self._settled()
+
+            self.state = "running"
+            await self._emit()
+            await self._label()
+            await self._centreline()
+            await self._charts()
+            await self._imagery()
+
+            failed = [k for k, s in self.sources.items() if s["status"] == "failed"]
+            self.state = "failed" if failed else "done"
+            if failed:
+                self.error = "; ".join(f"{k}: {self.sources[k]['why']}" for k in failed)
+            return self._settled()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # run() is documented as not raising and _fetch_ended exists to catch it
+            # being wrong about that — but the CARD must not be left saying
+            # "downloading" in the turn before that callback gets to run. Record
+            # first, then let the callback do its own accounting.
+            self.state = "failed"
+            self.error = self.error or "the fetch died"
+            self._settled()
+            raise
+        except asyncio.CancelledError:
+            # STOPPED, and it has to be written down without awaiting anything —
+            # the loop is tearing this task down and an await here may never
+            # resume. A synchronous merge is the last honest act available.
+            self.state = "cancelled"
+            self.finished = _iso()
+            for s in self.sources.values():
+                if s["status"] in ("pending", "running"):
+                    s["status"] = "failed"
+                    s["why"] = "the fetch was stopped before this source was finished"
+            _record_fetch(self.area, self.snapshot())
+            raise
+        finally:
+            self.finished = self.finished or _iso()
+
+    def _restore(self, keep: dict) -> None:
+        """Re-apply the metadata satellite.download_area wrote over. See
+        _PRESERVE_ACROSS_IMAGERY. Never overwrites a field the download supplied."""
+        if not keep:
+            return
+        now = _area_meta(self.area) or {}
+        missing = {k: v for k, v in keep.items() if now.get(k) is None}
+        if not missing:
+            return
+        try:
+            areamod._merge_meta(self.area, missing)
+        except Exception as exc:  # noqa: BLE001 — the tiles matter more than the labels
+            log.warning("could not restore area metadata for %s: %s", self.area, exc)
+
+    async def _label(self) -> None:
+        """Give a date-named area a human title, once, while there is internet.
+
+        nav/areas.py names an area before this job exists — it has to, because
+        creating an area must work with no network — so a launch point with no
+        geocode becomes "launch-2026-08-08". With six of those on a handheld the
+        operator cannot tell which pound is which. This fills in `label`, which
+        areas.py documents as the field a late geocode goes into, and renames
+        nothing: the .mbtiles, data/crt/<name>/ and every dive journal that names
+        an area all hang off the name.
+        """
+        meta = _area_meta(self.area) or {}
+        if meta.get("label") or not meta.get("origin"):
+            return
+        o = meta["origin"]
+        label = await _reverse_label(o.get("lat"), o.get("lon"))
+        if label:
+            try:
+                areamod._merge_meta(self.area, {"label": label})
+            except Exception as exc:  # noqa: BLE001 — a nameless area still works
+                log.info("could not store the area label: %s", exc)
+
+    # ---- source 1: the waterway centreline ------------------------------
+    async def _centreline(self) -> None:
+        key = "centreline"
+        path = settings.areas_dir / f"{self.area}.geojson"
+        state, err, feats, _b = _read_layer(path)
+        if state == "present" and not self.refresh:
+            # ALREADY ON THE CARD. Skipped, not re-fetched: Overpass is a free
+            # public service run on donations and this file does not change between
+            # two dives on the same canal.
+            self._set(key, status="skipped", done=1, total=1,
+                      detail=f"already on the card ({feats} ways)",
+                      why="already downloaded — nothing was re-requested")
+            await self._emit()
+            return
+        self._set(key, status="running", total=1, detail="asking Overpass for the channel")
+        await self._emit()
+        try:
+            gj = await satmod.fetch_centreline(self.bbox)
+        except Exception as exc:  # noqa: BLE001
+            self._set(key, status="failed", why=f"{type(exc).__name__}: {exc}")
+            await self._emit()
+            return
+        if not gj:
+            # TWO DIFFERENT THINGS ARRIVE HERE AS None and satellite.py cannot tell
+            # them apart: a query that failed, and a box with no mapped waterway in
+            # it. Recorded as a failure with both readings named, because the one
+            # thing that must not happen is an empty centreline file being written
+            # — that would claim "there is no canal here", which is the exact lie
+            # the rest of this module is built to refuse.
+            self._set(key, status="failed",
+                      why=("Overpass returned no waterway for this box. Either nothing "
+                           "is mapped here or the query did not get through, and "
+                           "nothing on this vehicle can tell which — so no file was "
+                           "written, because an empty centreline would claim there is "
+                           "no canal here"))
+            await self._emit()
+            return
+        # Written through areas.py's atomic writer — the same one the metadata
+        # uses. A centreline truncated by a Ctrl-C parses as nothing, and this
+        # file's own /centreline endpoint would then report UNREADABLE for a
+        # layer that was perfectly good a second earlier.
+        areamod._atomic_write_json(path, gj)
+        n = len(gj.get("features") or [])
+        self._set(key, status="done", done=1, total=1,
+                  detail=f"{n} way(s) written", why="")
+        await self._emit()
+
+    # ---- source 2: the CRT hazard layers --------------------------------
+    async def _charts(self) -> None:
+        key = "charts"
+        crt = _crt_mod()
+        if crt is None:
+            self._set(key, status="failed",
+                      why="api/nav/crt.py is not in this build, so nothing here can "
+                          "download hazard data at all")
+            await self._emit()
+            return
+        block = _crt_layers(self.area)
+        if (block["status"] == "present" and not block.get("failed")
+                and not block.get("unreadable") and not self.refresh):
+            self._set(key, status="skipped", done=1, total=1,
+                      detail=f"{len(block.get('layers') or [])} layer(s) already on the card",
+                      why=(f"every layer the last fetch produced is present and parses "
+                           f"(fetched {block.get('fetched')}) — nothing was re-requested. "
+                           f"Pass refresh to fetch them again"))
+            await self._emit()
+            return
+        self._set(key, status="running", detail="asking the Trust what it publishes")
+        await self._emit()
+
+        async def say(msg: dict) -> None:
+            st = msg.get("state")
+            if st == "layer":
+                self._set(key, done=max(0, int(msg.get("n") or 1) - 1),
+                          total=msg.get("of"), detail=f"layer {msg.get('layer')}")
+                await self._emit()
+            elif st == "wrote":
+                self._set(key, detail=f"{msg.get('layer')}: {msg.get('features')} feature(s)")
+                await self._emit()
+
+        try:
+            res = await crt.download_hazards(self.area, self.bbox, progress=say)
+        except Exception as exc:  # noqa: BLE001 — documented not to raise; believe the disk
+            self._set(key, status="failed", why=f"the hazard fetch raised: {exc}")
+            await self._emit()
+            return
+        # BELIEVE THE DISK, NOT THE RETURN VALUE — the same rule nav/cli.py's
+        # crt-fetch already follows. download_hazards reports failure by returning,
+        # and a layer that did not land leaves no file on purpose.
+        after = _crt_layers(self.area)
+        n = len(after.get("layers") or [])
+        bad = list(after.get("failed") or []) + list(after.get("unreadable") or [])
+        if after["status"] != "present" or bad:
+            self._set(key, status="failed", done=n, total=n + len(bad),
+                      detail=f"{n} layer(s) on the card",
+                      why=(res.get("error") or after.get("why")
+                           or f"{len(bad)} layer(s) missing or unreadable: {', '.join(bad[:6])}"))
+        else:
+            self._set(key, status="done", done=n, total=n,
+                      detail=f"{n} layer(s), {res.get('features', '?')} feature(s)", why="")
+        await self._emit()
+
+    # ---- source 3: the satellite imagery --------------------------------
+    async def _imagery(self) -> None:
+        key = "imagery"
+        have, want, err = _tiles_present(self.area, self.bbox, self.zmin, self.zmax)
+        if err is not None:
+            self._set(key, status="failed", done=0, total=want,
+                      why=(f"the tile archive is on the card and cannot be read ({err}) — "
+                           f"delete areas/{self.area}.mbtiles and fetch again, because "
+                           f"re-running over a broken archive will not repair it"))
+            await self._emit()
+            return
+        if have >= want and not self.refresh:
+            self._set(key, status="skipped", done=have, total=want,
+                      detail=f"all {want} tiles already on the card",
+                      why="every tile in this pyramid is already downloaded — Esri was "
+                          "not asked for a single one of them")
+            await self._emit()
+            return
+        self._set(key, status="running", done=have, total=want,
+                  detail=f"{have} of {want} tiles on the card")
+        await self._emit()
+
+        # WHEN THE LINK DIES MID-PYRAMID, STOP. satellite._fetch_retry gives every
+        # tile three attempts with 1.5 s of backoff and then leaves it missing —
+        # correct for ONE bad tile, and catastrophic for a hotspot that has gone
+        # away, because it then spends 1.5 s per tile on the whole remaining
+        # pyramid. Measured on the default 1.2 km area: 970 tiles is twenty-four
+        # minutes of a console reporting a download against a network that is not
+        # there, and no state on the card moving the entire time. That is the
+        # "never spend the afternoon retrying" rule at tile scale.
+        #
+        # SO: the last time a tile actually LANDED is watched, and the download is
+        # cancelled when nothing has for _IMAGERY_STALL_S. Whatever committed stays
+        # on the card and the next run continues from it — this gives up on the
+        # network, never on the tiles. The window has to be longer than a healthy
+        # progress interval (satellite.py reports every 25 tiles, which at the
+        # polite 6 a second is about four seconds) and shorter than an operator's
+        # patience, and it is derived from the rate so a slower configured rate does
+        # not turn into false cancellations.
+        stall = max(_IMAGERY_STALL_S, 60.0 / max(0.5, settings.sat_rate_per_s))
+        seen = {"ok": have, "at": time.monotonic()}
+
+        async def say(msg: dict) -> None:
+            if msg.get("state") != "running":
+                return
+            got = int(msg.get("ok") or 0)
+            if got > seen["ok"]:
+                seen["ok"], seen["at"] = got, time.monotonic()
+            self._set(key, done=int(msg.get("done") or 0), total=msg.get("total"),
+                      detail=f"{got} tile(s) written")
+            await self._emit()
+
+        # satellite.download_area walks the whole pyramid and writes with INSERT OR
+        # REPLACE, so an interrupted archive is completed by re-running it and
+        # nothing is ever left half-written — sqlite commits or it does not. It also
+        # fetches the centreline itself at the end, which is one extra Overpass
+        # request on a run that downloads imagery; it is left alone rather than
+        # worked around, because this module sequences the downloaders and does not
+        # reimplement them.
+        # Taken BEFORE the download, because the download is what removes them.
+        keep = {k: v for k, v in (_area_meta(self.area) or {}).items()
+                if k in _PRESERVE_ACROSS_IMAGERY}
+        task = asyncio.ensure_future(
+            satmod.download_area(self.area, self.bbox, self.zmin, self.zmax, say,
+                                 refresh=self.refresh))
+        stalled = False
+        try:
+            while not task.done():
+                await asyncio.wait({task}, timeout=1.0)
+                if not task.done() and (time.monotonic() - seen["at"]) > stall:
+                    stalled = True
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await task
+                    break
+            if not stalled:
+                res = task.result()
+        except asyncio.CancelledError:
+            # The whole JOB is being cancelled, not just this source. Take the
+            # download with it rather than leaving it writing into an archive
+            # nobody is watching any more.
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self._set(key, status="failed", why=f"{type(exc).__name__}: {exc}")
+            self._restore(keep)
+            await self._emit()
+            return
+        # PUT BACK WHAT THE DOWNLOAD REMOVED, on every path out of it — a run that
+        # stalled rewrote the file just as thoroughly as one that finished.
+        self._restore(keep)
+        if stalled:
+            have, want, _err = _tiles_present(self.area, self.bbox, self.zmin, self.zmax)
+            self._set(key, status="failed", done=have, total=want,
+                      detail=f"{have} of {want} tiles on the card",
+                      why=(f"no tile has arrived for {stall:.0f}s, so the connection is "
+                           f"treated as gone and the download was stopped rather than "
+                           f"spending {want - have} more retries on it. The {have} tile(s) "
+                           f"that landed are on the card and a re-run continues from them"))
+            await self._emit()
+            return
+        have, want, err = _tiles_present(self.area, self.bbox, self.zmin, self.zmax)
+        if err is not None or have < want:
+            self._set(key, status="failed", done=have, total=want,
+                      detail=f"{have} of {want} tiles on the card",
+                      why=(err or f"{want - have} tile(s) did not download. The map draws "
+                                  f"what is here and blanks the rest; re-run to fill the "
+                                  f"gaps, which will not re-request what landed"))
+        else:
+            self._set(key, status="done", done=have, total=want,
+                      detail=f"{want} tiles, {res.get('size', 0):,} bytes", why="")
+        await self._emit()
+
+
+# ==========================================================================
 def build_router(svc: NavService) -> APIRouter:
     r = APIRouter()
 
     @r.post("/api/origin")
-    async def set_origin(o: Origin, override: bool = False):
+    async def set_origin(o: Origin, override: bool = False, fetch: bool = True):
         if o.accuracy > settings.max_origin_accuracy_m and not override:
             raise HTTPException(422, f"origin accuracy {o.accuracy}m exceeds {settings.max_origin_accuracy_m}m "
                                      f"— re-fix or pass ?override=true")
@@ -1259,10 +2481,22 @@ def build_router(svc: NavService) -> APIRouter:
             # back through DiveLog.load() instead of raising on the way in.
             o.heading_deg = None
         svc.set_origin(o)
-        # heading0_measured travels WITH the origin, because the number cannot say
-        # whether anything took it: 0.0 is due north and 284.0 is a bearing, and both
-        # are perfectly plausible readings for a compass that was never asked.
-        return {"ok": True, "origin": o.model_dump(), "heading0_measured": measured is not None}
+        # THE LAUNCH POINT IS THE TRIGGER, and this line is the whole fix. Until now
+        # nothing in this repo ever created an offline area, so data/areas/ was empty
+        # and the console's "no chart data is downloaded" was permanently, correctly
+        # true — the operator had to know to run a CLI command naming an area that did
+        # not exist. Setting an origin is the first instant anything here knows WHERE
+        # the vehicle will be, which is the one fact an area needs.
+        #
+        # IT RETURNS BEFORE ANYTHING IS DOWNLOADED. autofetch() only schedules a
+        # decision; that decision reads the card first and touches the network solely
+        # when something is missing AND there is internet. This endpoint is on the
+        # path an operator uses at the water's edge with a controller in their hands,
+        # so it may not wait for a socket, a DNS lookup or a thousand tiles.
+        sched = svc.autofetch(o) if fetch else {
+            "scheduled": False, "why": "not requested (?fetch=false)"}
+        return {"ok": True, "origin": o.model_dump(), "heading0_measured": measured is not None,
+                "fetch": sched}
 
     @r.get("/api/origin")
     async def get_origin():
@@ -1338,10 +2572,6 @@ def build_router(svc: NavService) -> APIRouter:
         zmax = settings.sat_max_zoom + (1 if detail == "high" else 0)
         return settings.sat_min_zoom, zmax
 
-    def _safe_name(s: str) -> str:
-        s = "".join(c if (c.isalnum() or c in "-_") else "-" for c in (s or "").strip()).strip("-")
-        return s[:48] or "area"
-
     @r.get("/api/areas")
     async def get_areas():
         return {"areas": areamod.list_areas(), "extractor_available": areamod.pmtiles_available()}
@@ -1351,15 +2581,120 @@ def build_router(svc: NavService) -> APIRouter:
         zmin, zmax = _zooms(payload.get("detail", "standard"))
         return satmod.estimate(payload["bbox"], payload.get("zmin", zmin), payload.get("zmax", zmax))
 
+    # ---- the bootstrap fetch: drive it, and watch it -------------------------
+    #
+    # THREE ENDPOINTS AND A WEBSOCKET FRAME, because the console has three different
+    # questions and they must not be answered by one number. "What is happening right
+    # now" is GET /api/areas/fetch. "Is this area actually finished" is GET
+    # /api/areas/<name>/complete, and it is answered off the disk with no job running
+    # and no network — it is the question that survives a reboot. "Do it" is POST.
+    # Progress arrives unasked on /ws/nav as {"type":"area_fetch", …}, the same socket
+    # POST /api/areas already streams area_progress on, so a console that is already
+    # connected does not have to poll to watch a download it started.
+
+    @r.get("/api/areas/fetch")
+    async def fetch_status():
+        """The running job, or the last one, or a plainly-idle document."""
+        return svc.fetch_state()
+
+    @r.post("/api/areas/fetch")
+    async def fetch_start(payload: dict = Body(default={})):
+        """Start one background fetch. Returns AT ONCE, with what it started.
+
+        DELIBERATELY DOES NO NETWORK WORK OF ITS OWN, not even a name lookup: this
+        answers in milliseconds and the job it started does the asking. The internet
+        gate lives inside the job, so a POST at the canal comes back "checking" and
+        settles to "offline" a few seconds later on the socket — which is a state the
+        operator can see, rather than a request that sat there.
+        """
+        payload = payload or {}
+        name = payload.get("name") or payload.get("area")
+        lat, lon = payload.get("lat"), payload.get("lon")
+        if lat is None or lon is None:
+            o = svc.origin
+            if o is not None:
+                lat, lon = o.lat, o.lon
+        want_detail = payload.get("detail")
+        meta = _area_meta(name) if name else None
+        if meta is None:
+            # NO AREA BY THAT NAME YET, so one is defined — by nav/areas.py, which
+            # owns the radius, the reuse rule and both caps. A refusal comes back as
+            # its sentence, quoting the number it is enforcing, rather than as a
+            # silently smaller download.
+            if lat is None or lon is None:
+                raise HTTPException(400, "give an existing area name, or lat+lon, or set "
+                                         "an origin first — an offline area needs to know "
+                                         "where it is")
+            try:
+                plan = areamod.create_area(
+                    float(lat), float(lon), radius_m=payload.get("radius_m"),
+                    bbox=payload.get("bbox"), name=name,
+                    detail=want_detail or "standard")
+            except ValueError as exc:
+                raise HTTPException(400, str(exc))
+            name = plan["name"]
+            meta = _area_meta(name) or {}
+        bbox = meta.get("bbox")
+        if not bbox:
+            raise HTTPException(400, f"area {name!r} has no usable bbox, so there is no "
+                                     f"box to fetch — nothing here will guess one")
+        if want_detail is None:
+            # Nobody said how much detail they wanted, so keep the pyramid this area
+            # already has. Mixing zoom ranges into one archive would leave the
+            # completeness check counting tiles against a range no run ever fetched.
+            zmin = int(meta.get("minzoom") or settings.sat_min_zoom)
+            zmax = int(meta.get("maxzoom") or settings.sat_max_zoom)
+        else:
+            zmin, zmax = _zooms(want_detail)
+        cap = fetch_cap(bbox, zmin, zmax)
+        if not cap["within"]:
+            # REFUSED WITH THE NUMBERS, before the first request is made. Silently
+            # shrinking the area would be the worse failure: the operator would get
+            # a smaller card than they asked for and nothing on screen would say so.
+            raise HTTPException(400, cap["title"])
+        if svc.active_area != name:
+            svc.activate_area(name)
+        return await svc.start_fetch(name, bbox, zmin, zmax,
+                                     refresh=bool(payload.get("refresh")),
+                                     radius_m=(meta.get("origin") or {}).get("radius_m"),
+                                     reason=payload.get("reason") or "asked for by the console")
+
+    @r.post("/api/areas/fetch/cancel")
+    async def fetch_cancel():
+        """Stop the running job. What already landed stays on the card."""
+        snap = await svc.cancel_fetch()
+        if snap is None:
+            raise HTTPException(404, "no fetch is running")
+        return snap
+
+    @r.get("/api/areas/{name}/complete")
+    async def area_complete(name: str):
+        """Is this area's offline data all here? Off the disk, per source.
+
+        The pre-dive question, and it must be answerable with the radios off — so
+        nothing in this path resolves a hostname or asks a running job anything. A
+        card that was filled last week and a card that is filling right now are both
+        described by what is on the disk plus the fetch record the disk carries.
+        """
+        if not _NAME_OK.match(name or ""):
+            raise HTTPException(400, "bad area name")
+        return area_completeness(name)
+
     @r.post("/api/areas")
     async def area_create(payload: dict = Body(...)):
         bbox = payload["bbox"]
         zmin, zmax = _zooms(payload.get("detail", "standard"))
         name = payload.get("name")
-        if not name:                                    # §4 — auto-name (reverse geocode, else coords)
-            gc = await satmod.reverse_geocode((bbox[1] + bbox[3]) / 2, (bbox[0] + bbox[2]) / 2)
-            name = gc or f"{(bbox[1]+bbox[3])/2:.4f}_{(bbox[0]+bbox[2])/2:.4f}"
-        name = _safe_name(name)
+        if not name:                                    # §4 — auto-name (reverse geocode, else date)
+            name = await satmod.reverse_geocode((bbox[1] + bbox[3]) / 2, (bbox[0] + bbox[2]) / 2)
+        # ONE NAMING RULE FOR THE WHOLE SUBSYSTEM, and it is nav/areas.py's. This
+        # used to have its own slug function and its own coordinate fallback, so a
+        # box drawn by hand and the same water reached from a launch point could
+        # land on two directory names — two half-full cards, and the console would
+        # show whichever it happened to activate. slugify is stricter than the old
+        # one on purpose (this becomes a FAT filename, a URL segment and a directory
+        # under data/crt/), and default_area_name supplies the date-based fallback.
+        name = areamod.slugify(name) or areamod.default_area_name()
 
         async def progress(p):
             await svc._broadcast(json.dumps({"type": "area_progress", **p}))

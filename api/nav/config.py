@@ -132,6 +132,60 @@ class NavSettings:
     overpass_url: str = field(default_factory=lambda: _s("NAV_OVERPASS", "https://overpass-api.de/api/interpreter"))
     nominatim_url: str = field(default_factory=lambda: _s("NAV_NOMINATIM", "https://nominatim.openstreetmap.org"))
 
+    # --- auto-created offline areas (nav/areas.py create_area) -------------------
+    # WHY THESE EXIST. data/areas/ was empty on every card ever built, because
+    # nothing in the repo could create an area: areas.py listed them, satellite.py
+    # filled in one that already had a name and a bbox, crt.py refused to fetch for
+    # an area that did not exist. Setting the launch point is the first moment the
+    # system knows WHERE it will be, so that is what now makes one — and these are
+    # the numbers that decide how big "here" is.
+    #
+    # 1200 m RADIUS = a 2.4 km square around the launch point. Three reasons for
+    # that number and not a rounder one: it is the size of the only hand-made area
+    # this repo has ever had (data/crt/gas-street's bbox is 2.4 x 2.2 km, drawn by
+    # an operator who knew the canal); a tethered ROV works a pound, not a county,
+    # and 1.2 km reaches the lock at each end of most of them; and at the z16-z18
+    # imagery this console downloads it costs ~970 tiles, ~19 MB and ~2.7 minutes
+    # at the polite 6 req/s — done before the tether is rigged. An area that takes
+    # longer to fetch than the dive takes to run would be abandoned half-finished,
+    # which is the one outcome worse than no area at all.
+    area_radius_m: float = field(default_factory=lambda: _f("NAV_AREA_RADIUS_M", 1200.0))
+    # HARD CAP on the radius. 3000 m = a 6 km square = ~5700 tiles, ~110 MB, ~16
+    # minutes: still inside sat_tile_cap and area_size_cap_mb, so this cap bites
+    # FIRST and refuses with a sentence about the launch point instead of one about
+    # a tile budget. An operator who taps a map must never silently start a 2 GB
+    # download over a phone hotspot at the water's edge.
+    area_max_radius_m: float = field(default_factory=lambda: _f("NAV_AREA_MAX_RADIUS_M", 3000.0))
+    # IDEMPOTENCE. An existing area is REUSED when the new launch point sits inside
+    # its bbox with at least this much coverage on every side; re-tapping the same
+    # spot, or moving 50 m along the towpath, must not make a second area or
+    # re-download a tile. 250 m is a launch point's own working distance — closer
+    # to the edge than that and the map runs out just as the sub gets going, so
+    # that case grows the existing area rather than reusing it. Another city is
+    # inside nobody's bbox and gets its own area.
+    area_reuse_margin_m: float = field(default_factory=lambda: _f("NAV_AREA_REUSE_M", 250.0))
+    # A download that says "downloading" and has said nothing for this long is
+    # reported as FAILED, not as still running. The console must be able to tell a
+    # fetch in progress from a fetch whose process died — an MBTiles file appears
+    # on disk with the first tile, so "the file exists" reads as a finished area
+    # when it is 3% of one, and a map that looks complete and is not is the whole
+    # failure this state field exists to prevent. 180 s is many times the polite
+    # rate limit's worst case per tile.
+    area_state_stale_s: float = field(default_factory=lambda: _f("NAV_AREA_STATE_STALE_S", 180.0))
+    # Master switch for the whole automatic path — creating the area AND fetching
+    # into it. Default on: nothing being automatic is the bug this round exists to
+    # fix. Set it to 0 for bench work, or for an operator who would rather draw
+    # every box by hand.
+    #
+    # TWO NAMES, ONE SWITCH, AND THAT IS DELIBERATE. service.py's fetch driver
+    # already tells the operator "automatic fetching is switched off
+    # (NAV_AUTOFETCH=0)" in its own reply, so that spelling is in an operator's
+    # hands whether this file likes it or not. A half-honoured kill switch — one
+    # that stops the download but still writes areas, or the reverse — is worse
+    # than either name on its own, so both are read here and NAV_AREA_AUTO wins
+    # when both are set.
+    area_auto: bool = field(default_factory=lambda: _b("NAV_AREA_AUTO", _b("NAV_AUTOFETCH", True)))
+
     # --- Canal & River Trust hazard layers (nav/crt.py) — BOOTSTRAP-ONLY DOWNLOAD ---
     # Every hostname below is reached exactly once, by `python -m nav.crt`, while there is
     # still internet. Nothing in the serving path may resolve any of them: canal-side there

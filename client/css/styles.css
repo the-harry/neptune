@@ -557,6 +557,71 @@ body.map-blind #crt-panel.on{display:flex}
   border-radius:.3rem;border:1px solid rgba(180,107,255,.4);color:var(--on-surface-variant);
   background:transparent;cursor:pointer}
 .crt-btn:hover{border-color:var(--primary);color:var(--primary)}
+/* ---- OFFLINE DATA — the download block, above the layer list ----------------
+   Above the list and not below it: an operator whose map is blank opens this panel
+   to ask why, and "it has not been downloaded / it is downloading now" is the answer
+   before the row-by-row detail is worth reading. Its own background so the block
+   reads as one thing rather than three orphan rows, and a bottom border so the layer
+   list underneath is visibly a different subject. */
+.crt-fetch{flex:0 0 auto;padding:8px 10px 9px;border-bottom:1px solid rgba(255,255,255,.10);
+  background:rgba(180,107,255,.045)}
+.crt-fetch-head{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.crt-fetch-title{flex:1;font-family:var(--font-sans);font-size:9px;font-weight:800;letter-spacing:.14em;
+  color:var(--on-surface-variant)}
+/* The state pill uses the SAME shape as the layer rows' pill, because it is the same
+   kind of claim about the same kind of fact — and the same colour rules: a fault is
+   coloured like a fault, an outstanding download is dashed rather than red, and
+   nothing that is merely "not here yet" is allowed to wear an alarm colour. */
+.crt-fetch-pill{flex:0 0 auto;font-family:var(--font-sans);font-size:9px;font-weight:800;letter-spacing:.06em;
+  padding:2px 6px;border-radius:8px;white-space:nowrap;color:var(--on-surface-variant);
+  border:1px solid rgba(255,255,255,.14)}
+.crt-fetch-pill.f-running{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 55%,transparent)}
+.crt-fetch-pill.f-done,.crt-fetch-pill.f-held,
+.crt-fetch-pill.f-covered{color:var(--tertiary);border-color:color-mix(in srgb,var(--tertiary) 45%,transparent)}
+.crt-fetch-pill.f-failed{color:var(--error);border-color:var(--error)}
+.crt-fetch-pill.f-partial,.crt-fetch-pill.f-holding,
+.crt-fetch-pill.f-stopped{color:var(--hazard);border-color:var(--hazard)}
+.crt-fetch-pill.f-unknown{color:var(--hazard);border-style:dashed;border-color:color-mix(in srgb,var(--hazard) 55%,transparent)}
+/* NOT DOWNLOADED, NOT AUTOMATIC, NO CONNECTION and NO PI are absences that are not
+   faults — nothing has broken, the data has simply never been fetched here. Dashed
+   and dim, exactly like the layer rows' NOT DOWNLOADED pill, so the alarm colours
+   keep meaning something. */
+.crt-fetch-pill.f-offline,.crt-fetch-pill.f-off,.crt-fetch-pill.f-no-pi,
+.crt-fetch-pill.f-not-downloaded,.crt-fetch-pill.f-not-automatic,
+.crt-fetch-pill.f-idle,.crt-fetch-pill.f-no-origin,.crt-fetch-pill.f-waiting{
+  color:rgba(185,169,214,.8);border-style:dashed;border-color:rgba(185,169,214,.45)}
+.crt-fetch-why{font-family:var(--font-sans);font-size:9.5px;line-height:1.4;color:rgba(185,169,214,.92);
+  margin:0 0 6px;max-height:74px;overflow-y:auto;-webkit-user-select:text;user-select:text}
+.crt-fetch.f-failed .crt-fetch-why{color:color-mix(in srgb,var(--error) 70%,var(--on-surface))}
+.crt-fetch-rows{display:flex;flex-direction:column;gap:5px}
+.crt-fetch-row{display:flex;flex-direction:column;gap:3px}
+.crt-fetch-line{display:flex;align-items:center;gap:6px}
+.crt-fetch-src{font-family:var(--font-sans);font-size:9.5px;font-weight:800;letter-spacing:.06em;
+  color:var(--on-surface);white-space:nowrap}
+/* WHERE IT LANDS, on every row. "Imagery" downloaded to this handheld and "imagery"
+   downloaded to the Pi's card are two different copies with two different uses, and a
+   row that named only the source would let one stand in for the other. */
+.crt-fetch-dest{flex:1;font-family:var(--font-sans);font-size:9px;color:rgba(185,169,214,.7);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The bar is the "how far through" half of the requirement. It is drawn ONLY once
+   there is real progress to draw (.on): an empty trough under a row that has not
+   started looks like a download stalled at zero. */
+.crt-fetch-bar{height:3px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden;opacity:0}
+.crt-fetch-bar.on{opacity:1}
+.crt-fetch-fill{display:block;height:100%;width:0;background:var(--primary);
+  transition:width .25s linear}
+.crt-fetch-row.f-done .crt-fetch-fill,.crt-fetch-row.f-held .crt-fetch-fill{background:var(--tertiary)}
+.crt-fetch-row.f-failed .crt-fetch-fill{background:var(--error)}
+.crt-fetch-row.f-stopped .crt-fetch-fill{background:var(--hazard)}
+.crt-fetch-acts{display:flex;align-items:center;gap:6px;margin-top:7px}
+.crt-fetch-btn{font-family:var(--font-sans);font-size:9px;font-weight:800;letter-spacing:.06em;
+  padding:4px 8px;border-radius:.3rem;border:1px solid rgba(180,107,255,.4);
+  color:var(--on-surface-variant);background:transparent;cursor:pointer}
+.crt-fetch-btn:hover:not(:disabled){border-color:var(--primary);color:var(--primary)}
+.crt-fetch-btn:disabled{opacity:.4;cursor:default}
+.crt-fetch-primary{flex:1;color:var(--primary);border-color:color-mix(in srgb,var(--primary) 60%,transparent)}
+.crt-fetch-auto.on{color:var(--tertiary);border-color:var(--tertiary);
+  background:color-mix(in srgb,var(--tertiary) 12%,transparent)}
 .crt-list{flex:1;min-height:0;overflow-y:auto;padding:4px 0}
 /* Tier headings carry the tier's colour, because the tier IS the safety decision:
    orange = keep away, green = operational, dim lilac = incidental. */
@@ -580,6 +645,12 @@ body.map-blind #crt-panel.on{display:flex}
 .crt-state.s-empty{color:var(--on-surface-variant)}
 .crt-state.s-absent{color:var(--error);border-color:var(--error)}
 .crt-state.s-unavailable{color:var(--hazard);border-color:var(--hazard)}
+/* NOT DOWNLOADED is an absence too, but it is not a FAULT: nothing on this link has
+   stopped working, this console has simply never been given the data. So it is the
+   one absence that does not wear an alarm colour — dashed, to read as "outstanding"
+   rather than "broken", and visibly not the same pill as CANNOT TELL beside it. */
+.crt-state.s-not-downloaded{color:rgba(185,169,214,.8);border-style:dashed;
+  border-color:rgba(185,169,214,.45)}
 .crt-state.s-loading{color:var(--primary)}
 .crt-state.s-off,.crt-state.s-no-area{color:rgba(185,169,214,.65)}
 /* A count with a +N on it is two facts in one pill: what the Pi has saved, and what
@@ -595,8 +666,12 @@ body.map-blind #crt-panel.on{display:flex}
 .crt-locked{flex:0 0 34px;text-align:center;font-family:var(--font-sans);font-size:8px;font-weight:800;
   letter-spacing:.06em;color:var(--hazard);border:1px dashed color-mix(in srgb,var(--hazard) 60%,transparent);
   border-radius:.25rem;padding:3px 0}
-.crt-row.absent .crt-name,.crt-row.unavailable .crt-name{color:var(--on-surface-variant)}
+.crt-row.absent .crt-name,.crt-row.unavailable .crt-name,
+.crt-row.not-downloaded .crt-name{color:var(--on-surface-variant)}
 .crt-row.absent .crt-glyph,.crt-row.unavailable .crt-glyph{opacity:.4}
+/* Dimmed, but less than the two that mean something is wrong — the mark is not being
+   drawn, and the reason is that it has not arrived rather than that it is missing. */
+.crt-row.not-downloaded .crt-glyph{opacity:.55}
 .crt-credit{padding:7px 10px;border-top:1px solid rgba(255,255,255,.08);
   font-family:var(--font-sans);font-size:9px;line-height:1.35;color:rgba(185,169,214,.85);
   -webkit-user-select:text;user-select:text}
@@ -619,7 +694,33 @@ body.map-blind #crt-panel.on{display:flex}
   color:var(--on-surface-variant);background:rgba(12,1,24,.88);border:1px solid var(--outline-variant)}
 .crt-absent.on{display:block}
 .crt-absent.tier1{color:var(--error);border-color:var(--error)}
+/* ...and the quiet one, for a console that has never had chart data for this area and
+   has no Pi to get it from. Still on the map — an unmarked stretch must never read as
+   a surveyed empty one — but dashed and dimmed, because dressing "not downloaded yet"
+   as a fault is how the badge that DOES mean a fault stops being read. */
+.crt-absent.quiet{color:rgba(185,169,214,.75);border-style:dashed;
+  border-color:rgba(185,169,214,.4);opacity:.9}
 body.map-expanded .crt-absent{bottom:auto;top:78px;font-size:12px;padding:4px 12px;letter-spacing:.14em}
+
+/* THE DOWNLOAD, ON THE MAP. Parked one row ABOVE the absence badge so the two stack
+   instead of colliding — they are independent facts and both can be true at once, and
+   the one that says this map is not showing hazards must never be pushed off screen by
+   a progress figure. Deliberately the calm colour: a download in progress is the system
+   working, not a fault, and it is only allowed to look like one when it has actually
+   failed (.bad). */
+.crt-fetch-badge{position:absolute;left:50%;bottom:68px;transform:translateX(-50%);display:none;z-index:5;
+  padding:2px 8px;border-radius:9px;white-space:nowrap;pointer-events:none;
+  font-family:var(--font-sans);font-size:9px;font-weight:800;letter-spacing:.10em;
+  color:var(--primary);background:rgba(12,1,24,.88);
+  border:1px solid color-mix(in srgb,var(--primary) 55%,transparent)}
+.crt-fetch-badge.on{display:block}
+.crt-fetch-badge.ask{color:var(--hazard);border-color:var(--hazard);border-style:dashed}
+/* STOPPED BY THE OPERATOR is not a fault, and it must not wear the fault colour — but
+   the map still has holes in it, so it is not quiet either. Amber and solid: something
+   to act on, nothing that went wrong. */
+.crt-fetch-badge.part{color:var(--hazard);border-color:var(--hazard)}
+.crt-fetch-badge.bad{color:var(--error);border-color:var(--error)}
+body.map-expanded .crt-fetch-badge{bottom:auto;top:104px;font-size:12px;padding:4px 12px;letter-spacing:.14em}
 
 /* ---- expanded-map toolbar + navigate-and-select download (§4) ---- */
 #map-search{position:absolute;top:76px;left:16px;z-index:6;display:none;flex-wrap:wrap;gap:6px;width:340px;max-width:60vw}

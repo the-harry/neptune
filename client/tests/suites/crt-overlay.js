@@ -33,8 +33,50 @@
    api/nav/soundings.py's write_geojson() and api/nav/nominal.py actually emit,
    property names included, because the interesting failure is not "the client
    mishandles depth" — it is the two halves being written and read under different
-   names and nobody noticing until the map is grey. */
+   names and nobody noticing until the map is grey.
+
+   TWO DEFECTS SEEN ON A REAL CONSOLE ADDED SECTIONS 0, 6, 7 AND 8.
+
+   THE ALARM THAT MEANT NOTHING (sections 0, 6, 7). Opening this console on a bench —
+   sim, no Pi, nothing ever downloaded — lit HAZARD LAYERS · CANNOT TELL, which is
+   the loudest mark this map has. An area name remembered from an earlier session was
+   enough: the index fetch had nowhere to go, every layer was marked unavailable, and
+   the badge read that as "the hazard layers could not be asked for". Both of these
+   are true sentences and they are NOT the same sentence:
+
+     a Pi that was answering and stopped, or an area whose chart index has succeeded
+     before          ->  CANNOT TELL, loudly, and keep re-asking
+     a console that has never had chart data for this area and no link to ask down
+                     ->  "no chart data downloaded yet", quietly, in the panel
+
+   An alarm that fires on a healthy bench is an alarm that gets ignored, and the one
+   it teaches you to ignore is the one that means you are missing hazard data for the
+   water you are about to put a sub in. Nothing here relaxes the honesty rule: absent
+   is still never invented as present, a layer that genuinely could not be asked for
+   still says so, and section 6 asserts both of those in the same breath as the quiet.
+
+   THE CELLS THAT LIED ABOUT THEMSELVES (section 8). The live surveyed-depth cells —
+   the 3 m bins this session sounds for itself — were drawn as an AXIS-ALIGNED screen
+   rect built from two DIAGONALLY OPPOSITE projected corners, so the extent on screen
+   was the projection of a diagonal and not of the cell. Under the collapsed radar's
+   heading-up rotation that collapses toward zero at 45° and every 90° after: turning
+   or panning thinned every cell to a sliver and back. And they were binned off
+   MAP.track with no check on whether the telemetry behind it was real, so a SIMULATED
+   dive painted measured-style survey cells over water nothing has ever been in.
+
+   NEITHER IS VISIBLE FROM THE RENDERER'S INPUTS. The cells, their depths and their
+   metre coordinates were all correct the whole time. So section 8 taps a real 2D
+   context and measures the AREA that reaches the glass, at several headings, and
+   compares the TREATMENT each fill was painted with against the one the Pi's own
+   saved survey uses. Assertions on inputs would have passed on the shipped defect. */
 (function(){
+  /* THE ?sim=1 SECTION LOADS THE SHIPPING PAGE INTO AN IFRAME, and run.py injects
+     this suite into every /index.html it serves — including that one. A second copy
+     running in the frame would drive a different console and POST its own results
+     over the top frame's, so the report would describe whichever finished first.
+     Only the top frame is the suite; inside the frame this file is inert and the
+     frame is nothing but the console under test. */
+  if(window.top !== window) return;
   const R=[], errs=[];
   window.addEventListener('error', e=>errs.push(String(e.message)));
   // Details quote sentences straight off the page, and those contain em dashes and
@@ -49,6 +91,19 @@
 
   const AREA='test-cut';
   const BBOX=[-1.92, 52.47, -1.89, 52.49];
+  /* A SECOND AREA THAT HAS NEVER HAD CHART DATA, ANYWHERE. Its index never succeeds
+     in this suite — INDEX_MODE is 'dead' for every fetch made under it — so however
+     the console remembers "this area's index has answered before" (in memory, in
+     IndexedDB, in a stamp on the saved area), there is nothing to remember about
+     this one. That is the whole point of it: it is the bench console's area, and it
+     is the one that used to raise the map's loudest alarm from a cold start. */
+  const BENCH='bench-cut';
+  const BBOX2=[-2.02, 52.55, -1.99, 52.57];
+  /* The sentence a console with no chart data owes the operator. The spec's own
+     words are "no chart data downloaded yet" — the load-bearing part is that it
+     talks about the DOWNLOAD not having happened, which is a fact about this
+     handheld, rather than about the water, which it knows nothing about. */
+  const QUIET_RE = /download|no chart data/i;
 
   /* ---------------------------------------------------------------------------
      THE PI, AS THIS SUITE PRETENDS TO BE ONE.
@@ -228,6 +283,160 @@
     return {mean:Math.round(mean*10)/10, sd:Math.round(sd*10)/10, n:v.length};
   }
 
+  /* ---- THE BADGE, AS AN OPERATOR'S EYE ACTUALLY MEETS IT -------------------
+     .crt-absent is display:none until it is given the class `on` (css: .crt-absent.on
+     {display:block}), and `tier1` is what turns it the error colour. So "is this map
+     alarming?" is a question about the ELEMENT — its class, its computed display and
+     the box it actually occupies — and never about CRT._badge or a status string. A
+     quiet that exists only in a variable is not quiet. */
+  function badgeLookIn(doc, win){
+    const el = doc.getElementById('crt-absent');
+    if(!el) return {missing:true, on:false, tier1:false, shown:false,
+                    display:'(element missing)', h:0, w:0, text:'', cls:'', title:''};
+    const cs = win.getComputedStyle(el), r = el.getBoundingClientRect();
+    return {missing:false,
+            on:el.classList.contains('on'), tier1:el.classList.contains('tier1'),
+            display:cs.display, visibility:cs.visibility,
+            colour:cs.color, border:cs.borderStyle+' '+cs.borderColor,
+            h:Math.round(r.height), w:Math.round(r.width),
+            shown:(cs.display!=='none' && cs.visibility!=='hidden' && r.height>0.5),
+            text:norm(el.textContent), cls:el.className||'',
+            title:norm(el.getAttribute('title')||'')};
+  }
+  const badgeLook = ()=>badgeLookIn(document, window);
+  const badgeSay = b=>'badge shown='+b.shown+' class="'+b.cls+'" display='+b.display+
+                      ' box='+b.w+'x'+b.h+'px colour='+b.colour+' border='+b.border+
+                      ' text="'+b.text+'"';
+  /* IS THIS THE ALARM? Not "is there a mark on the map" — an unmarked stretch of
+     canal must never be readable as a surveyed empty one, so SOMETHING on the map
+     saying "no data here" is right in every one of these states. What must not
+     happen is the bench console wearing the mark that means a hazard layer this Pi
+     was serving has gone. That mark is the tier-1 class, the error colour, and the
+     three words HAZARD / CANNOT TELL / ABSENT. */
+  const isAlarm = b=>!!b.tier1 || /HAZARD|CANNOT\s*TELL|ABSENT/i.test(b.text||'');
+
+  /* ---------------------------------------------------------------------------
+     WHAT ACTUALLY REACHES THE GLASS.
+
+     The rotating-sliver defect cannot be caught by any check written against the
+     renderer's INPUTS: the cells, their depths and their metre coordinates were all
+     correct while the quad drawn from them collapsed to a line. So this taps a REAL
+     2D context — createPattern, canvas.width and getTransform are the genuine
+     article — and records the path every fill actually submits, in DEVICE pixels,
+     by pushing each point through ctx.getTransform() at the moment it is issued.
+
+     That last part is what makes the measurement independent of HOW the fix was
+     written. Projecting four corners and filling a quad, or drawing a plain square
+     inside a rotated local-metre transform, both arrive here as the same four
+     device-space points and the same area — which is right, because they are the
+     same picture, and the picture is the thing under test.
+     --------------------------------------------------------------------------- */
+  function polyArea(p){
+    let a=0;
+    for(let i=0,n=p.length;i<n;i++){ const q=p[(i+1)%n]; a += p[i][0]*q[1] - q[0]*p[i][1]; }
+    return Math.abs(a)/2;
+  }
+  function pathArea(subs){
+    let a=0; for(const s of subs) if(s.length>=3) a+=polyArea(s); return a;
+  }
+  function tapCtx(w, h){
+    const cv=document.createElement('canvas');
+    cv.width=Math.max(2, w|0); cv.height=Math.max(2, h|0);
+    const ctx=cv.getContext('2d');
+    const st={subs:[], cur:null, fills:[], texts:[]};
+    const dev=(x,y)=>{ const m=ctx.getTransform(); return [m.a*x+m.c*y+m.e, m.b*x+m.d*y+m.f]; };
+    const raw={};
+    ['beginPath','moveTo','lineTo','closePath','rect','fill','stroke','fillText']
+      .forEach(k=>{ raw[k]=ctx[k].bind(ctx); });
+    const styleOf=v=>(typeof v==='string') ? v : 'pattern';
+    ctx.beginPath=function(){ st.subs=[]; st.cur=null; raw.beginPath(); };
+    ctx.moveTo=function(x,y){ st.cur=[dev(x,y)]; st.subs.push(st.cur); raw.moveTo(x,y); };
+    ctx.lineTo=function(x,y){ if(!st.cur){ st.cur=[]; st.subs.push(st.cur); }
+                              st.cur.push(dev(x,y)); raw.lineTo(x,y); };
+    ctx.closePath=function(){ raw.closePath(); };
+    ctx.rect=function(x,y,rw,rh){ st.cur=[dev(x,y),dev(x+rw,y),dev(x+rw,y+rh),dev(x,y+rh)];
+                                  st.subs.push(st.cur); raw.rect(x,y,rw,rh); };
+    ctx.fill=function(){ st.fills.push({area:pathArea(st.subs), alpha:ctx.globalAlpha,
+                                        fill:styleOf(ctx.fillStyle), stroke:null});
+                         raw.fill(); };
+    // The edge belongs to the fill it was drawn around: every depth cell on this
+    // console is fill-then-stroke, and the outline is half of what says "measured".
+    ctx.stroke=function(){ const f=st.fills[st.fills.length-1];
+      if(f && !f.stroke) f.stroke={alpha:ctx.globalAlpha, style:styleOf(ctx.strokeStyle),
+                                   width:ctx.lineWidth, dash:(ctx.getLineDash()||[]).join(',')};
+      raw.stroke(); };
+    ctx.fillText=function(t,x,y){ st.texts.push(String(t)); raw.fillText(t,x,y); };
+    return {ctx:ctx, st:st};
+  }
+
+  /* THE TREATMENT, WITH THE DEPTH COLOUR THROWN AWAY.
+
+     All twelve depth colours are shared by the nominal wash, the surveyed cells and
+     the dive track, so a hue says nothing about whether a cell is claiming to be a
+     measurement. What says MEASURED is the treatment — opaque flat fill, solid white
+     edge, no hatch and no dash, exactly as crtDrawDepthKey paints the SURVEYED
+     swatch. Excluding the fill colour is the same argument the leak drop's shape
+     signature makes: a difference that is only a colour is not a difference an
+     operator reads on a towpath in sunlight, so a "simulated" cell that differs from
+     a measured one by hue alone has not been distinguished from it. */
+  function treat(f){
+    return JSON.stringify({
+      fillAlpha: Math.round((f.alpha||0)*100)/100,
+      fillIsPattern: (f.fill==='pattern'),
+      edgeAlpha: f.stroke ? Math.round((f.stroke.alpha||0)*100)/100 : null,
+      edgeColour: f.stroke ? f.stroke.style : null,
+      edgeWidth: f.stroke ? Math.round((f.stroke.width||0)*100)/100 : null,
+      edgeDash:  f.stroke ? f.stroke.dash : null});
+  }
+  const treatSay = f=>'fill '+f.fill+' @'+(Math.round((f.alpha||0)*100)/100)+
+    (f.stroke ? (', edge '+f.stroke.style+' @'+(Math.round((f.stroke.alpha||0)*100)/100)+
+                 ' w'+(Math.round((f.stroke.width||0)*100)/100)+
+                 (f.stroke.dash ? (' dashed['+f.stroke.dash+']') : ' solid'))
+              : ', NO EDGE');
+
+  /* Replay the SHIPPING depth renderer into a tapped context, with the projection
+     state (TILES.last) exactly as the live frame just left it. Nothing here builds a
+     projection of its own: the question is what the console drew, not what this
+     suite thinks it should have. */
+  function drawDepth(){
+    const T=tapCtx((MAP.canvas&&MAP.canvas.width)||600, (MAP.canvas&&MAP.canvas.height)||600);
+    let err=null;
+    try{ crtDrawDepth(T.ctx, MAP.dpr||1); }catch(e){ err=(e&&e.message)||String(e); }
+    const ppm=(typeof _crtPpm==='function') ? _crtPpm(MAP.dpr||1) : 0;
+    const px=T.st.fills.reduce((a,f)=>a+f.area, 0);
+    return {fills:T.st.fills, err:err, px:px, ppm:ppm,
+            m2:(ppm>0 ? px/(ppm*ppm) : null),
+            rot:(typeof TILES!=='undefined' && TILES.last) ? TILES.last.rot : null};
+  }
+
+  /* ---- A REAL VEHICLE, THROUGH THE CONSOLE'S OWN DOORS ---------------------
+     handleMessage() is the WebSocket message handler and MAP.navWs.onmessage is the
+     /ws/nav one: between them they are how a Pi arrives. A healthy 2S pack and a dry
+     hull, so nothing below is incidentally flying an alarm. mock:false is what makes
+     this a hull with real sensors rather than the bench simulator wearing a tether. */
+  const TEL = {type:'telemetry', mock:false, armed:false, seq:1,
+    heading:0, heading_card:'N', mag_cal:3,
+    gyro_z_dps:0.0, accel_fwd_ms2:0.0, pitch_deg:0.0, roll_deg:0.0,
+    depth:2.6, pressure:18.4, battery_v:8.1, current_a:1.2,
+    ballast_level:0.3, ballast_homed:true, ballast_needs_rehome:false, ballast_target:0.3,
+    left:0, right:0, magnet:false, light_green:false, light_white:false,
+    light_green_level:0, light_white_level:0,
+    leak:false, leak_state:'NORMAL', leak_probe_fault:null,
+    speed_ms:0.42, speed_src:'paddle', signal:4, sensor_faults:[]};
+  let telFeed=null;
+  function startTel(){
+    stopTel(); handleMessage(JSON.stringify(TEL));
+    telFeed=setInterval(()=>handleMessage(JSON.stringify(TEL)), 100);
+  }
+  function stopTel(){ if(telFeed){ clearInterval(telFeed); telFeed=null; } }
+  function navFrame(rx, hdg, x, y, d){
+    rx({data:JSON.stringify({type:'nav', t:Date.now()/1000, lat:LATO, lon:LONO,
+      depth_m:d, heading_deg:hdg, x_m:x, y_m:y, raw_lat:LATO, raw_lon:LONO, snapped:false,
+      snap_offset_m:0, range_m:Math.hypot(x,y), payout_m:60, confidence:1, mag_cal:3,
+      speed_ms:0.42, speed_src:'paddle', snagged:false, gyro_only:false, no_heading:false,
+      has_origin:true, simulated:false, reads_vehicle:true})});
+  }
+
   async function run(){
     await sleep(2600);
 
@@ -240,6 +449,29 @@
     if(typeof exitBlindNav==='function') exitBlindNav();
     if(!MAP.expanded && typeof expandMap==='function') expandMap();
     await sleep(400);
+
+    // ================= 0. A FRESH CONSOLE, WITH NO AREA AND NO PI =================
+    // FIRST, and it has to be first: this is the console before any of the setup
+    // below has given it an area, which is the state a handheld boots into out of the
+    // box and the state the reported alarm came off. Nothing has been asked of
+    // anybody, so nothing may be reported missing — and above all the loudest mark on
+    // this map must not be lit by a console that has simply not started yet.
+    const b0 = badgeLook();
+    ok('a fresh console with no map area raises NO map-level hazard alarm',
+       CRT.area===null && !b0.on && !b0.shown,
+       'CRT.area='+CRT.area+'  '+badgeSay(b0));
+    const t1boot = crtTierList(1);
+    const mute0 = t1boot.filter(e=>liveOf(row(e.id)).length < 20);
+    ok('...and the panel is not blank about it either — every hazard row still explains itself',
+       t1boot.length>0 && mute0.length===0,
+       mute0.length ? ('silent rows: '+mute0.map(e=>e.id).join(', '))
+                    : (t1boot.length+' hazard rows, e.g. '+t1boot[0].id+' says "'+
+                       liveOf(row(t1boot[0].id)).slice(0,120)+'"'));
+    const claimed0 = crtAll().filter(e=>['present','absent','empty'].indexOf(status(e.id))>=0);
+    ok('...and with nobody asked, not one layer claims to know anything about the water',
+       claimed0.length===0,
+       claimed0.length ? ('claiming an answer: '+claimed0.map(e=>e.id+'='+status(e.id)).join(', '))
+                       : ('all '+crtAll().length+' layers read "'+pillText(t1boot[0].id)+'"'));
 
     window.fetch = stub;
     await STORE.areaPut({name:AREA, bbox:BBOX, zmin:16, zmax:18, tiles:0, cached:0,
@@ -544,9 +776,423 @@
        surPatch.mean > nomPatch.mean,
        'surveyed mean '+surPatch.mean+' vs nominal '+nomPatch.mean);
 
+    // ================= 6. "I ASKED AND GOT NOTHING" IS NOT "I NEVER ASKED" ========
+    /* Section 4 proved that a console which cannot reach the Pi reports CANNOT TELL
+       rather than inventing absence, and that is still right. What it never asked is
+       WHO IS ENTITLED TO BE LOUD ABOUT IT. There are two consoles behind that one
+       status and they need different volumes:
+
+         the Pi was answering and has stopped, or this area's chart index has
+         succeeded before — something that was working is not working, and the map
+         says so in the loudest words it has;
+
+         a bench, a demo or a handheld that has never had chart data for this area
+         and has no link to ask down — nothing has broken, nothing was ever expected,
+         and the honest sentence is about the DOWNLOAD not having happened.
+
+       The second used to fire the first's alarm on every cold start, which is how an
+       operator learns to read HAZARD LAYERS · CANNOT TELL as "the console is booting".
+       That is the reading that gets somebody hurt on the day it means what it says. */
+
+    // ---- (a) an area that has never had chart data, with no Pi: QUIET ----
+    INDEX_MODE='dead';
+    const idxBefore = CALLS.index;
+    await STORE.areaPut({name:BENCH, bbox:BBOX2, zmin:16, zmax:18, tiles:0, cached:0,
+                         detail:'standard', savedAt:Date.now()+1000, mirrored:false});
+    // Through the console's own boot path: clearing the active area is what makes
+    // refreshBootstrap default-activate the newest save and hand it to crtSetArea.
+    MAP.activeArea=null;
+    await refreshBootstrap();
+    const onBench = await waitFor(()=>CRT.area===BENCH && !CRT._busy && CALLS.index>idxBefore, 10000);
+    await sleep(300);
+    ok('an area with no chart data and no Pi to ask is active (the premise of the next three)',
+       onBench && CRT.area===BENCH && CRT.indexOk===false,
+       'CRT.area='+CRT.area+' indexOk='+CRT.indexOk+' index fetches '+idxBefore+' -> '+CALLS.index+
+       ' — this area has never had a successful index on this console, and there is no link');
+    const bBench = badgeLook();
+    ok('a console that has never had chart data here is QUIET on the map',
+       !isAlarm(bBench),
+       badgeSay(bBench)+' — HAZARD LAYERS · CANNOT TELL is the loudest mark this map has, '+
+       'and a console that has never been able to ask anybody anything has not earned it. '+
+       'A quiet mark here is right and a loud one is not: the point is which of the two '+
+       'true sentences is said, and how loudly');
+    const t1bench = crtTierList(1);
+    const quietSaid = t1bench.filter(e=>QUIET_RE.test(liveOf(row(e.id))) ||
+                                        QUIET_RE.test(pillText(e.id)));
+    ok('...and it says the one true thing it knows, quietly, in the panel: nothing downloaded yet',
+       t1bench.length>0 && quietSaid.length===t1bench.length,
+       t1bench.map(e=>e.id+': pill="'+pillText(e.id)+'" says "'+
+                   liveOf(row(e.id)).slice(0,90)+'"').slice(0,3).join('  |  ')+
+       ' — the truthful sentence is about the DOWNLOAD not having happened on this '+
+       'handheld, which is a fact about this console; anything about the water is not');
+    const overclaim = crtAll().filter(e=>['present','absent','empty'].indexOf(status(e.id))>=0);
+    ok('...and the honesty rule is not what bought the quiet: nothing is present, absent or none-mapped',
+       overclaim.length===0,
+       overclaim.length ? ('claimed with no evidence: '+
+                           overclaim.map(e=>e.id+'='+status(e.id)).join(', '))
+                        : ('all '+crtAll().length+' layers still refuse to answer for a Pi '+
+                           'that was never asked'));
+
+    // ---- (b) a reachable Pi that HAS looked: ABSENT is still ABSENT, still loud ----
+    INDEX_MODE='ok';
+    await STORE.areaPut({name:AREA, bbox:BBOX, zmin:16, zmax:18, tiles:0, cached:0,
+                         detail:'standard', savedAt:Date.now()+2000, mirrored:false});
+    MAP.activeArea=null;
+    await refreshBootstrap();
+    const backHome = await waitFor(()=>CRT.area===AREA && !CRT._busy && CRT.indexOk===true, 10000);
+    await sleep(250);
+    ok('an area whose chart index HAS answered is active again (the premise of the loud case)',
+       backHome && CRT.indexOk===true && status('locks')==='present',
+       'CRT.area='+CRT.area+' indexOk='+CRT.indexOk+' locks='+status('locks'));
+    const bAbsent = badgeLook();
+    ok('a reachable Pi with a hazard file genuinely missing STILL reports ABSENT, and loudly',
+       status(ABSENT_ID)==='absent' && /ABSENT/i.test(pillText(ABSENT_ID)) &&
+       bAbsent.on && bAbsent.tier1 && bAbsent.shown && /ABSENT/i.test(bAbsent.text),
+       ABSENT_ID+'='+status(ABSENT_ID)+' pill="'+pillText(ABSENT_ID)+'"  '+badgeSay(bAbsent)+
+       ' — the quiet above is about WHICH true sentence is said, never about saying less');
+
+    // ---- (c) an index that succeeded and then failed: LOUD ----
+    INDEX_MODE='dead';
+    await reingest('suite: the Pi that was answering has stopped');
+    const bLost = badgeLook();
+    ok('an index that HAS succeeded and then fails is LOUD — CANNOT TELL, on the map',
+       bLost.on && bLost.tier1 && bLost.shown && /CANNOT TELL/i.test(bLost.text),
+       badgeSay(bLost)+' — this is the console the alarm was written for: something that '+
+       'was answering has stopped, and the map is no longer showing hazards it was showing '+
+       'a minute ago');
+    ok('...and its layers are left in the state the background retry re-asks for',
+       crtTierList(1).every(e=>status(e.id)==='unavailable'),
+       'tier-1 statuses: '+crtTierList(1).map(e=>e.id+'='+status(e.id)).join(', ')+
+       ' — crt.js quietly re-asks every "unavailable" layer on a timer, and a state that '+
+       'nothing ever retries is a map that stays blank after the tether is pushed home');
+    // THE TWO MARKS SIDE BY SIDE. Both of them are the map admitting it is not showing
+    // hazards, and they are two different facts with two different reactions — one is
+    // "go and get the charts", the other is "the Pi that was serving them has stopped
+    // mid-dive". Same rule as ABSENT versus NONE MAPPED in section 4: different words
+    // AND different styling, or the difference does not survive a glance.
+    ok('...and the loud mark and the quiet one are not the same mark',
+       bLost.text!==bBench.text && bLost.cls!==bBench.cls && bLost.colour!==bBench.colour,
+       'quiet:  '+badgeSay(bBench)+'\n            loud:   '+badgeSay(bLost));
+    INDEX_MODE='ok';
+    await reingest('suite: the Pi is back');
+
+    // ================= 8. THE CELLS THIS SESSION SOUNDS FOR ITSELF =================
+    /* Two defects in one block of drawing code, and neither is visible from the
+       renderer's inputs — which is why everything below measures the picture.
+
+       THE GEOMETRY. Each 3 m cell was an axis-aligned screen rect built from two
+       DIAGONALLY OPPOSITE projected corners, so what was drawn was the extent of a
+       diagonal and not the cell. Rotate the picture and that extent collapses toward
+       zero at 45° and every 90° after — the sliver the operator saw when they turned.
+
+       THE CLAIM. The same cells were binned off MAP.track with no check on whether
+       the telemetry behind that track was real, so a SIMULATED dive painted
+       measured-style survey cells over water nothing has ever been in. */
+    CONFIG.map.blindNav=false;
+    if(typeof exitBlindNav==='function') exitBlindNav();
+    if(MAP.expanded && typeof collapseMap==='function') collapseMap();
+    await sleep(700);
+    ok('the radar is collapsed, so the heading-up rotation these checks are about is live',
+       !MAP.expanded && MAP.headingUp===true,
+       'expanded='+MAP.expanded+' headingUp='+MAP.headingUp+' blind='+MAP.blind+
+       ' — the expanded map is north-up, where a rotation defect cannot show at all');
+    ok('the map has a projection to draw into (the premise of every measurement below)',
+       typeof TILES!=='undefined' && !!TILES.last,
+       'TILES.last='+((typeof TILES!=='undefined' && TILES.last) ? 'ready' : 'ABSENT — '+
+       'lonLatToScreen returns null without it and nothing at all would be drawn'));
+
+    // The nominal wash is silenced first: it is a hatched band down whole waterway
+    // sections and would swamp every area figure below. What is left on the glass is
+    // the SURVEYED treatment and nothing else.
+    BODIES['depth_nominal'] = fc([]);
+    await reingest('suite: nominal silenced, so only the measured treatment is on the glass');
+    ok('the Pi holds a saved survey and no nominal wash (the premise)',
+       status('depth_surveyed')==='present' && status('depth_nominal')==='empty' &&
+       crtIsOn('depth_surveyed'),
+       'surveyed='+status('depth_surveyed')+' nominal='+status('depth_nominal')+
+       ' surveyed switched on='+crtIsOn('depth_surveyed'));
+    ok('...and this sub has never been in the water on this console yet',
+       !MAP.hasOrigin && crtLiveCells().length===0,
+       'hasOrigin='+MAP.hasOrigin+' live cells='+crtLiveCells().length+
+       ' track points='+MAP.track.length);
+    const recSaved = drawDepth();
+    ok('the Pi\'s own saved survey paints — and THIS is what measured looks like (the control)',
+       !recSaved.err && recSaved.fills.length>0,
+       recSaved.err ? ('crtDrawDepth threw: '+recSaved.err)
+                    : (recSaved.fills.length+' cell(s) filled: '+treatSay(recSaved.fills[0])));
+    const MEASURED = recSaved.fills.length ? treat(recSaved.fills[0]) : '(never established)';
+
+    // With the Pi's saved survey emptied, ANY fill from here on is a cell this
+    // session is claiming to have sounded itself. Nothing else can be in the frame.
+    BODIES['depth_surveyed'] = fc([]);
+    await reingest('suite: the Pi\'s saved survey emptied, so anything drawn now is THIS session');
+    const recBlank = drawDepth();
+    ok('with the Pi holding nothing and the sub not yet launched, nothing is painted at all',
+       status('depth_surveyed')==='empty' && recBlank.fills.length===0,
+       'surveyed='+status('depth_surveyed')+' fills='+recBlank.fills.length);
+
+    // ---- A SIMULATED DIVE ----
+    await setOrigin({lat:LATO, lon:LONO, accuracy:3, src:'crt-overlay suite'});
+    await sleep(250);
+    ok('the launch point is set, so the console will bin a track at all (the premise)',
+       MAP.hasOrigin===true && !!MAP.origin,
+       'hasOrigin='+MAP.hasOrigin+' origin='+(MAP.origin ?
+         (MAP.origin.lat.toFixed(4)+','+MAP.origin.lon.toFixed(4)) : 'null'));
+    ok('...and no vehicle has ever spoken to this console',
+       !vehicleLinked() && !vehicleRecent() && state.mode==='sim',
+       'vehicleLinked='+vehicleLinked()+' vehicleRecent='+vehicleRecent()+
+       ' mode='+state.mode+' — everything the next check measures is modelled');
+    // DRIVEN, not written in. Throttle and the ballast trigger go through the same
+    // keyboard path an operator's thumbs use, and the model integrates the result:
+    // this is a dive, not a track array assembled by a test.
+    state.keys.clear(); state.keys.add('KeyW'); state.keys.add('KeyQ');
+    await waitFor(()=>MAP.track.filter(p=>typeof p.depth==='number' && p.depth>0.05).length>4, 9000);
+    state.keys.clear();
+    await sleep(300);
+    const wet = MAP.track.filter(p=>typeof p.depth==='number' && p.depth>0.05);
+    const simBins = crtLiveCells().length;
+    ok('the simulated dive really did go somewhere and get wet (the premise of the next check)',
+       wet.length>4 && state.mode==='sim',
+       wet.length+' of '+MAP.track.length+' track points below the surface, deepest '+
+       MAP.track.reduce((m,p)=>Math.max(m, p.depth||0), 0).toFixed(2)+' m, binned into '+
+       simBins+' cell(s), mode='+state.mode+
+       ' — without this the next check would pass on an empty map');
+    const recSim = drawDepth();
+    const simMeasured = recSim.fills.filter(f=>treat(f)===MEASURED);
+    ok('a SIMULATED dive paints NO cell in the measured treatment',
+       simMeasured.length===0,
+       recSim.fills.length+' fill(s) over '+simBins+' binned cell(s). '+
+       (simMeasured.length
+         ? (simMeasured.length+' of them are the surveyed treatment EXACTLY ('+
+            treatSay(simMeasured[0])+', the same as the Pi\'s saved survey) — a modelled '+
+            'dive painted as measurement, which is the class of lie this console refuses')
+         : (recSim.fills.length
+            ? ('all visibly different from measured: '+treatSay(recSim.fills[0])+
+               ' — a visibly-simulated treatment, which is the other honest answer')
+            : 'nothing drawn at all, which is the plainest honest answer')));
+
+    // ---- A REAL DIVE, THROUGH THE CONSOLE'S OWN DOORS ----
+    // Telemetry goes through handleMessage() and the position through the /ws/nav
+    // handler connectNavWs() builds. setWsStatus('online') is re-asserted underneath
+    // because the reconnect timer is meanwhile failing to reach a Pi that is not
+    // there — and every "is this real?" test this console owns (vehicleLinked,
+    // vehicleRecent, vehicleHasSensors, commandsBlocked, MAP.navReadsVehicle) has to
+    // answer YES at once. The fix may reasonably ask any of them, and a suite that
+    // satisfied only the one it guessed would fail an honest fix for the wrong reason.
+    connectNavWs();
+    const navRx = MAP.navWs && MAP.navWs.onmessage;
+    ok('the map exposes the nav-frame handler this section drives',
+       typeof navRx==='function', 'MAP.navWs.onmessage is '+(typeof navRx));
+    const wsHold = setInterval(()=>setWsStatus('online'), 16);
+    setWsStatus('online');
+    startTel();
+    const linked = await waitFor(()=>vehicleLinked() && state.mode==='real', 5000);
+    let X=0;
+    for(let i=0;i<10;i++){ X=i*1.6; navFrame(navRx, 0, X, 0, 2.2+i*0.08); await sleep(60); }
+    await sleep(300);
+    ok('a real vehicle is on the link, and its OWN frames are what moved the sub',
+       linked && vehicleLinked() && vehicleRecent() && vehicleHasSensors() &&
+       !commandsBlocked() && MAP.navReadsVehicle===true && MAP.navSimulated===false,
+       'mode='+state.mode+' vehicleLinked='+vehicleLinked()+' vehicleRecent='+vehicleRecent()+
+       ' hasSensors='+vehicleHasSensors()+' commandsBlocked='+commandsBlocked()+
+       ' navReadsVehicle='+MAP.navReadsVehicle+' navSimulated='+MAP.navSimulated);
+    const recReal = drawDepth();
+    const realBins = crtLiveCells().length;
+    // THE TRACK'S OWN CENSUS, because "0 cells" has two completely different causes —
+    // no measured points reached the track at all, or they did and are not being
+    // drawn — and a failure that cannot say which sends the next reader to the wrong
+    // file. The provenance is stamped on each point by pushTrack.
+    const census = MAP.track.reduce((a,p)=>{
+      const k = (p.measured===true) ? 'measured' : (p.measured===false ? 'modelled' : 'unstamped');
+      a[k]=(a[k]||0)+1; if(p.measured===true && p.depth>0.05) a.wetMeasured++; return a;
+    }, {measured:0, modelled:0, unstamped:0, wetMeasured:0});
+    ok('a REAL dive still paints this session\'s own cells',
+       recReal.fills.length>0 && realBins>0,
+       realBins+' cell(s) binned, '+recReal.fills.length+' filled'+
+       (recReal.err ? (' — crtDrawDepth threw: '+recReal.err) : '')+
+       '. track: '+MAP.track.length+' points ('+census.measured+' measured, '+
+       census.modelled+' modelled, '+census.unstamped+' unstamped; '+census.wetMeasured+
+       ' measured and below the surface). hasOrigin='+MAP.hasOrigin+
+       ' — gating these cells on real telemetry must not amount to deleting the feature');
+    ok('...and paints them in the SURVEYED treatment, because they ARE measurements',
+       recReal.fills.length>0 && recReal.fills.every(f=>treat(f)===MEASURED),
+       recReal.fills.length
+         ? (treatSay(recReal.fills[0])+'   vs the Pi\'s saved survey: '+
+            (recSaved.fills.length ? treatSay(recSaved.fills[0]) : '(never drawn)'))
+         : 'nothing drawn');
+
+    // ---- THE ROTATION SWEEP — the check that would have caught the shipped defect ----
+    const HDGS=[0, 20, 45, 70, 90, 135, 200];
+    const sweep=[];
+    for(const h of HDGS){
+      navFrame(navRx, h, X, 0, 2.9);
+      const turned = await waitFor(()=>TILES.last &&
+        Math.abs(TILES.last.rot + h*Math.PI/180) < 0.01, 2500);
+      await sleep(90);
+      const r = drawDepth();
+      sweep.push({h:h, turned:turned, n:r.fills.length, m2:r.m2});
+    }
+    const swept = sweep.map(s=>s.h+'°'+(s.turned?'':'(NEVER TURNED)')+' '+
+      (typeof s.m2==='number' ? s.m2.toFixed(1) : '?')+' m2/'+s.n+' fill').join('  |  ');
+    const m2s = sweep.filter(s=>s.turned && typeof s.m2==='number' && isFinite(s.m2)).map(s=>s.m2);
+    const lo = m2s.length ? Math.min.apply(null, m2s) : 0;
+    const hi = m2s.length ? Math.max.apply(null, m2s) : 0;
+    const mid = m2s.length ? m2s.slice().sort((a,b)=>a-b)[Math.floor(m2s.length/2)] : 0;
+    ok('the map really did turn to every heading in the sweep (the premise)',
+       m2s.length===HDGS.length, swept);
+    ok('THE CELL AREA ON SCREEN DOES NOT CHANGE WITH THE MAP HEADING',
+       m2s.length===HDGS.length && mid>0 && (hi-lo)/mid <= 0.10,
+       swept+'   ->   spread '+(mid>0 ? (((hi-lo)/mid)*100).toFixed(1) : '?')+'% of the median '+
+       (mid ? mid.toFixed(1) : '?')+' m2. A rect built from two DIAGONALLY OPPOSITE '+
+       'projected corners has an extent that collapses toward zero at 45 degrees and '+
+       'every 90 after — that is the rotating sliver, and it is measurable here and '+
+       'nowhere in the renderer\'s inputs');
+    const nCells = crtLiveCells().length;
+    const want = 9 * nCells;                    // the 3 m bin crtLiveCells() uses
+    ok('...and the area drawn is the 3 m bin the console says it is binning into',
+       mid>0 && nCells>0 && Math.abs(mid-want)/want <= 0.2,
+       'drew a median '+(mid ? mid.toFixed(1) : '?')+' m2 across '+nCells+' cell(s); '+
+       nCells+' bins of 3 m x 3 m are '+want+' m2 — a shape that is stable and the '+
+       'wrong size is still painting the wrong stretch of water as sounded');
+
+    // ---- AND IT STILL SAYS WHAT THE NUMBER IS ----
+    // These cells are the deepest the HULL got without grounding. That is a floor
+    // under the water and not the depth of the bed, and it is the whole reason the
+    // layer is allowed to be drawn solid at all.
+    // Read AFTER a render. crtRenderRows() runs on ingest, on a toggle and when the
+    // panel is opened — not every frame — so the row's live half is whatever the last
+    // of those wrote, and the last one here was during the sim dive. Opening the panel
+    // is the real control that refreshes it, and it is what an operator does before
+    // reading a row anyway.
+    if(typeof crtTogglePanel==='function') crtTogglePanel(true);
+    await sleep(200);
+    const surRow = row('depth_surveyed');
+    const surTitle = norm((surRow && surRow.getAttribute('title'))||'');
+    const surAria  = norm((surRow && surRow.getAttribute('aria-label'))||'');
+    ok('the surveyed row still says these cells are a FLOOR UNDER the water, not the bed',
+       /floor under/i.test(surTitle) && /not the depth of the bed/i.test(surTitle),
+       '"'+surTitle.slice(0,220)+'"');
+    ok('...and a screen reader is given the same sentence',
+       surAria.length>60 && surAria===surTitle,
+       'aria '+surAria.length+' chars, title '+surTitle.length+' chars, identical='+
+       (surAria===surTitle));
+    // AND THE LIVE HALF, which is the one this session's cells are described by. It is
+    // the sentence that has to keep saying what the number IS: the deepest the HULL got
+    // in that cell — a floor under the water there, and never the depth of the bed.
+    const surLive = liveOf(surRow);
+    ok('...and this session\'s own cells are still a HULL depth, counted apart, and not the bed',
+       /THIS session/i.test(surLive) && /(hull depth|floor under)/i.test(surLive) &&
+       /not the depth of the bed/i.test(surLive),
+       '"'+surLive.slice(-280)+'"');
+    const keyTap = tapCtx(220, 90);
+    let keyErr2=null;
+    try{ crtDrawDepthKey(keyTap.ctx, 6, 6, 44, 1); }catch(e){ keyErr2=e&&e.message; }
+    ok('the drawn depth key still labels the measured treatment SURVEYED',
+       !keyErr2 && keyTap.st.texts.indexOf('SURVEYED')>=0 && keyTap.st.texts.indexOf('NOMINAL')>=0,
+       keyErr2 ? ('threw: '+keyErr2)
+               : ('key labels drawn: '+(keyTap.st.texts.join(' / ')||'(none)')));
+
+    stopTel();
+    clearInterval(wsHold);
+    setWsStatus('offline');
+    state.keys.clear();
+
+    // ================= 7. ?sim=1 — THE CONSOLE A STRANGER OPENS ==================
+    /* The public demo is this same shipping page with one query parameter, and it is
+       exactly the console the reported alarm came off: resolveHost() deliberately
+       looks for no vehicle at all, so there is no Pi, there never was one, and an
+       area remembered on the handheld is the whole of what it takes to make the
+       index fetch fail and light the map's loudest mark.
+
+       Loaded as a REAL PAGE IN AN IFRAME, because demo mode IS the URL: state.demo is
+       decided once at boot from location.search and cannot be reached from a page
+       already loaded without one. Its fetches are NOT stubbed — they go to the test
+       server, which has no chart service, which is the truth of a bench console. The
+       area left in IndexedDB is the bench one, which has never had chart data. */
+    try{ await STORE.areaDelete(AREA); }catch(e){}
+    const IFR = document.createElement('iframe');
+    IFR.title = 'the ?sim=1 demo console, loaded as a real page so demo mode is real';
+    IFR.style.cssText = 'position:fixed;left:-20000px;top:0;width:1024px;height:768px;'
+                      + 'border:0;opacity:0;pointer-events:none';
+    IFR.src = 'index.html?sim=1';
+    document.body.appendChild(IFR);
+    /* WHAT IS AND IS NOT REACHABLE FROM OUT HERE, and it caught this suite out first
+       time round. `const CRT`, `const state` and `const MAP` are top-level `const` in
+       classic scripts, so they live in that window's global LEXICAL scope and are NOT
+       properties of its window object: `frame.contentWindow.CRT` is undefined on a
+       console that is running perfectly. What IS on the window is every top-level
+       FUNCTION declaration (crtAll, crtTierList, crtStateSentence…) and window.NEPTUNE,
+       the console's own documented API object, which main.js publishes at the end of
+       boot with state, MAP and CONFIG hanging off it. So NEPTUNE existing is also the
+       cleanest possible "this console has finished booting" signal, and everything else
+       below is read off the DOM — which is the operator's view of it anyway. */
+    const demoUp = await waitFor(()=>{ try{ const w=IFR.contentWindow;
+        return !!(w && w.NEPTUNE && w.NEPTUNE.state && typeof w.crtTierList==='function'); }
+      catch(e){ return false; } }, 25000);
+    const dw = demoUp ? IFR.contentWindow : null;
+    const dPill = id=>dw ? norm((dw.document.getElementById('crt-state-'+id)||{}).textContent) : '';
+    const dRows = dw ? dw.crtTierList(1) : [];
+    // Settled = the boot fetch has resolved into a word. ASKING… is mid-flight and a
+    // blank row has not been rendered yet; neither is an answer to assert against.
+    if(dw) await waitFor(()=>dRows.length>0 && dRows.every(e=>{
+      const p=dPill(e.id); return p && !/ASKING/i.test(p); }), 12000);
+    await sleep(400);
+    let frameWhy='';
+    if(!dw){ try{ const w=IFR.contentWindow, d=w&&w.document;
+      frameWhy = ' [frame: url='+((d&&d.location&&d.location.href)||'?')+
+                 ' readyState='+((d&&d.readyState)||'?')+
+                 ' scripts='+((d&&d.scripts&&d.scripts.length))+
+                 ' NEPTUNE='+(typeof (w&&w.NEPTUNE))+
+                 ' crtTierList='+(typeof (w&&w.crtTierList))+']';
+    }catch(e){ frameWhy=' [frame unreachable: '+((e&&e.message)||e)+']'; } }
+    ok('the demo console booted, and it really is the ?sim=1 page',
+       !!dw && dw.NEPTUNE.state.demo===true && !dw.NEPTUNE.state.wsBase && !dw.NEPTUNE.state.host,
+       dw ? ('demo='+dw.NEPTUNE.state.demo+' wsBase="'+dw.NEPTUNE.state.wsBase+
+             '" host="'+dw.NEPTUNE.state.host+'" mode='+dw.NEPTUNE.state.mode)
+          : ('the ?sim=1 page never finished booting in the frame — nothing below was '+
+             'tested'+frameWhy));
+    ok('...with an area remembered on the handheld, which is what used to raise the alarm',
+       !!dw && dw.NEPTUNE.MAP.activeArea===BENCH && dRows.length>0 &&
+       !/NO AREA/i.test(dPill(dRows[0].id)),
+       dw ? ('activeArea='+dw.NEPTUNE.MAP.activeArea+', hazard rows read "'+
+             dPill(dRows[0].id)+'" — an area IS active, which is the whole precondition '+
+             'of the alarm that used to fire here') : 'NOT RUN');
+    const bDemo = dw ? badgeLookIn(dw.document, dw)
+                     : {missing:true, on:true, tier1:true, shown:true, cls:'(not run)',
+                        display:'(not run)', colour:'(not run)', border:'(not run)',
+                        h:0, w:0, text:'(not run)'};
+    ok('?sim=1 demos the layers WITHOUT alarming on the map',
+       !!dw && !isAlarm(bDemo),
+       badgeSay(bDemo)+' — this is the page linked from the README, opened by somebody '+
+       'who has never seen the console before, with no vehicle within a hundred miles of it');
+    const dQuiet = dRows.filter(e=>{
+      const r = dw.document.getElementById('crt-row-'+e.id);
+      return QUIET_RE.test(norm((r && r.getAttribute('title'))||'')) || QUIET_RE.test(dPill(e.id));
+    });
+    ok('...and the panel still tells the stranger what it does and does not have',
+       !!dw && dRows.length>0 && dQuiet.length===dRows.length,
+       dw ? (dRows.map(e=>e.id+'="'+dPill(e.id)+'"').slice(0,4).join('  ')) : 'NOT RUN');
+    const dLies = dw ? dw.crtAll().filter(e=>/\bABSENT\b/i.test(dPill(e.id))) : [];
+    ok('...and nothing is reported ABSENT, which would be a claim about a Pi that was never asked',
+       !!dw && dLies.length===0,
+       dw ? (dLies.length ? ('claimed absent with no Pi to have looked: '+
+                             dLies.map(e=>e.id).join(', '))
+                          : ('all '+dw.crtAll().length+' layers read "'+dPill(dRows[0].id)+'"'))
+          : 'NOT RUN');
+    if(IFR.parentNode) IFR.parentNode.removeChild(IFR);
+
     // ================= NOTHING ELSE BROKEN =================
+    // Put the fake Pi back the way the rest of the file found it before the parting
+    // photograph, so the picture run.py records is a healthy console rather than the
+    // half-emptied one section 8 needed.
+    BODIES['depth_nominal'] = NOMINAL;
+    BODIES['depth_surveyed'] = SURVEYED;
+    await reingest('suite: the fake Pi restored for the parting picture');
+    if(!MAP.expanded && typeof expandMap==='function') expandMap();
+    await sleep(400);
     window.fetch = realFetch;
     try{ await STORE.areaDelete(AREA); }catch(e){}
+    try{ await STORE.areaDelete(BENCH); }catch(e){}
     ok('no script errors', errs.length===0, errs.join(' | ')||'none');
     const need=['crt-panel','crt-list','crt-absent','crt-credit','map-crt-toggle',
                 'crt-refresh','crt-close','crt-panel-title']
