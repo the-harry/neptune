@@ -36,6 +36,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+        with:
+          # CLAIM THE SITE FOR THIS WORKFLOW, and keep claiming it.
+          #
+          # With the repository's Pages source set to a BRANCH, GitHub runs its own
+          # built-in Jekyll build ("pages build and deployment", event `dynamic`) on
+          # every push. That build renders README.md into a site and publishes it —
+          # racing this workflow and winning, so the demo URL served the README while
+          # this job reported success. dashboard.html 404s; none of client/ is there.
+          #
+          # `enablement: true` sets the build type to `workflow`, which stops the
+          # built-in builder from running at all. It is idempotent, so it also repairs
+          # the setting if anyone flips it back by hand.
+          enablement: true
       - name: Land on the simulator
         # Anyone arriving at the bare URL gets the demo, not a dashboard hunting for
         # a Pi that does not exist. index.html itself is untouched.
@@ -49,6 +62,10 @@ jobs:
           <p>Starting the Neptune simulator…
              <a style="color:#b46bff" href="./dashboard.html?sim=1">continue</a></p>
           HTML
+          # Belt and braces against the same failure: if anything ever Jekyll-processes
+          # this artifact, .nojekyll turns it off. Without it Jekyll silently drops any
+          # path beginning with an underscore, which is a very quiet way to lose files.
+          touch client/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:
           path: client
