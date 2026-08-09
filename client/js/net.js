@@ -169,9 +169,17 @@ function onTelemetry(t){
     state.batteryV = (typeof t.battery_v==='number') ? t.battery_v : null;
     if(state.batteryV!=null) state.batteryAt=Date.now();
   }
-  if(typeof t.cpu_c==='number') state.cpuC=t.cpu_c;
-  if(typeof t.ram_pct==='number') state.ramPct=t.ram_pct;
-  if(typeof t.disk_gb==='number') state.diskGb=t.disk_gb;
+  // THE SAME SHAPE AS THE PACK ABOVE, and for the same reason. These three were the
+  // last readings on the frame still using the guard that battery_v was moved off:
+  // a null fell through the typeof test and left the PREVIOUS value sitting in state,
+  // so the console would have gone on reporting the CPU temperature of a vehicle that
+  // had stopped saying. Nothing draws them today, which is the only reason it has not
+  // shown — a defect that is invisible because its output is unused is still a defect,
+  // and the day one of these gets a readout it inherits the bug.
+  const _held = (v) => (typeof v === 'number' ? v : null);
+  if(t.cpu_c!==undefined)   state.cpuC   = _held(t.cpu_c);
+  if(t.ram_pct!==undefined) state.ramPct = _held(t.ram_pct);
+  if(t.disk_gb!==undefined) state.diskGb = _held(t.disk_gb);
   if(typeof t.left==='number') state.left=t.left;
   if(typeof t.right==='number') state.right=t.right;
   if(typeof t.armed==='boolean') state.armed=t.armed;
