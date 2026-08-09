@@ -37,15 +37,15 @@ must produce no number at all, rather than a comfortable one. Every odd-looking 
 the code is odd on purpose for a reason of that kind, and where that happens the story
 says so plainly instead of tidying it away.
 
-The fourteen topics run roughly in the order the numbers get built: the graph paper and
+The fifteen topics run roughly in the order the numbers get built: the graph paper and
 the running total drawn on it (1–5), where the models those sums depend on come from and
 how they are tested and measured (6–8), the two filters that tidy up the raw instruments
 before the sums see them (9–10), the safety check that catches the sub being held still
 by something it cannot see (11), the score that grades everything else (12), the one
-quantity nobody has to build at all (13), and then the rule that has been running
-underneath every one of them (14). They
-cross-reference each other, so you can equally well start at whichever topic is
-currently on fire and follow the links out.
+quantity nobody has to build at all (13), the map layer that measures a bank against the
+water beside it (14), and then the rule that has been running underneath every one of
+them (15). They cross-reference each other, so you can equally well start at whichever
+topic is currently on fire and follow the links out.
 
 So: read the stories. Skip the formal bits with a clear conscience. And if a symbol does
 ambush you, the table below is the whole vocabulary in one place.
@@ -64,7 +64,7 @@ If you fix one, close the row and delete the line here in the same commit.
 |---|---|---|
 | The payout that bounds the leash is a model on a stock hull, and the journal keeps it under the encoder's own name | [§4](#4-the-tether-clamp--the-leash-is-a-fact), and the footnote in [§15](#15-what-a-number-is-allowed-to-claim) | pre-first-dive batch (2 of 4) — *api* |
 | The drift penalty is nested inside the snap branch | [§5](#5-centreline-snapping--the-magnet-that-is-not-allowed-to-lie), [§12](#12-confidence--the-humility-score) | pre-first-dive batch (1 of 4) — *api* |
-| The calibration tool takes the encoder over the operator's own tape measure | [§8](#8-calibration-forensics--the-tool-that-is-allowed-to-say-no) sets out the three witnesses and the encoder's known bias; the precedence between them is stated only in the parked row | pre-first-dive batch (3 of 4) — *api* |
+| The calibration tool takes the encoder over the operator's own tape measure | [§8](#8-calibration-forensics--the-tool-that-is-allowed-to-say-no), under the three witnesses | pre-first-dive batch (3 of 4) — *api* |
 | The simulator's true speed table is the estimators' own, so the A/B gate runs in a world where the speed model is exactly right | [§7](#7-the-simulators-dirty-tricks--a-liar-with-a-fixed-seed), [§15](#15-what-a-number-is-allowed-to-claim) | pre-first-dive batch (4 of 4) — *api tests* |
 | The snapped position, and the size of the correction, never reach the screen | [§5](#5-centreline-snapping--the-magnet-that-is-not-allowed-to-lie) | *Snapping is invisible on the console* — client, post-hardware audit |
 | Confidence is computed every tick, logged, and drawn nowhere | [§12](#12-confidence--the-humility-score) | *Confidence is never rendered* — client, after real dive logs |
@@ -336,7 +336,7 @@ The second sacred rule: depth is *measured*, never worked out. There is a pressu
 sensor and it answers, or it does not answer. When it does not, the reported depth is
 nothing at all — not the last depth, and above all not zero, because zero means "at the
 surface", which is the one depth a descending submarine is definitely not at. The
-temptation is enormous, this system has paid for it twice, and both invoices are
+temptation is enormous, and the two ways a depth channel fills that blank on its own are
 itemised in [§13](#13-depth-from-pressure--the-one-number-nobody-has-to-build).
 
 Then there is the convention swap, which deserves its own paragraph because it is a
@@ -350,7 +350,7 @@ due north, this swap is where to look first. The code marks the ends of both lin
 the word "east" and the word "north", and the simulator carries the same comment,
 precisely because everyone gets this wrong once.
 
-Now the part that is recent and matters most. **With no heading there is no track.**
+Now the part that matters most. **With no heading there is no track.**
 
 Speed is one number. A position needs a direction to spend that number on. When the
 compass stops answering — a dead chip, a loose connector, a hull that has gone quiet —
@@ -447,18 +447,17 @@ source, which is why the dive log's depth is centimetres where the sample it cam
 was millimetres (see [§13](#13-depth-from-pressure--the-one-number-nobody-has-to-build)).
 
 Where the accelerometer goes, since this section's first sacred rule is about exactly
-that: `accel_fwd_ms2` reaches one consumer in the estimator path, `SpeedKF.update()`,
-and is otherwise only written to the logs. It reaches no position term and no snag term
-— `SnagDetector.update()` takes a timestamp, two thruster outputs and a speed, and has
-no acceleration argument at all. The field comment at `api/nav/models.py` still says the
-accelerometer feeds the snag detector; that half of the comment is stale, and the
-routing above is what the code does.
+that: `accel_fwd_ms2` has exactly one consumer in the estimator path — `FilteredEstimator.
+update()` hands it to `SpeedKF.update()` and nowhere else — and is otherwise only written
+to the logs. It reaches no position term and no snag term: `SnagDetector.update()` takes a
+timestamp, two thruster outputs and a speed, and has no acceleration argument at all. The
+field comment on `accel_fwd_ms2` in `api/nav/models.py` names the snag detector as a
+consumer; that half of the comment is wrong, and the routing above is what the code does.
 
 `api/nav/deadreckoning.py — DeadReckoner.update()`; the no-heading rule is stated in
 the module docstring and the constant is `NO_HEADING_CONFIDENCE`. Same trigonometric
 convention in `api/nav/sim.py — Simulator.step()` and `client/js/map.js` (sim-only
-fallback integrator). Acceleration's single consumer: `api/nav/estimator.py` —
-`FilteredEstimator.update()`.
+fallback integrator).
 
 ## 3. Current compensation — the sub is walking on a travelator
 
@@ -772,12 +771,13 @@ failure of the estimate. So it may suggest, forever, and it may never overwrite.
 
 Two things about what is actually built today. The projection routine also works out how
 far *along* the waterway the snapped point is — the natural coordinate for a
-one-dimensional world — and nothing currently reads that number. And on the console, the
-faint un-snapped dot the design calls for is not drawn yet: the browser positions the
-sub from the raw east/north numbers and ignores both the snapped coordinates and the
-drift figure, which the API's own frame audit records honestly as ignored. Server-side
-the confidence knock is real and lands in the dive log; the drift reading itself has not
-finished its journey to the screen.
+one-dimensional world — and the estimator throws that number away; the one consumer is
+`soundings.snap_to_axis`, which uses it to place a depth reading in its cell along the
+axis. And on the console, the faint un-snapped dot the design calls for is not drawn yet:
+the browser positions the sub from the raw east/north numbers and never reads the snapped
+coordinates or the drift figure at all — no line of `client/js/` mentions `raw_lat`,
+`snapped` or `snap_offset_m`. Server-side the confidence knock is real and lands in the
+dive log; the drift reading itself has not finished its journey to the screen.
 
 ### The formal bit
 
@@ -1081,24 +1081,22 @@ finishes 0.9 metres out. Those seconds are also the only stretch where the throt
 genuinely zero and the wheel genuinely stalled, which is the one condition under which
 the speed filter can lock onto a known zero and kill its accelerometer's drift.
 
-**And the one that changed recently: the sub now *turns*, it does not teleport.** The
-scripted path is a list of legs, each with a heading to hold, and the obvious
-implementation is to adopt the new heading the moment a new leg begins. Obvious, simple,
-and quietly catastrophic for testing. A snapped turn produces the one shape a gyroscope
-can never see: a rate of turn that is zero everywhere except for a single impossible
-sample. Feed that to a filter that navigates by integrating turn rate and it scores
-perfectly *while doing nothing whatsoever* — the heading it has never been asked to
-change matches the heading that never changed. The head-to-head test passes without
-testing anything.
+**The sub *turns*; it does not teleport.** The scripted path is a list of legs, each with a
+heading to hold, and the obvious implementation is to adopt the new heading the moment a
+new leg begins. Obvious, simple, and quietly catastrophic for testing. A snapped turn
+produces the one shape a gyroscope can never see: a rate of turn that is zero everywhere
+except for a single impossible sample. Feed that to a filter that navigates by integrating
+turn rate and it scores perfectly *while doing nothing whatsoever* — the heading it has
+never been asked to change matches the heading that never changed. Perfectly straight legs
+joined by teleports are not a canal, and the head-to-head test passes without testing
+anything.
 
-So the hull now swings toward the new heading at a bounded rate — twelve degrees per
+So the hull swings toward the new heading at a bounded rate — twelve degrees per
 second, roughly what a small ROV can actually manage — which puts real, sustained
 turning into the stream for a filter to get right or wrong. The consequence that matters
 is one line further down: true position is integrated along *the heading the hull has
 actually swung to*, not the heading the leg asked for, so the ground truth itself
-contains curved corners. The estimators are now scored against a track with real corners
-in it. The old version scored them against a track made of perfectly straight lines
-joined by teleports, which is not a canal, and is not a test.
+contains curved corners. The estimators are scored against a track with real corners in it.
 
 The same swing also generates the steering command and, from it, the differential
 thrust: to turn, one motor pushes harder than the other. That is what the compass
@@ -1293,8 +1291,8 @@ subtracts correctly. The unwrapper is also, deliberately, unable to cope with a 
 it says so in its own docstring: it is a running accumulator, so a hole can conceal a
 wrap, and the only thing it could do locally is invent a bearing nobody measured. It
 demands that its caller has already thrown out any segment with a hole. That is the
-null-handling rule pushed *upstream* rather than patched at the point of pain, and it is
-the fix for a real crash: the tool used to die on any dive whose compass stopped.
+null-handling rule pushed *upstream* rather than patched at the point of pain — the
+alternative is a tool that dies on any dive whose compass stopped.
 
 **Divide first, then average.** Now the turn rate. Each usable segment gives you a total
 heading change and a duration, so it gives you a rate — but different segments were
@@ -1348,11 +1346,10 @@ the operator to do a different thing.
 
 *One settled point is not a curve.* A dive that homed, filled once, and stayed down —
 which is the ordinary shape of a working dive — produces exactly one settled ballast
-setting. That is not enough to fit a line through, and the tool says so. It used to say
-something much worse: it fell through to the "no pressure sensor fitted" message, so an
-operator would be sent to install a part that was sitting right there reading 9.00 m on
-every one of several hundred samples. The refusal was right; the *diagnosis* was
-invented, and the data never supported it.
+setting. That is not enough to fit a line through, and the tool says **that**, in those
+words. The refusal it must not fall through to is "no pressure sensor fitted", which would
+send an operator to install a part that is sitting right there answering on every sample.
+The refusal is right; the *diagnosis* would be invented, and the data never supported it.
 
 *Every point at the same depth* has two possible readings and they are opposites. Either
 there is no depth sensor at all, or there was one, it worked, and the segments that
@@ -1394,15 +1391,22 @@ distance is the outside witness, and it is a good one: no hardware, no assumptio
 it is exactly the procedure the speed table was always documented as needing.
 
 *The tether spool encoder.* Cable paid out is a real length of physical cable, counted
-by a wheel that has never heard of the speed model. Best of the three when it is fitted
-— it works on any ordinary dive with no special procedure. One honest caveat the tool
-does not correct for: payout is always at least the distance travelled and usually a bit
-more, so a speed derived from it reads slightly fast. It is the bound of
-[§4](#4-the-tether-clamp--the-leash-is-a-fact) pressed into service as a measurement,
-and it is biased in a known direction.
+by a wheel that has never heard of the speed model. It works on any ordinary dive with no
+special procedure. One honest caveat the tool does not correct for: payout is always at
+least the distance travelled and usually a bit more, so a speed derived from it reads
+slightly fast. It is the bound of [§4](#4-the-tether-clamp--the-leash-is-a-fact) pressed
+into service as a measurement, and it is biased in a known direction.
 
 *Position fixes at the surface.* Named as an option in the tool's own documentation. It
 is not implemented; there is no code path for it today.
+
+**And the precedence between the first two is the wrong way round today.** `report()` tries
+the encoder first and only reaches an explicitly-supplied `--ground-truth` distance in the
+`elif` behind it, so an operator who walked the bank with a tape measure and typed the
+number in is silently overruled by the one witness with a known bias — and on a stock hull
+that "encoder" is the modelled payout of [§4](#4-the-tether-clamp--the-leash-is-a-fact)
+travelling under the encoder's own name, not a counter at all. The unbiased witness the
+operator went to the trouble of producing should win. Parked, not fixed.
 
 Two constants are exempt from all this, and it is worth saying why: turn rate and the
 depth model do not have the circularity problem at all, because heading comes from the
@@ -1437,13 +1441,12 @@ empty. A tool that always produces an answer is worse than no tool, so "produces
 answer when it shouldn't" is a feature with its own test, at the same rank as the
 numbers.
 
-And then the case that motivated the recent work: the chip that died *mid-dive*. Take
-the good synthetic dive, cut it in half, and blank the compass and depth sensor from the
-midpoint on — the exact shape the journal writes when hardware stops. This used to crash
-outright, and the reason is a genuinely sharp edge worth carrying away: the code
-defended itself with a *default value for a missing column*, and the column was not
-missing. It was present, and empty. The default therefore never fired, and the emptiness
-went straight into a subtraction.
+And then the hardest case: the chip that died *mid-dive*. Take the good synthetic dive, cut
+it in half, and blank the compass and depth sensor from the midpoint on — the exact shape
+the journal writes when hardware stops. The sharp edge worth carrying away is that a
+*default value for a missing column* does not defend against it, because the column is not
+missing. It is present, and empty. The default never fires, and the emptiness goes straight
+into a subtraction.
 
 Four things are asserted on that fixture, and the last three matter more than the first.
 It must not crash — but a version that caught the error and carried on with zero would
@@ -1633,26 +1636,24 @@ applied against the disagreement rather than with it — and the whole rule fits
 sentence you can carry around: **the disagreement tells you where the filter has got to,
 and the creep to be blamed for it is on the far side.**
 
-The original build note — the design brief this system was written from — had it the
-other way round, and the code says so in block capitals with a derivation and a bench
-measurement attached, both of which are set out in the formal bit below. The failure of
-the obvious version is worth knowing because it is so undramatic: it does not explode,
-and it does not even end up pinned against the safety limit where somebody might notice.
-It walks the wrong
-way for about a minute, the disagreement grows past the ten-degree gate, the gate
-switches the bias learner off — and the filter freezes there, holding a standing heading
-error of roughly ten degrees that can never be corrected, because the only machinery
-capable of correcting it has just gated itself out. The guard does not save the filter.
-It embalms it.
+The design brief this system was written from specifies the plus, and the code overrides it
+in block capitals with a derivation and a bench measurement attached — both set out in the
+formal bit below. The failure of the obvious version is worth knowing because it is so
+undramatic: it does not explode, and it does not even end up pinned against the safety limit
+where somebody might notice. It walks the wrong way for about a minute, the disagreement
+grows past the ten-degree gate, the gate switches the bias learner off — and the filter
+freezes there, holding a standing heading error of roughly ten degrees that can never be
+corrected, because the only machinery capable of correcting it has just gated itself out.
+The guard does not save the filter. It embalms it.
 
 Then there is the question everyone forgets to ask: **what if there is no gyro?** A
 coast is an integration, and an integration needs something to integrate. Both the
 compass reading and the spin rate come off the *same* chip, so the interesting failure
 is not "the compass is poisoned" — it is "the chip is gone", and then there is nothing
-to coast on either. This filter used to be handed a zero in that case, read it as
-"measured: running dead straight", and integrated it into a bearing that sat perfectly
-still while the sub turned underneath it. So every branch now asks whether each input
-*exists* before asking what it says:
+to coast on either. Hand this filter a zero for a missing spin rate and it reads it as
+"measured: running dead straight" and integrates it into a bearing that sits perfectly
+still while the sub turns underneath it. So every branch asks whether each input *exists*
+before asking what it says:
 
 - **Gyro dead, compass alive.** The filter tracks the compass even while distrusting it. A
   bearing twenty-two degrees out under full throttle is a poor measurement, and a poor
@@ -2180,13 +2181,13 @@ way you can describe beats not knowing.
 The knocks stack by taking the worst, never by multiplying, so three problems at once
 report the severity of the worst one rather than compounding into a number that means
 nothing. And one honest caveat about today's code: the dashboard receives this number
-and stores it, but does not currently draw it anywhere. What the operator actually sees
-are the individual badges — snagged, gyro-only, heading-suspect, no-compass — plus a
-tether-range readout the browser works out for itself, straight-line from the operator's
-own dot to the sub against the cable length in the console's configuration. It never
-touches the server's range or payout figures. Those two are sent, stored in a variable,
-and read by nothing at all, which the API's frame audit records in as many words as dead
-stores — the same suggests-but-is-never-read pattern
+and stores it, but does not draw it anywhere. What the operator actually sees are the
+individual badges — snagged, gyro-only, heading-suspect, no-compass — plus a tether-range
+readout the browser works out for itself, straight-line from the operator's own dot to the
+sub against `CONFIG.tether.lengthM` in the console's configuration. It never touches the
+server's range or payout figures. All three — `confidence`, `range_m`, `payout_m` — are
+assigned into `MAP.confidence`, `MAP.rangeM` and `MAP.payoutM` in `client/js/map.js` and
+read by nothing: dead stores, the same suggests-but-is-never-read pattern
 [§5](#5-centreline-snapping--the-magnet-that-is-not-allowed-to-lie) describes for the
 drift reading. So as it stands, confidence is mostly for the dive log and the replay
 harness: it is the number a later analysis uses to decide which parts of a recorded
@@ -2314,27 +2315,27 @@ neutral filler. It is the single most reassuring claim this vehicle can make.** 
 blank with it and you have not avoided making a claim; you have made the most comforting
 claim available, at exactly the moment you had no right to make any.
 
-This system learned that twice, expensively, and both scars are in the source.
+Two failure modes drive the whole design of this channel, and both are ways of filling
+that blank without noticing.
 
-The first was a sensor that died mid-dive at four and a third metres. It had come up
-fine at boot, so every check anyone had written — all of which asked *did the chip
-start?* — was happy. The last number it managed to read stayed in memory. The software
-handed that number out fifteen times a second for the rest of the dive. The console
-painted a confident depth, correctly colour-banded, arriving fresh in every frame, while
-the sub went to eight metres. Nothing anywhere reported a fault. The cache was never the
-problem; treating *I remember a number* as *I can measure it* was.
+The first is a sensor that dies mid-dive. It came up fine at boot, so any check that asks
+*did the chip start?* stays happy. The last number it managed to read sits in the cache,
+and the software hands that number out fifteen times a second for the rest of the dive: a
+confident depth, correctly colour-banded, arriving fresh in every frame, while the sub
+descends past it. Nothing reports a fault. The cache is not the problem; treating *I
+remember a number* as *I can measure it* is.
 
-The second was nastier. An I2C line held low — a shorted wire, a connector with no
-pull-ups, a chip with no power — reads as zero for everything you ask it. So the
-sensor's factory calibration read back as all zeros. All-zero calibration data passes
+The second is nastier. An I2C line held low — a shorted wire, a connector with no
+pull-ups, a chip with no power — reads as zero for everything you ask it, so the
+sensor's factory calibration reads back as all zeros. All-zero calibration data passes
 its own built-in checksum, because the checksum of nothing is nothing, and the nothing
-matched. The sensor therefore reported itself online. Zero calibration constants
-multiply out to zero pressure. Zero pressure is below the surface zero, so the clamp
-caught it and produced exactly nought point nought nought metres. A sub calmly reporting
-"at the surface" all the way to the bottom of a canal, flagged as real hardware rather
-than a simulation, with not one fault raised. That is the most dangerous reading this
-system is capable of producing, and the shape of a dead bus is now rejected *before* the
-checksum is allowed a vote.
+matches. The sensor therefore reports itself online. Zero calibration constants multiply
+out to zero pressure. Zero pressure is below the surface zero, so the clamp catches it and
+produces exactly nought point nought nought metres: a sub calmly reporting "at the surface"
+all the way to the bottom of a canal, flagged as real hardware rather than a simulation,
+with not one fault raised. That is the most dangerous reading this system is capable of
+producing, which is why the shape of a dead bus is rejected *before* the checksum is
+allowed a vote.
 
 So the sensor has to clear three separate hurdles before its number is believed at all.
 Its calibration data must not look like a stuck wire — seven identical values is one
@@ -2558,16 +2559,15 @@ start. `BANK_POUND_MIN_PIXELS` (500) is a guard on the whole sample: fewer flat-
 than that and no levels are reported at all, rather than a mode being fitted to a puddle.
 
 **Checked against the real survey, two ways.** On the held Camden area the detector reports
-seven levels — 29.67, 29.01, 27.64, 25.10, 23.08, 22.12, 20.89 m OD — every one a genuinely
-populated sheet (13,905 to 53,498 flat cells within ±0.25 m of it), with the closest pair
-0.66 m apart and so clearing the 0.6 m separation rule rather than being one pound reported
-twice.
+levels at 29.67, 29.01, 27.64, 25.10, 23.08, 22.12 and 20.89 m OD, every one a genuinely
+populated sheet, with the closest pair 0.66 m apart — clearing the 0.6 m separation rule
+rather than being one pound reported twice.
 
-Five of those were measured **independently and by a different method**: taking the 10th
+Five of those are reproduced **independently and by a different method**: taking the 10th
 percentile of elevation within 7 m of the Trust's centreline either side of each lock in the
 flight gives 29.01, 27.64, 25.10, 23.07, 20.89. The histogram agrees with all five, worst
-case 1 cm. The two the lock-based sample never visited (29.67, 22.12) are pounds above and
-below the stretch it walked. Two methods that share no code arriving at the same water levels
+case 1 cm. The two the lock-based sample never visits (29.67, 22.12) are pounds above and
+below the stretch it walks. Two methods that share no code arriving at the same water levels
 is the strongest evidence available that these are sheets of water and not artefacts of the
 binning.
 
@@ -2596,12 +2596,13 @@ measures the comparison and not a rounding error.
 **Downsampling without inventing.** At zoom levels where one screen pixel covers many grid
 cells, the naive move is to average — and averaging class codes manufactures amber along
 every water/wall seam, because the mean of WATER (1) and HIGH (3) is LOW (2). A constructed
-sheer-wharf case produces 470 invented amber cells at z15 that way, from a scene containing
-no amber at all. The tiler therefore **counts** rather than averages: each output cell takes
-the majority class of the cells beneath it, so a class can only appear on screen if it exists
-underneath. Verified at 0 invented cells across 1,123,868 aggregated cells. The output cell's
-alpha is set to the *proportion* of its subpixels that carried paint, so the edge of a
-surveyed corridor fades out honestly instead of claiming full coverage.
+sheer-wharf case, containing no amber at all, comes out amber-fringed at z15 that way. The
+tiler therefore **counts** rather than averages: each output cell takes the majority class
+of the cells beneath it, so a class can only appear on screen if it exists underneath. The
+suite asserts that directly — no class present in an output cell that is absent from its
+subpixels. The output cell's alpha is set to the *proportion* of its subpixels that carried
+paint, so the edge of a surveyed corridor fades out honestly instead of claiming full
+coverage.
 
 **Relief.** The shading is a standard hillshade with the light at azimuth 315°, altitude 45°,
 and vertical exaggeration ×3 — a cartographic convention, not a measurement, and it modulates
@@ -2697,24 +2698,23 @@ edge. Here it is, and it is the sentence the whole document has been circling:
 
 > **A "cannot tell" that is itself a measurement is not a "cannot tell".**
 
-Nought degrees is not the absence of a compass. It is *due north*. And because this map
-draws heading-up, a dead compass did not blank the map — it swung the entire map north
-and carried on drawing, with a confident bearing sat next to a NO COMPASS badge on the
-same screen.
+Nought degrees is not the absence of a compass. It is *due north* — and because this map
+draws heading-up, a dead compass filled in that way does not blank the map, it swings the
+entire map north and carries on drawing, with a confident bearing sat next to a NO COMPASS
+badge on the same screen.
 
 Nought metres is not the absence of a depth sensor. It is *the surface*: the one depth a
 descending sub is definitely not at.
 
 A calibration score of nought is not the absence of a compass. It is "a compass answered,
 and it is telling you not to trust it". Those two send an operator to do completely
-different things — recalibrate the thing, or go and find out why the chip is dead — and
-for a long time a hull with no IMU wired at all read as a fitted compass in need of a
-wiggle.
+different things — recalibrate the thing, or go and find out why the chip is dead — so a
+hull with no IMU wired at all must not read as a fitted compass in need of a wiggle.
 
 Nought volts is not the absence of a battery monitor. It is the most alarming number
-that gauge can draw, so a dead monitor painted a red critical warning over a perfectly
-full pack. Being wrong in the safe direction is still being wrong, and an alarm that
-cries wolf is an alarm the operator learns to dismiss without reading.
+that gauge can draw, so a dead monitor filled in with zero paints a red critical warning
+over a perfectly full pack. Being wrong in the safe direction is still being wrong, and an
+alarm that cries wolf is an alarm the operator learns to dismiss without reading.
 
 Nought metres per second is not the absence of a paddlewheel. It is "measured, and it is
 not turning" — which is the exact evidence the snag detector was bought for, so
@@ -2726,13 +2726,12 @@ syringe is empty", which is a specific claim about buoyancy, and an operator wil
 on it.
 
 And NORMAL is not "the leak subsystem has nothing to report". NORMAL is a positive claim
-about hull integrity — both probes were read, and both were dry — and it is the
-strongest reassurance this vehicle ever gives. It was once being given at full telemetry
-rate, for the rest of a dive, by debouncers that nobody had sampled since a completely
-unrelated chip on a completely unrelated bus threw one error. Every other gauge on that
-console correctly blanked and named its faulty part; the one that decides whether a dive
-is recoverable stayed green on evidence no one was collecting. That is why there are
-four leak states and not three.
+about hull integrity — both probes were read, and both were dry — and it is the strongest
+reassurance this vehicle ever gives. Collapse it with "nobody is sampling" and it is given
+at full telemetry rate, for the rest of a dive, by debouncers untouched since an unrelated
+chip on an unrelated bus threw one error: every other gauge on that console correctly blank
+and naming its faulty part, and the one that decides whether a dive is recoverable staying
+green on evidence no one is collecting. That is why there are four leak states and not three.
 
 So the working method, applied everywhere: for each channel, ask whether any value in
 its range already means something real. Usually every value does, and then you have to

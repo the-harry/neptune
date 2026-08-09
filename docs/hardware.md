@@ -21,18 +21,21 @@ dry**. None of those means *unknown* to the person holding the console.
 `settings.hardware_wired` (`NEPTUNE_HW_WIRED`, default **true**) is what takes the vehicle
 off the bench simulator; with it false, or with `gpiozero` absent, `NEPTUNE_HW=auto` falls
 back and the dashboard keeps its SIM badge. Have it on when the **first** module goes on the
-pins — §10 step 3 — not when the last one does. A backend reporting `mock: false` while every
-sensor returned a constant would be strictly worse than an honest simulation, because the
-console would present `0.0 V`, `heading 0`, "at the surface" as instrument readings; that is
-the failure this switch was put there to prevent, and it is why this page used to say flip it
-last. Since `bd743ad` it is not the failure you get: a chip that is not answering blanks its
-own gauges and names itself, so an unwired module reads as unwired instead of as a
-comfortable number.
+pins — §10 step 3 — not when the last one does. That is safe because every chip carries a
+liveness verdict: one that is not answering blanks its own gauges and names itself, so an
+unwired module reads as unwired rather than as a comfortable number. A backend reporting
+`mock: false` while every sensor returned a constant would be strictly worse than an honest
+simulation — the console would present `0.0 V`, `heading 0` and "at the surface" as
+instrument readings.
 
-Nor does one absent module hold up the rest any more. The five GPIO groups come up
-independently and a group that fails is named rather than fatal, so a vehicle with one sensor
-soldered is a vehicle you can bring up, read honestly, and add to. §10 explains what that
-buys a staged build, and what it still does not cover.
+One absent module does not hold up the rest. The five GPIO groups come up independently and
+a group that fails is named rather than fatal, so a vehicle with one sensor soldered is a
+vehicle you can bring up, read honestly, and add to. §10 explains what that buys a staged
+build, and what it still does not cover.
+
+How any of this **looks on screen** is not this page's business: `docs/playbook.md` is the
+presentation contract (§1 the state ladder, §2 the marks, badges and leak ladder), and this
+page cites it rather than restating it.
 
 ---
 
@@ -66,7 +69,7 @@ buys a staged build, and what it still does not cover.
 | 3 | IRLZ44N logic-level MOSFET module | green channel, white channel, **one spare** (a blown module is a dark sub) |
 | 1 | 5 V LED strip, 1 m | the green ring around the hull — the "I am here" light |
 | 2 | 3 W white star LED (+ CC driver or series resistor) | the bow spots, switched together as the single `white` channel |
-| 1 | 2S Li-ion pack with BMS | 8.4 V full, 7.4 V nominal. **The 24 V scale is dead** — see §7 |
+| 1 | 2S Li-ion pack with BMS | 8.4 V full, 7.4 V nominal — **not** a 24 V scale; §7.1 has the bands |
 | 1 | buck converter, 5 V / 3 A | the Pi 3B+ rail and every 5 V sensor. The Pi wants 5 V ±5 % at up to 2.5 A peak |
 | 1 | buck converter, adjustable 3–5 V | the motor rail, set to the thrusters' rated voltage |
 | 1 | fuse holder + fuses (start at 7.5 A) | between the pack and everything. Sized on what the INA219 actually reports |
@@ -155,7 +158,7 @@ returns the cache, because they are called from the asyncio hot path and must no
 
 | Source | Rate | Why that rate |
 |---|---|---|
-| BNO085 | 20–50 Hz | heading feeds the filter; slower and the gyro integration gets coarse |
+| BNO085 | 50 Hz (the loop rate) | heading feeds the filter; slower and the gyro integration gets coarse |
 | MS5837 | ~10 Hz, high oversampling | depth changes slowly; oversampling buys resolution instead of speed |
 | INA219 | ~2 Hz | a battery band does not need to be fast, and the bus is shared |
 | Leak probes | 10 Hz | five consecutive wet samples (~0.5 s) latch a stage — see §6.1 |
@@ -378,8 +381,8 @@ bridges the gap easily; the internal pull-up holds the pin high when dry, and we
 **LOW**.
 
 - **WARN** probe at the **lowest point** of the hull, where the first millimetre of water
-  collects. Amber, advisory: *water is collecting, finish up*.
-- **FLOOD** probe **2 cm higher**. Red, pulsing, plus a SURFACE prompt.
+  collects. Advisory: *water is collecting, finish up*.
+- **FLOOD** probe **2 cm higher**: *come up now*. (Both stages' glyphs: `docs/playbook.md` §2.)
 
 Solder the joints, coat *the joints* in epoxy, and leave the comb itself bare. A probe you
 have conformal-coated is a probe that will never get wet.
@@ -396,8 +399,8 @@ the answer you were hoping for. Two things are done about it:
   WARN is dry is physically impossible — water reaching the upper probe passed the lower one —
   and both wet on a dry deck means the combs are bridged by something that is not canal water.
 - **Nothing in hardware can tell "dry" from "disconnected" on a bare digital input.** An open
-  circuit and a dry comb are the same circuit. So the pre-dive test is not optional — but it
-  has to be the *right* test, and this page used to recommend the wrong one.
+  circuit and a dry comb are the same circuit. So the pre-dive test is not optional — and it
+  has to be the *right* test.
 
 **Do not test it with a wet finger.** The arithmetic says it cannot work. The Pi's internal
 pull-up is roughly 50 kΩ and the input reads LOW below about 0.8 V, so the probe path has to
@@ -425,12 +428,12 @@ short does nothing, no amount of water ever will, and the fault is in the leads 
 seating. Only once the short works is a sponge across the comb a meaningful test of the comb
 itself.
 
-> A bench session lost an hour to this. The probe was dipped in tap water repeatedly and the
-> console showed `NORMAL` every time; `pinctrl` confirmed GPIO17 sitting high throughout, so
-> every layer above the pin was reporting correctly. A direct short between the probe ends
-> also produced nothing, which located the fault in the wiring rather than the water — after
-> a detour through comb geometry, pull-up strength and water conductivity, none of which were
-> the problem. **Short first. It is five seconds and it bisects the whole chain.**
+> **Short first. It is five seconds and it bisects the whole chain.** This vehicle's leak
+> probes have an open wiring fault, still unfixed, and it cost a bench hour before anyone
+> shorted the ends: the comb was dipped in tap water repeatedly and the console showed
+> `NORMAL` every time, with `sudo pinctrl get 17` confirming the pin high throughout — every
+> layer above the pin reporting correctly. Comb geometry, pull-up strength and water
+> conductivity were each investigated; none of them was the fault. The short says so at once.
 
 ### 5.2 Paddlewheel
 
@@ -469,9 +472,10 @@ Two physical limits the code already encodes, and you should not try to fix in h
 
 - **The wheel cannot sense direction.** The sign of the speed comes from the commanded
   throttle, not from the wheel.
-- **It stalls below about 0.1 m/s.** No pulses is reported as *stale* (`None`), never as
-  0.0 m/s — "slower than I can see" and "stopped" are different claims, and only the throttle
-  can tell them apart. No pulses with high thrust is the **snag** signal.
+- **It stalls below about 0.1 m/s.** No pulses travels as `None` — *nothing measured the
+  speed* — never as 0.0 m/s: "slower than I can see" and "stopped" are different claims, and
+  only the throttle can tell them apart. (`None` is cannot-tell, not stale; the two have
+  different marks, `docs/playbook.md` §1.) No pulses with high thrust is the **snag** signal.
 
 ### 5.3 Spool encoder
 
@@ -508,42 +512,42 @@ in an office.
 
 ### 6.1 Two-stage leak
 
-| Stage | Probe | Dashboard | Meaning |
+Four states, because `NORMAL` is a positive claim and not the absence of news. The glyphs
+are `docs/playbook.md` §2 (the leak ladder); the electrical facts are here.
+
+| Stage | Probe condition | On the wire | Meaning |
 |---|---|---|---|
-| `NORMAL` | both dry, **and both actually read** | nothing | — |
-| `WARN` | low probe wet ≥ 5 samples | amber, the sub glyph **changes shape** | water is collecting; finish up, non-blocking |
-| `FLOOD` | upper probe wet ≥ 5 samples | red **pulsing sub** + SURFACE prompt | come up now |
-| `UNKNOWN` | nobody is sampling the probes | `leak: true` on the wire | the hull is **not being watched** — treat as unverified, not as dry |
+| `NORMAL` | both dry, **and both actually sampled** | `leak: false` | both probes were read and both were dry |
+| `WARN` | low probe wet ≥ 5 samples | `leak: true`, `leak_state: "WARN"` | water is collecting; finish up, non-blocking |
+| `FLOOD` | upper probe wet ≥ 5 samples | `leak: true`, `leak_state: "FLOOD"` | come up now |
+| `UNKNOWN` | nobody is sampling the probes | `leak: true`, `leak_state: "UNKNOWN"` | the hull is **not being watched** — unverified, not dry |
 
 `read_leak()` returns `FLOOD` if the flood probe is wet regardless of the warn probe, else
 `WARN` if the warn probe is wet, else `NORMAL` **only if the probes are actually being
 sampled**, else `UNKNOWN`. The two probes are independent — that is why the
 impossible-combination check in §5.1 works.
 
-**Why there is a fourth state.** `NORMAL` is not the absence of news, it is a positive
-safety claim: *both probes were read, and both were dry*. Leak detection was the only
-reading on this vehicle with no liveness gate at all, and the probes were sampled inside
-the same try-block as the I²C ticks — so one unexpected raise from a bus chip skipped the
-rest of the tick, the probes stopped being sampled entirely, and the vehicle went on
-answering `NORMAL` at full telemetry rate. Every other gauge correctly blanked and named
-its chip; the hull-integrity readout, the one that decides whether the dive is
-recoverable, stayed green on evidence nobody was collecting.
+**Why the fourth state exists.** *Both probes were read, and both were dry* is the strongest
+reassurance this vehicle gives, so it needs a liveness gate like every other reading. Without
+one, a sampler that stops answers `NORMAL` at full telemetry rate for the rest of the dive —
+every other gauge correctly blank and naming its chip, and the one readout that decides
+whether a dive is recoverable staying green on evidence nobody is collecting. `_leak_tick()`
+therefore sits in its **own try-block, on no bus at all**, above the I²C work: a raise from a
+bus chip cannot take the probe sampling down with it, and a probe pin that will not read
+faults under its own name (`leak-probes`, §6.2).
 
 **Wet outranks cannot-tell.** Water that has already reached a probe is an established
 fact and the sampler stopping afterwards does not un-establish it, so a latched `WARN` or
 `FLOOD` never decays to `UNKNOWN`. Only the *reassurance* needs liveness. The gate sits
 between `WARN` and `NORMAL`, and nowhere else.
 
-**Clearing a latch: the `leak_reset` command.** Latching is one-way, and it stays one-way —
-a probe drying out is not evidence the hull is sound. But one-way with *no* way back meant
-the only thing that cleared a latch was restarting the service, which at the water's edge
-means SSH-ing into a submarine, and on the bench it meant every dip test poisoned the rest of
-the session. `LeakDebouncer.reset()` had existed all along, documented for "a deliberate
-post-repair reset", and nothing could reach it.
-
-It is a command now — through the same recv → validate → apply → ack lifecycle as `arm` and
-`surface`, so it lands in the blackbox with a correlation id. Dismissing the strongest claim
-this vehicle makes should be findable in the log afterwards.
+**Clearing a latch: the `leak_reset` command.** Latching is one-way and stays one-way — a
+probe drying out is not evidence the hull is sound. But one-way with no way back leaves the
+only escape a service restart, which at the water's edge means SSH-ing into a submarine and
+on the bench means every dip test poisons the rest of the session. So it is a command, through
+the same recv → validate → apply → ack lifecycle as `arm` and `surface`, and it lands in the
+blackbox with a correlation id: dismissing the strongest claim this vehicle makes should be
+findable in the log afterwards.
 
 **The rule that makes it safe: it clears the memory of water, never water that is there now.**
 The guard reads the **live pins**, not the debouncers — a debouncer *is* a memory, and a
@@ -559,14 +563,13 @@ leave a bench-wet boot stuck with no way back short of a restart.
 
 Re-arms are counted and reported as `leak_rearms` in telemetry, because a `NORMAL` an operator
 restored by hand and a `NORMAL` that was never in doubt are different claims, and the console
-is entitled to say which one it is showing. On the dashboard the drop glyph becomes a button
-whenever a stage is latched — inert on a healthy hull so it cannot be caught by accident, and
-offered on `FLOOD` as well as `WARN`, because the vehicle decides and hiding it would strand
-an operator who has genuinely pumped out and dried the bilge.
+is entitled to say which one it is showing. The reset is offered on `FLOOD` as well as `WARN`:
+the vehicle decides, and hiding the control would strand an operator who has genuinely pumped
+out and dried the bilge.
 
-The FLOOD presentation is kept deliberately distinct from a **link dropout**: a leak is
-the sub telling you something, a dropout is the sub telling you nothing, and confusing the
-two sends the operator to the wrong action.
+A leak is the sub telling you something; a **link dropout** is the sub telling you nothing.
+Confusing the two sends the operator to the wrong action, which is why the two wear different
+shapes rather than different colours (`docs/playbook.md` §2).
 
 ### 6.2 What each chip looks like when it dies
 
@@ -590,80 +593,55 @@ ways a bus dies:
 A device that has never produced a good read is faulted too — there is nothing behind its
 cache at all.
 
-| Chip / subsystem | Streak · silence | What stops | On the wire | On screen |
-|---|---|---|---|---|
-| **BNO085** (0x4A) | 5 · 1.0 s | heading, mag-cal, gyro rate, linear accel, pitch/roll | `heading`, `heading_card`, `mag_cal` → `null`; `"bno085"` in `sensor_faults` | HDG shows **`?`** amber wavy; badge **`NO BEARING`**; radar stays on the LAST angle the compass gave; alert chip `NO BEARING · SENSOR STOPPED` |
-| **MS5837** (0x76) | 2 · 2.5 s | depth and pressure — they are one chip | `depth`, `pressure` → `null`; `"ms5837"` in `sensor_faults` | DEPTH and PRESSURE both **`?`** amber wavy, **and their depth-band colour drops**; alert chip `NO DEPTH & PRESSURE · SENSOR STOPPED` |
-| **INA219** (0x40) | 2 · 5.0 s | pack voltage and pack current — same chip, so they die together | `battery_v`, `current_a` → `null`; `"ina219"` in `sensor_faults` | the voltage loses its band colour and its tooltip says it is not tracking the battery (see the caveat below) |
-| **leak probes** (GPIO17/4) | 3 · 1.0 s | the *reassurance* only; latched wet states survive | `leak_state` → `"UNKNOWN"`, `leak` → `true`; `"leak-probes"` in `sensor_faults` | see the caveat below |
-| **sensor thread** | — · 1.0 s | everything, because it is what fills every cache | the chips above age out and fault behind it; `"sensor-thread"` in `sensor_faults` | every gated gauge goes to `?` together |
-| **I²C bus** | latched at open | all three chips at once | `"i2c"` in `sensor_faults` | one fault named, not three — the console says "the whole I2C bus (so every chip on it)" |
+| Chip / subsystem | Streak · silence | What stops | On the wire |
+|---|---|---|---|
+| **BNO085** (0x4A) | 5 · 1.0 s | heading, mag-cal, gyro rate, linear accel, pitch/roll | `heading`, `heading_card`, `mag_cal` → `null`; `"bno085"` in `sensor_faults` |
+| **MS5837** (0x76) | 2 · 2.5 s | depth and pressure — they are one chip | `depth`, `pressure` → `null`; `"ms5837"` in `sensor_faults` |
+| **INA219** (0x40) | 2 · 5.0 s | pack voltage and pack current — same chip, so they die together | `battery_v`, `current_a` → `null`; `"ina219"` in `sensor_faults` |
+| **leak probes** (GPIO17/4) | 3 · 1.0 s | the *reassurance* only; latched wet states survive | `leak_state` → `"UNKNOWN"`, `leak` → `true`; `"leak-probes"` in `sensor_faults` |
+| **sensor thread** | 1 · 1.0 s | everything, because it is what fills every cache | the chips above age out and fault behind it; `"sensor-thread"` in `sensor_faults` |
+| **I²C bus** | latched at open | all three chips at once | `"i2c"` in `sensor_faults` — one fault named, not three |
 
 The windows are sized to how often each device is actually polled (§2.2), which is why they
 differ. The MS5837's streak is deliberately **short**: its failure path backs off to one
 retry a second, so a long streak would let the backoff decide how long a dead depth sensor
 keeps showing its last depth.
 
-`sensor_faults` uses the same designations as this document and the wiring diagram, on
-purpose — the console names the part you are going to go and unplug. An **empty** list is
-not a clean bill of health: a backend that cannot track liveness reports empty, so the
-`null` on each individual reading is the authoritative claim and the list only supplies the
-cause.
-
-> **Two gaps that used to be here are closed, and the shape of them is worth keeping.**
-> The vehicle side of both was always correct and checkable on the wire; it was the topside
-> rendering that had not caught up, which is the more dangerous half — a dashboard is what
-> an operator actually reads.
-> **(a)** A dead INA219 nulled the voltage and the readout fell back to `--V`, the STALE
-> shape, rather than the `?` the depth and heading gauges use, and it raised no alert chip.
-> It now reads `?` and pushes a critical **NO PACK VOLTAGE · PACK MONITOR** chip naming the
-> part. **(b)** A `leak_state` of `UNKNOWN` was collapsed to `NORMAL` topside, so the drop
-> glyph read "both probes dry" while nothing was sampling them. `UNKNOWN` now outranks
-> `NORMAL` in the console's own ladder, gets the broken-drop glyph, and raises a critical
-> **HULL STATE UNKNOWN** chip.
->
-> Both were the same defect wearing different clothes, and it is the one §24 is about: the
-> vehicle can be scrupulous about what it does not know and still have the console quietly
-> round it back up to good news. `sensor_faults` in the telemetry frame remains the
-> authoritative account of which part stopped — but you should no longer have to go there
-> to catch the console being cheerful.
+Every one of those nulls reaches the operator as cannot-tell — `?`, amber, wavy, with an
+alert chip naming the part. The marks, the badges and the chip wording are
+`docs/playbook.md` §1 and §2; what this page owes them is the `sensor_faults` designation,
+which is deliberately the **same name printed on the wiring diagram**, so the console names
+the object a human is about to unplug. An **empty** list is not a clean bill of health: a
+backend that cannot track liveness reports empty, so the `null` on each individual reading
+is the authoritative claim and the list only supplies the cause.
 
 **What is NOT covered by any of this.** Liveness gating applies to the I²C chips, the leak
 sampler and the sensor thread. The remaining GPIO inputs have no equivalent, because
 nothing in a bare digital input can distinguish a working quiet pin from a dead one:
 
-- **Leak probes** — a dead probe reads *dry* forever. Covered instead by the
-  impossible-combination check (§5.1) and the five-second dip test, which is not optional.
-- **Paddlewheel** — no pulses is reported as *unknown*, never `0.0 m/s`; no pulses under
-  sustained thrust is the **snag** signal. A dead hall sensor and a stopped wheel look
-  identical, which is why there is a spare in the BOM.
+- **Leak probes** — a dead probe reads *dry* forever, and the liveness verdict above only
+  catches a sampler that has stopped, not a probe that is disconnected. Covered instead by
+  the impossible-combination check (§5.1) and the short-then-dip test, which is not optional.
+- **Paddlewheel** — no pulses travels as `None`, never `0.0 m/s`; no pulses under sustained
+  thrust is the **snag** signal. A dead hall sensor and a stopped wheel look identical, which
+  is why there is a spare in the BOM.
 - **Spool encoder** — `read_payout_m()` returning `0.0` means *no bound known*, not *the
   sub is at the origin*.
 
 ### 6.3 Telling a dead sensor from a dropped frame
 
 These are the two failures a bench session will confuse, and they want opposite reactions:
-one comes back on its own and one needs you to go and touch a cable. So they are given
-different **shapes**, not different colours.
-
-| On screen | What happened | What to do |
-|---|---|---|
-| `42.7`, coloured by its band | the sensor is reporting | nothing |
-| **`--`**, dim, and **the whole bar dashes together** | **STALE** — the tether went quiet for a moment; the socket is still open | nothing; it returns by itself |
-| **`?`**, amber, with a **wavy underline** | **CANNOT-TELL** — the chip behind that reading has stopped answering | waiting will not help; check that chip's wiring |
-
-Two tells that separate them without reading a single character:
+a dropped frame comes back on its own, a dead chip needs you to go and touch a cable. The
+two marks that carry them — `--` dim for STALE, `?` amber wavy for CANNOT-TELL — are
+`docs/playbook.md` §1. What matters at the bench is how to tell them apart **without
+reading a single character**:
 
 - **STALE moves as a group.** A dropped frame dashes *every* reading at once, because one
   link carries all of them. A dead chip blanks only the gauges behind that chip — depth and
   pressure together and nothing else is an MS5837; the bearing alone is a BNO085.
 - **The last number is never shown for a dead sensor.** A frozen reading and a steady one
-  look identical, and that is precisely how an MS5837 that stopped at 4.33 m had the console
-  painting a confident, colour-banded 4.3 m while the sub descended to 8 m.
-
-The alert chip names the part (`NO DEPTH · SENSOR STOPPED`, "the vehicle names the MS5837
-depth/pressure sensor"), which is the difference between a blank gauge that reads as a
-dashboard glitch — something you wait out — and one that reads as an errand.
+  look identical: an MS5837 that stops at 4.33 m would otherwise leave the console painting
+  a confident, colour-banded 4.3 m while the sub descends to 8 m.
 
 **Reproducing all of it with no hardware**, which is how these paths are exercised at all:
 
@@ -687,10 +665,7 @@ blank after the connector is reseated is its own fault, and one nobody finds unt
 Turn rate, forward acceleration, pitch, roll and pack current are **diagnostic**, not
 navigational. Nothing safety-critical branches on attitude and the forward accelerometer is
 never integrated twice into a position — they are on screen because they are the readings
-that tell you *whether the vehicle is doing what you told it to*, and every one of them was
-being produced by the hull and displayed nowhere. Four of them reached no readout at all;
-pack current was spent inside the pack tooltip, which nobody hovers on a canal bank in
-sunlight with wet hands.
+that tell you *whether the vehicle is doing what you told it to*.
 
 They are what you fly the sub on **at the bench**, before there is any water to check them
 against. All five come off chips that already had a purpose here, so none of them costs a
@@ -777,8 +752,8 @@ The number that matters is not the absolute draw, it is **current against speed*
 
 Take the numbers once on a clean hull and write them on this page; they are vehicle-specific
 and nobody else's are worth anything to you. For the shape to expect,
-`MockHardware.read_current_a()` in `api/hardware.py` models it — read out on the ROG Ally,
-2026-08-07:
+`MockHardware.read_current_a()` in `api/hardware.py` models it as
+`0.35 + 2.5·(|L|+|R|)/2 + lights`, where white contributes 0.8 A and green 0.5 A at full:
 
 | State | Modelled draw |
 |---|---|
@@ -792,13 +767,12 @@ The thrusters dominate everything else, which is exactly why this number is wort
 Those are **modelled** figures and not measurements — no part of this vehicle has been
 bought — so treat the shape as real and the digits as placeholders.
 
-> **The stock shunt clips before this vehicle does.** §4.4's 0.1 Ω shunt with the driver's
-> 320 mV gain setting reads to **±3.2 A**, and full throttle plus both lamps is above that
-> on the numbers above. A clipped reading is not a maximum — it is a ceiling wearing a
-> measurement's clothes, and the one thing it hides is the overload you fitted the sensor
-> to see. If your peak reaches it, fit a 0.01 Ω shunt and change `INA219_SHUNT_OHMS` in
-> `api/hardware.py` and §4.4 **together**; a shunt swapped in hardware alone scales every
-> amp by exactly the wrong factor and nothing anywhere looks broken.
+> **The stock shunt clips before this vehicle does.** The worst case above is past §4.4's
+> ±3.2 A ceiling, and a clipped reading is not a maximum — it is a ceiling wearing a
+> measurement's clothes, hiding the one thing the sensor was fitted to see. Swapping to a
+> 0.01 Ω shunt is a **two-place change**: `INA219_SHUNT_OHMS` in `api/hardware.py` and §4.4's
+> figure, together. Changed in hardware alone it scales every amp by exactly the wrong
+> factor and nothing anywhere looks broken.
 
 #### When they say nothing
 
@@ -866,22 +840,23 @@ control system down with the sub in the water.
 
 ### 7.1 Battery thresholds
 
-Mirrors `api/config.py`. **One colour, one meaning** — the colour comes only from these
-bands, and the voltage number is always shown next to it.
+Mirrors `api/config.py`. The bands are the only source of the pack's colour and the voltage
+number is always shown beside it — a band is a judgement, the number is the measurement
+(`docs/playbook.md` §3).
 
-| Band | Volts | Setting | Env | Dashboard |
+| Band | Volts | Setting | Env | What it means |
 |---|---|---|---|---|
 | Full | 8.4 | `battery_full_v` | `NEPTUNE_BATT_FULL` | the top of the scale |
-| Dive on | ≥ 7.0 | `battery_warn_v` | `NEPTUNE_BATT_WARN` | green |
-| Head back | < 7.0 | `battery_warn_v` | `NEPTUNE_BATT_WARN` | amber — finish the pass |
-| Surface | < 6.6 | `battery_crit_v` | `NEPTUNE_BATT_CRIT` | red + SURFACE prompt |
+| Dive on | ≥ 7.0 | `battery_warn_v` | `NEPTUNE_BATT_WARN` | proven good |
+| Head back | < 7.0 | `battery_warn_v` | `NEPTUNE_BATT_WARN` | finish the pass |
+| Surface | < 6.6 | `battery_crit_v` | `NEPTUNE_BATT_CRIT` | come up now |
 | Hard floor | 6.0 | `battery_floor_v` | `NEPTUNE_BATT_FLOOR` | 3.0 V/cell — below this the cells are **damaged**, not merely flat |
 
 Nothing in software enforces the floor. It is the number the operator must never reach,
 which is exactly why it is written down instead of left to folklore.
 
-**The old 24 V scale is obsolete.** Anything still comparing against 20–25 V is describing a
-different vehicle and will read "full" forever on this one.
+**This pack is 2S: 8.4 V full, 7.4 V nominal.** Anything comparing against a 20–25 V scale
+is describing a different vehicle and will read "full" forever on this one.
 
 ---
 
@@ -1045,84 +1020,57 @@ gets attributed to another. This build is **staged** — modules go on the pins 
 over several evenings, not all at once on a Saturday — so the order below is also the order
 the console lights up in.
 
-### The flag goes on early now, and here is why that changed
+### The wired flag is on from the first module, not held back to the last
 
 `settings.hardware_wired` — the `NEPTUNE_HW_WIRED` environment variable, default **true** — is
-the single switch that takes the vehicle off the bench simulator and onto the loom. **Have it
-on at step 3, with the first module on the pins.** Not at the end.
+the single switch that takes the vehicle off the bench simulator and onto the loom. It is an
+assertion a human makes, because nothing in software can see a connector; `gpiozero` still has
+to import as well, so a bench machine lands on the mock whatever this says. Being an
+environment variable, it is stated in a place that does not need a commit — there is no source
+edit to make on the vehicle.
 
-It was a hardcoded `wired = False` inside `RealHardware._gpio_available()` until this round,
-which meant asserting "the wires are in the holes" required editing a source file *on the
-vehicle* to state a fact about a workbench. The assertion still has to be made by a human —
-nothing in software can see a connector, and `gpiozero` still has to import, so a bench
-machine lands on the mock whatever this says — but it is made in a place that does not need a
-commit.
-
-That is the opposite of what this section said until now, and the reversal is worth reading
-rather than obeying, because the old advice was right when it was written. Before `bd743ad`,
-`RealHardware` answered with constants for everything it could not read. Flip the flag then,
-with three empty I²C sockets, and the vehicle came up reporting `mock: false`, `0.0 V`,
-`heading 0` and "at the surface": the SIM badge went out and the console drew every one of
-those constants as an instrument reading. In that world an early flip was an act of
-dishonesty, and the only safe moment was after every readback had been proven real — so
-"last" was the correct instruction, for the correct reason.
-
-`bd743ad` removed the constants. Every chip now carries a liveness verdict, every readback
-behind it is gated on that verdict, and a chip that has **never** answered is faulted exactly
-like one that answered and stopped (§6.2). A module that is not yet fitted therefore reads as
-not fitted, per chip, all the way to the console: its gauges show `?` in amber with the wavy
-underline, `sensor_faults` names it, and `RealHardware.__init__` says so on the way up —
+**It defaults on, so the vehicle is on the loom from step 3, with the first module on the
+pins.** Do not turn it off and wait for the last one. What makes early safe is §6.2: every
+chip carries a liveness verdict, every readback behind it is gated on that verdict, and a
+chip that has **never** answered is faulted exactly like one that answered and stopped. A
+module that is not yet fitted therefore reads as not fitted, per chip, all the way to the
+console — its gauges cannot-tell, `sensor_faults` names it, and `RealHardware.__init__` says so
+on the way up:
 
 ```
 RealHardware active (GPIO + I2C); not answering yet: <the chips that have not answered>
 ```
 
-Which turns the flag from a certificate into an **instrument**. Flipped at step 3, every
-later step gets a free acceptance test that costs nothing to run: seat the connector, and
-watch that module's gauge go from `?` to a number and its name leave `sensor_faults` in the
-same frame. A module that comes alive on screen the moment it is plugged in has proven its
-wiring, its address, its power and its whole path to the operator in one motion. A module
-that does not has said so on the evening you wired it — instead of on the evening you flip a
-flag and meet six faults at once with nothing to bisect.
+Which turns the flag from a certificate into an **instrument**. On from step 3, every later
+step gets a free acceptance test that costs nothing to run: seat the connector, and watch that
+module's gauge go from `?` to a number and its name leave `sensor_faults` in the same frame. A
+module that comes alive the moment it is plugged in has proven its wiring, its address, its
+power and its whole path to the operator in one motion. A module that does not says so on the
+evening you wired it, rather than on the evening you meet six faults at once with nothing to
+bisect.
 
-**Three things the early flip does not do**, all worth knowing before you trust the screen
-mid-build:
+**Two things being on the loom early does not do**, both worth knowing before you trust the
+screen mid-build:
 
 - **Actuators have no liveness verdict at all**, and cannot have one: nothing in a GPIO
   output can tell a wired H-bridge from an empty pin. A not-yet-wired thruster, stepper or
-  lamp accepts every command and reports nothing wrong. Steps 4, 5 and 6 are still proven by
-  watching the hardware move, exactly as before.
+  lamp accepts every command and reports nothing wrong. Steps 4, 5 and 6 are proven by
+  watching the hardware move, not by reading the console.
 - **A not-yet-wired leak probe reads *dry*.** The pin's own pull-up holds it high and the
   sampler is running, so `read_leak()` answers `NORMAL` — a positive claim that the hull is
-  dry, made about probes that are not there. `NORMAL` means nothing until step 7's dip test
-  has passed. This is the one reading the early flip makes *less* honest, which is precisely
-  why that dip test is not optional.
+  dry, made about probes that are not there. An open circuit and a dry comb are the *same*
+  circuit, so every layer above the pin reports dry, honestly. `NORMAL` means nothing until
+  step 7's short-then-dip test has passed; this is the one reading that being on the loom
+  early makes *less* honest, which is exactly why that test is not optional. §5.1 has the
+  bench evidence.
 
-  **This is not theoretical.** A bench session spent an hour chasing a leak probe that
-  showed nothing in tap water. The console was correct at every layer — `pinctrl` confirmed
-  GPIO17 sitting high while the comb was submerged — and a direct short between the two
-  probe ends produced nothing either, which finally located the fault in the probe leads.
-  An open circuit and a dry comb are the *same* circuit, so every layer above the pin
-  reported dry, honestly, for an hour. Read the third bullet in §5.1 before you trust a
-  green drop on a loom you have not shorted by hand.
-- **Every gauge now says `?`** — this bullet used to name three that did not (pack voltage
-  fell back to `--V`, `leak_state: UNKNOWN` collapsed to `NORMAL`, and a null SPEED rendered
-  as the dropped-frame `--`). All three are fixed and the box in §6.2 has the detail. `--`
-  now means STALE and only stale; `?` means cannot-tell. They are different claims and the
-  console no longer spells one of them with the other's mark.
-
-**A group that does not come up no longer takes the vehicle with it.** `RealHardware.__init__`
-used to be one straight run of constructors, so the first pin that would not build raised,
-`NEPTUNE_HW=auto` fell all the way back to the simulator, and the only symptom was the SIM
-badge. That is defensible on a finished vehicle and useless on one being built: it made the
-first sensor you solder untestable, because bringing it up claimed the other eleven were
-there too.
-
-The five GPIO groups — **thrusters, lights, ballast, leak, pulses** — now come up
-independently. A group that raises leaves its devices unset, latches a fault under its own
-name, and the methods that would drive it refuse rather than crash. `is_mock` stays `false`,
-because the vehicle *is* real — it is a real vehicle with three sensors fitted, and
-`sensor_faults` says which three. So the boot line is worth reading in full:
+**A group that does not come up does not take the vehicle with it.** The five GPIO groups —
+**thrusters, lights, ballast, leak, pulses** — come up independently. A group that raises
+leaves its devices unset, latches a fault under its own name, and the methods that would drive
+it refuse rather than crash. `is_mock` stays `false`, because the vehicle *is* real — a real
+vehicle with three sensors fitted, and `sensor_faults` says which three. One straight run of
+constructors would instead make the first sensor you solder untestable, since bringing it up
+would claim the other eleven were there too. So the boot line is worth reading in full:
 
 ```
 RealHardware active (GPIO + I2C); not answering yet: bno085,i2c,ina219,ms5837
@@ -1150,13 +1098,12 @@ all, which is the louder version of the same check.)
 3. **Power tree, INA219, and the flag.** Fuse fitted, shunt high side and first in the chain
    (§4.4), master switch in, and the **INA219 reading pack voltage on the bench** before any
    actuator exists. This is the first honest number the vehicle produces, which is why it is
-   the module the flag rides in on: now flip `wired = True` in
-   `RealHardware._gpio_available()` and run `NEPTUNE_HW=real`. *Proven when:* the SIM badge
-   is gone, the boot line names the chips that are not yet fitted, pack voltage tracks a pack
-   you can also read with a multimeter, and **every other sensor gauge shows `?`** — bar the
-   three readouts named above, which have not learned the shape yet. That screen — one real
-   number among a dozen honest blanks — is the picture the rest of the bring-up fills in, one
-   connector at a time.
+   the module the flag rides in on: confirm `NEPTUNE_HW_WIRED` is true (it is by default) and
+   run `NEPTUNE_HW=real`. *Proven when:* the SIM badge is gone, the boot line names the chips
+   that are not yet fitted, pack voltage tracks a pack you can also read with a multimeter,
+   and **every other sensor gauge reads cannot-tell**. That screen — one real number among a
+   dozen honest blanks — is the picture the rest of the bring-up fills in, one connector at a
+   time.
 4. **Thrusters:** direction, deadband, and that `safe()` really stops them. Out of the water.
    Proven at the shafts, not on the screen — see the actuator caveat above.
 5. **Ballast:** current limit (§4.2), `ballast_home()`, span (§8.3), and both limit switches
@@ -1164,8 +1111,9 @@ all, which is the louder version of the same check.)
    the first successful home, which is the syringe being honest about an open-loop axis
    rather than a fault.
 6. **Lights:** both channels, dim to zero and back.
-7. **Leak probes:** the dip test (§5.1), both stages, both orders. Only from here on does a
-   `NORMAL` on the console mean anything at all.
+7. **Leak probes:** §5.1's test in its order — **short the probe ends first**, then dip,
+   both stages, both orders. Only from here on does a `NORMAL` on the console mean anything
+   at all.
 8. **Sensors onto the bus, one connector at a time.** BNO085, then MS5837, then the
    paddlewheel and the spool encoder. `i2cdetect -y 1` now shows `40 4a 76` — three addresses
    or the wiring is wrong. Then the readings: heading turns the right way, depth reads
@@ -1179,13 +1127,12 @@ all, which is the louder version of the same check.)
    last number it had. Then plug it back in and confirm the reading **returns** — a gauge
    that blanks correctly and never recovers is its own fault. Do the same for the leak
    probes and confirm the frame carries `leak_state: "UNKNOWN"` rather than `NORMAL`.
-   This step is not optional and it is not a formality: this exact failure shipped three
-   times, because every layer passed its own tests and nobody put a dead sensor in one end
-   and looked at the other. A staged bring-up has been running the *positive* half of this
-   test all along — a chip arriving — but that only proves a `?` can become a number. This
-   step is the half that proves a number can become a `?` again, which is the direction that
-   kills dives.
-10. **Nothing is standing in any more.** With the whole loom on, confirm the vehicle is
+   This step is not optional and it is not a formality: every layer can pass its own tests
+   while nobody has put a dead sensor in one end and looked at the other. The staged bring-up
+   has been running the *positive* half of this test all along — a chip arriving — but that
+   only proves a `?` can become a number. This step is the half that proves a number can
+   become a `?` again, which is the direction that kills dives.
+10. **Nothing is standing in.** With the whole loom on, confirm the vehicle is
     reading rather than modelling: `sensor_faults` empty with every gauge carrying a number,
     and the payout figure moving when cable is pulled off the drum **by hand** — not only
     when the props spin. While no spool answers, `api/nav/sensors.py` fabricates payout from
