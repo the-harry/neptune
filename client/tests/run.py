@@ -36,6 +36,12 @@ USAGE
     python client/tests/run.py tether          # one suite (substring match)
     python client/tests/run.py --headed        # watch it happen
     python client/tests/run.py --list
+    python client/tests/run.py --coverage      # ...and which lines of client/js ran
+
+COVERAGE IS A MEASUREMENT, NOT A GATE
+    --coverage prints how much of each client/js file the run executed, pooled over
+    every suite. It cannot fail a run, and no number from it belongs in prose: the
+    runner prints it, and it is read where it is printed. See LineCoverage.
 
     Exit status:
         0   every suite loaded, reported, and every check passed
@@ -60,6 +66,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -412,16 +419,20 @@ NEVER = "never"             # the browser never even fetched it
 
 
 class Outcome:
-    __slots__ = ("status", "checks", "note", "evidence", "shot_err", "leaked")
+    __slots__ = ("status", "checks", "note", "evidence", "shot_err", "leaked",
+                 "coverage", "cov_err")
 
     def __init__(self, status: str, checks=None, note: str = "", evidence=(),
-                 shot_err=None, leaked: str | None = None):
+                 shot_err=None, leaked: str | None = None, coverage=None,
+                 cov_err: str | None = None):
         self.status = status
         self.checks = checks
         self.note = note              # ONE line: what happened
         self.evidence = list(evidence)  # supporting lines, which are not the same thing
         self.shot_err = shot_err
         self.leaked = leaked          # a profile directory that would not delete
+        self.coverage = coverage      # raw V8 coverage entries, one per script
+        self.cov_err = cov_err        # why there are none, if there are none
 
 
 def kill_browser(proc: subprocess.Popen) -> None:
@@ -565,7 +576,7 @@ def _read_checks(raw: str):
 
 
 def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bool,
-              keep: bool, shots: bool = True) -> Outcome:
+              keep: bool, shots: bool = True, coverage: bool = False) -> Outcome:
     result_box: dict = {}
     seen: dict = {}
     done = threading.Event()
@@ -579,7 +590,15 @@ def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bo
     profile = tempfile.mkdtemp(prefix=PROFILE_PREFIX)
     errlog = Path(profile) / "browser-stderr.log"
     url = f"http://127.0.0.1:{port}/index.html{suite_url_suffix(suite)}"
-    args = launch_args(chrome, version, profile, url, headed)
+    # WITH COVERAGE THE BROWSER IS LAUNCHED AT about:blank AND SENT TO THE SUITE FROM
+    # HERE. V8's precise coverage counts from the moment it is switched on, and it can
+    # only be switched on down a CDP socket that does not exist until Chrome has opened
+    # its debugging port. Launching straight at the suite is a race that is lost most
+    # of the time: the console boots before the profiler starts and its whole boot path
+    # reads as never executed. Nothing else about the run changes - same flags, same
+    # URL, same page, one navigation later.
+    args = launch_args(chrome, version, profile,
+                       "about:blank" if coverage else url, headed)
     # start_new_session so kill_browser can take the whole process group; ignored on
     # Windows, which has no such thing and uses taskkill /T instead.
     with open(errlog, "wb") as elog:
@@ -588,7 +607,30 @@ def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bo
 
     shot_err = None
     browser_rc = None
+    cov_entries = None
+    cov_err = None
+    cov_ws = None
     try:
+        if coverage:
+            # Profiler on, THEN navigate. Inside the try so that a browser and a server
+            # are never left running by a failure in the measurement, and before the
+            # deadline below so a suite is not charged for the setup.
+            try:
+                import cdp
+                cov_ws = cdp.start_coverage(cdp.devtools_port(profile))
+            except Exception as exc:  # noqa: BLE001 — a measurement, never a verdict
+                cov_err = f"could not start: {exc}"
+            try:
+                ws = cov_ws or cdp.page_session(cdp.devtools_port(profile))
+                cdp.navigate(ws, url)
+                if cov_ws is None:
+                    ws.close()
+            except Exception as exc:  # noqa: BLE001
+                # THIS one is not just a missing measurement: the page is still sitting
+                # on about:blank and the suite below will report that it never loaded.
+                # Say which of the two happened, in the line the operator will read.
+                cov_err = (f"{cov_err + '; ' if cov_err else ''}"
+                           f"the page was never sent to {url}: {exc}")
         # Poll instead of one long wait(). A browser that refuses to start — no
         # sandbox on a Pi, a bad flag, killed from outside — used to cost the FULL
         # timeout per suite before anyone was told, which on a 13-suite run is 26
@@ -623,7 +665,18 @@ def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bo
                     capture_png(cdp_port, hide_live=True))
             except Exception as exc:   # noqa: BLE001 — never fail a suite over its portrait
                 shot_err = str(exc)
+        # Taken last, and only while the browser is still up: the numbers live in the
+        # renderer and go with it. Taken even when the suite never reported, because
+        # the lines a hung suite DID reach are still lines this run executed.
+        if cov_ws is not None and proc.poll() is None:
+            try:
+                import cdp
+                cov_entries = cdp.take_coverage(cov_ws)
+            except Exception as exc:  # noqa: BLE001
+                cov_err = f"nothing came back: {exc}"
     finally:
+        if cov_ws is not None:
+            cov_ws.close()
         kill_browser(proc)
         srv.shutdown()
         srv.server_close()      # the listening socket, not just the serve loop: 13
@@ -653,9 +706,11 @@ def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bo
             where = ("the page was served, but the injected suite was never fetched"
                      if seen.get("index") else "nothing was ever fetched from the server")
             return Outcome(NEVER, note=f"{why} - {where}", evidence=evidence,
-                           shot_err=shot_err, leaked=leaked)
+                           shot_err=shot_err, leaked=leaked, coverage=cov_entries,
+                           cov_err=cov_err)
         return Outcome(INCOMPLETE, note=f"loaded, then {why}", evidence=evidence,
-                       shot_err=shot_err, leaked=leaked)
+                       shot_err=shot_err, leaked=leaked, coverage=cov_entries,
+                       cov_err=cov_err)
 
     checks, why = _read_checks(result_box.get("raw", ""))
     if checks is None:
@@ -663,8 +718,9 @@ def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bo
         status = CRASHED if why.startswith(("SUITE CRASHED", "THREW")) else INCOMPLETE
         lines = why[:800].splitlines() or [""]
         return Outcome(status, note=lines[0], evidence=lines[1:6], shot_err=shot_err,
-                       leaked=leaked)
-    return Outcome(REPORTED, checks=checks, shot_err=shot_err, leaked=leaked)
+                       leaked=leaked, coverage=cov_entries, cov_err=cov_err)
+    return Outcome(REPORTED, checks=checks, shot_err=shot_err, leaked=leaked,
+                   coverage=cov_entries, cov_err=cov_err)
 
 
 def check_shot(name: str, bless: bool):
@@ -699,7 +755,133 @@ def check_shot(name: str, bless: bool):
     return (f"visual ok ({frac*100:.3f}% differ)" if VERBOSE_SHOTS else None), False
 
 
-def print_header(chrome: str | None, version: str, n_suites: int) -> None:
+JS = CLIENT / "js"
+
+
+def _js_name(url: str) -> str | None:
+    """`http://127.0.0.1:PORT/js/core.js` -> `core.js`, and nothing else.
+
+    Everything else V8 reports is deliberately dropped on the floor: index.html's own
+    inline script, the injected suite, anything a page pulls in. Coverage here is a
+    statement about the SHIPPING client files and nothing may quietly join them —
+    counting __suite.js would mean the tests measuring themselves.
+    """
+    path = urllib.parse.urlsplit(url).path
+    if not path.startswith("/js/") or not path.endswith(".js"):
+        return None
+    name = path[len("/js/"):]
+    if "/" in name or not (JS / name).is_file():
+        return None
+    return name
+
+
+class LineCoverage:
+    """Which lines of client/js a RUN executed, pooled over all of its suites.
+
+    Pooled, not per suite, on purpose: the suites divide the console up by subject —
+    the tether, the leak ladder, the chart layers — and not by file, so almost every
+    one of them runs most of core.js on the way to what it is really about. A per-suite
+    column would be nineteen true numbers that answer nobody's question. A line reached
+    by any suite is a line this run executed, and that is the number worth having.
+
+    A file V8 never reported is a DASH, not a zero. Zero percent is a measurement — it
+    says the file was loaded and nothing in it ran — and this cannot tell the difference
+    between that and a file nothing ever asked for.
+    """
+
+    def __init__(self):
+        self._sources: dict = {}
+        self.hit: dict[str, set[int]] = {}     # file -> lines that ran, any suite
+        self.measured: set[str] = set()        # files V8 actually reported on
+        self.mismatched: set[str] = set()      # ran, but not the file we read
+        self.errors: list[str] = []            # suite -> why it contributed nothing
+
+    def source(self, name: str):
+        """The scanned file, read once per run however many suites mention it."""
+        if name not in self._sources:
+            import cdp
+            # Bytes, then decode: text mode would silently turn this repo's CRLF files
+            # into LF and shift every offset V8 reports by one per line before it.
+            self._sources[name] = cdp.Source((JS / name).read_bytes().decode("utf-8"))
+        return self._sources[name]
+
+    def add(self, suite: str, entries, err: str | None) -> None:
+        if err:
+            self.errors.append(f"{suite}: {err}")
+        for entry in entries or ():
+            name = _js_name(entry.get("url", ""))
+            if not name:
+                continue
+            lines = self.source(name).covered_lines(entry.get("functions", ()))
+            if lines is None:
+                self.mismatched.add(name)
+                continue
+            self.measured.add(name)
+            self.hit.setdefault(name, set()).update(lines)
+
+    def rows(self):
+        """(name, ran, code_lines, measured) for every shipping client script."""
+        for path in sorted(JS.glob("*.js")):
+            name = path.name
+            code = len(self.source(name).code_lines)
+            yield name, len(self.hit.get(name, ())), code, name in self.measured
+
+
+def print_coverage(cov: "LineCoverage") -> None:
+    """The table. A MEASUREMENT, not a gate — it cannot change the exit status.
+
+    A line counts if it has code on it: comments and blank lines are not lines that can
+    run, so they are not in the denominator and cannot flatter the number. A line is
+    covered if V8 says a character of that code was inside a range that executed.
+    """
+    if not cov.measured:
+        # One honest line instead of nineteen dashes. Nothing ran anywhere — no browser
+        # on this machine, or every suite failed before a script did — and a table whose
+        # every cell is a cannot-tell says that worse than a sentence does.
+        print("\ncoverage - nothing was measured: no script from client/js ran in this run")
+        for err in cov.errors:
+            print(f"  no coverage from {err}")
+        return
+    print("\ncoverage - lines of client/js this run executed, every suite pooled:")
+    ran_t = code_t = 0
+    for name, ran, code, measured in cov.rows():
+        if measured:
+            ran_t, code_t = ran_t + ran, code_t + code
+            pct = f"{100.0 * ran / code:.0f}%" if code else "-"
+            print(f"  {name:<16}{ran:>7}/{code:<7}{pct:>5}")
+        else:
+            # No script under that name ran anywhere in this run. The line count is
+            # known; the number that ran is not, and is not guessed at.
+            print(f"  {name:<16}{'-':>7}/{code:<7}{'-':>5}   nothing under that name ran")
+    if code_t:
+        print(f"  {'-' * 34}")
+        print(f"  {'TOTAL':<16}{ran_t:>7}/{code_t:<7}{100.0 * ran_t / code_t:>4.0f}%")
+    for name in sorted(cov.mismatched):
+        print(f"  {name}: measured, but not the file read from disk - not counted")
+    for err in cov.errors:
+        print(f"  no coverage from {err}")
+
+
+def write_coverage_json(cov: "LineCoverage", path: str) -> None:
+    """Every line that did not run, by file, for whoever goes looking next.
+
+    The table says how much; this says WHICH, and it is the only form in which that is
+    usable. Deliberately a separate file behind its own flag - a run's output is read
+    by people, and ten thousand line numbers are not.
+    """
+    files = {}
+    for name, ran, code, measured in cov.rows():
+        entry = {"code_lines": code, "measured": measured}
+        if measured:
+            entry["covered"] = ran
+            entry["uncovered"] = sorted(set(cov.source(name).code_lines)
+                                        - cov.hit.get(name, set()))
+        files[name] = entry
+    Path(path).write_text(json.dumps({"files": files}, indent=1), encoding="utf-8")
+
+
+def print_header(chrome: str | None, version: str, n_suites: int,
+                 coverage: bool = False) -> None:
     """Say which machine and which engine this run is about, before it runs.
 
     A result is only evidence if it can be traced back to what produced it: this suite
@@ -719,6 +901,13 @@ def print_header(chrome: str | None, version: str, n_suites: int) -> None:
         # change to what the run is; the operator gets to see that it happened and why.
         print(f"sandbox : OFF - {why} (Chrome cannot start with it on here)")
     print(f"client  : {CLIENT}")
+    if coverage:
+        # Said out loud for the same reason the sandbox line is: the browser is started
+        # differently (at about:blank, then navigated) so that V8's profiler is running
+        # before the console boots. A reader comparing two runs should not have to work
+        # out from the flags why one of them took a different path to the same page.
+        print("coverage: ON - V8 precise coverage; Chrome starts at about:blank and is "
+              "navigated to the suite")
     print(f"suites  : {n_suites}\n")
 
 
@@ -738,6 +927,11 @@ def main():
                     help="print the drift percentage even when it passes (to set the tolerance)")
     ap.add_argument("--loose-visual", action="store_true",
                     help="report visual drift without failing the run (see check_shot)")
+    ap.add_argument("--coverage", action="store_true",
+                    help="measure which lines of client/js the run executes (printed, "
+                         "never gated)")
+    ap.add_argument("--coverage-json", metavar="PATH",
+                    help="with --coverage: write the uncovered line numbers per file there")
     # Kept so anything that already passes it still works; it is now the default.
     ap.add_argument("--strict-visual", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
@@ -759,9 +953,12 @@ def main():
     global VERBOSE_SHOTS
     VERBOSE_SHOTS = args.shot_noise
 
+    if args.coverage_json and not args.coverage:
+        sys.exit("--coverage-json needs --coverage: there is nothing to write otherwise")
+
     chrome = find_chrome(args.chrome)
     version = browser_version(chrome) if chrome else ""
-    print_header(chrome, version, len(wanted))
+    print_header(chrome, version, len(wanted), coverage=args.coverage)
 
     swept = sweep_stale_profiles()
     if swept:
@@ -775,6 +972,7 @@ def main():
     drifted: list[str] = []
     leaked: list[str] = []
     shot_notes: list[str] = []
+    cov = LineCoverage() if args.coverage else None
     t0 = time.time()
 
     for suite in wanted:
@@ -797,13 +995,18 @@ def main():
         # operator nothing, which is exactly the silence this runner exists to refuse.
         try:
             out = run_suite(suite, chrome, version, args.timeout, args.headed,
-                            args.keep, shots=not args.no_shots)
+                            args.keep, shots=not args.no_shots, coverage=args.coverage)
         except Exception as exc:  # noqa: BLE001
             print(f"  {name:<24} CRASH {'-':>3}/-   the runner itself failed: {exc}")
             never[name] = f"the runner failed on this suite: {exc}"
             continue
         if out.leaked:
             leaked.append(out.leaked)
+        if cov is not None:
+            # Before the status branches, which return early: a suite that crashed or
+            # hung still ran real lines on its way there, and they are lines of this
+            # console that this run executed.
+            cov.add(name, out.coverage, out.cov_err)
 
         if out.status == NEVER:
             print(f"  {name:<24} NONE  {'-':>3}/-   never loaded: {out.note}")
@@ -870,6 +1073,11 @@ def main():
             print(f"  {n}")
     if drifted and args.strict_visual:
         print(f"\nVISUAL DRIFT fails this run (--strict-visual): {', '.join(drifted)}")
+    if cov is not None:
+        print_coverage(cov)
+        if args.coverage_json:
+            write_coverage_json(cov, args.coverage_json)
+            print(f"  uncovered lines per file: {args.coverage_json}")
     if leaked:
         # Never silently. A profile that would not delete is 40 MB of a handheld's disk,
         # and the only moment anybody can act on it is now, while its name is known.
