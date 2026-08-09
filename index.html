@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Neptune — simulator</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!--
+  THE DEMO'S FRONT DOOR, AND WHY IT IS HERE RATHER THAN ONLY IN THE WORKFLOW.
+
+  .github/workflows/pages.yml publishes client/ as the whole site, which is the right
+  shape and works when the repository's Pages source is "GitHub Actions". When the
+  source is a BRANCH instead, GitHub runs its own Jekyll build on every push, renders
+  README.md, and publishes that — racing the workflow and winning. The demo URL then
+  serves the readme and every client asset 404s.
+
+  This page and the .nojekyll beside it make the site correct under EITHER source:
+  .nojekyll turns the Jekyll build into a plain static copy of the repo, so client/ is
+  served as-is, and this redirect sends the bare URL to the simulator. Under the
+  Actions source it is not in the artifact at all and costs nothing.
+
+  Nothing here is a substitute for setting the source to GitHub Actions — that is
+  still the cleaner arrangement, and the workflow asks for it.
+-->
+<meta http-equiv="refresh" content="0; url=./client/index.html?sim=1">
+<body style="background:#0c0118;color:#ece3ff;font-family:system-ui;padding:2rem">
+<p>Starting the Neptune simulator…
+   <a style="color:#b46bff" href="./client/index.html?sim=1">continue</a></p>
