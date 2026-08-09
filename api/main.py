@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import time
 from collections import deque
 
@@ -40,6 +41,143 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("neptune")
+
+
+# ---------------------------------------------------------------------------
+# THE BOAT'S LOG, WHERE THE OPERATOR CAN ACTUALLY READ IT
+# ---------------------------------------------------------------------------
+# The vehicle has always written a good log and always written it somewhere
+# nobody could reach. It goes to the Pi's stdout, i.e. to journalctl, i.e. to an
+# ssh session — which is not available to somebody standing on a towpath holding
+# a handheld with the sub in the water, and mid-dive is exactly when a fault has
+# to be diagnosed. The console has a LOGS overlay built for precisely this
+# reading and until now it could only show lines the BROWSER had produced: it
+# could say "a telemetry frame arrived with a null depth" and could not say "the
+# MS5837 stopped answering forty seconds ago after two consecutive raises".
+#
+# So the vehicle keeps its own bounded ring and serves it. Not a file tail: the
+# Pi's clock runs days behind with no internet, log rotation is not this file's
+# business, and a ring is O(1) forever. Each line carries the VEHICLE's own
+# timestamp — the client cannot restamp it on arrival without turning a record of
+# when something happened into a record of when it was collected.
+VEHICLE_LOG_LINES = 600  # ~a long dive of EDGES; nothing here is level-triggered
+# Anything a client asks for above this is clamped. A console that has been away
+# for a while catches up over several polls rather than in one large response on
+# a tether that is already carrying video.
+VEHICLE_LOG_MAX_PAGE = 250
+
+
+class VehicleLog(logging.Handler):
+    """Every vehicle log record, kept in memory for the console to fetch.
+
+    A HANDLER RATHER THAN CALL SITES. Making each interesting line "also send
+    itself to the client" would mean every future line has to remember to, and
+    the ones that get forgotten are the ones written in a hurry during a fault.
+    Attaching to the `neptune` logger picks up neptune.hw, neptune.rov,
+    neptune.nav, neptune.cam and neptune.blackbox at once, forever, including
+    lines nobody has written yet.
+
+    THREADS. `emit` is called from the sensor thread, from gpiozero's edge
+    threads and from the event loop; `since()` is called from a request handler.
+    logging.Handler already takes its own lock around emit, so the reader takes
+    the same one. The work inside is a deque append — no formatting of tracebacks,
+    no I/O, nothing that can block the sensor loop for a log line.
+
+    IT CANNOT RAISE INTO THE VEHICLE. A logging handler that throws would turn
+    every log call on the boat into a crash site, so the body is wrapped and
+    failures are reported to logging's own error channel rather than upward.
+    """
+
+    def __init__(self, capacity: int = VEHICLE_LOG_LINES) -> None:
+        super().__init__(level=logging.INFO)
+        self._lines: deque[dict] = deque(maxlen=max(1, capacity))
+        self._seq = 0
+        # Which BOOT these sequence numbers belong to. A client that reconnects
+        # after the Pi has restarted must not carry its old cursor across, or it
+        # asks for line 4000 of a log that starts again at 1 and is told there is
+        # nothing new for the rest of the dive.
+        self.boot = f"{int(time.time() * 1000):x}-{os.getpid():x}"
+
+    # Level names the client's own LOG bus already uses (client/js/core.js), so
+    # nothing downstream has to translate: ok / info / warn / err.
+    @staticmethod
+    def _level_of(record: logging.LogRecord) -> str:
+        if record.levelno >= logging.ERROR:
+            return "err"
+        if record.levelno >= logging.WARNING:
+            return "warn"
+        return "info"
+
+    @staticmethod
+    def _tag_of(record: logging.LogRecord) -> str:
+        # "neptune.hw" -> "HW", the bare "neptune" -> "MAIN". The tag column in the
+        # LOGS overlay is narrow and the operator is looking for a subsystem, not a
+        # dotted path. The bare logger is api/main.py — the control plane — and
+        # naming it after the whole vehicle would put "VEHICLE VEHICLE" on screen
+        # once the client marks these as coming from the boat.
+        name = record.name
+        short = name.split(".", 1)[1] if name.startswith("neptune.") else "main"
+        return short.upper()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = record.getMessage()
+            if record.exc_info and record.exc_info[1] is not None:
+                # The type and the message, never the traceback: a traceback is
+                # for the Pi's journal, and thirty frames of it in a 600-line ring
+                # evicts the history somebody opened the overlay to read.
+                exc = record.exc_info[1]
+                msg = f"{msg} [{type(exc).__name__}: {exc}]"
+            self._seq += 1
+            self._lines.append(
+                {
+                    "i": self._seq,
+                    # The VEHICLE's wall clock, in ms, stated plainly. The Pi's
+                    # clock is often wrong (no RTC, no internet) and that is a
+                    # fact worth carrying rather than hiding: the console shows it
+                    # beside its own clock and the difference is itself a finding.
+                    "t": round(record.created * 1000.0, 1),
+                    "level": self._level_of(record),
+                    "tag": self._tag_of(record),
+                    "msg": msg,
+                }
+            )
+        except Exception:  # noqa: BLE001 — logging must never be the thing that fails
+            self.handleError(record)
+
+    def since(self, cursor: int, limit: int) -> dict:
+        """Lines after `cursor`, plus enough context to know what was missed.
+
+        `oldest` is what makes this honest. The ring is bounded, so a console that
+        was away long enough will have lines evicted before it asks — and a
+        response that simply returned "here is what I still have" would let it
+        believe it has the whole story. Reporting the oldest sequence number still
+        held lets the client say "N lines were lost before this point", which is
+        the same rule the rest of this system follows: an absence is stated, never
+        papered over.
+        """
+        limit = max(1, min(int(limit), VEHICLE_LOG_MAX_PAGE))
+        self.acquire()
+        try:
+            held = list(self._lines)
+            seq = self._seq
+        finally:
+            self.release()
+        oldest = held[0]["i"] if held else seq + 1
+        out = [ln for ln in held if ln["i"] > cursor][:limit]
+        return {
+            "boot": self.boot,
+            "lines": out,
+            "next": out[-1]["i"] if out else max(cursor, seq),
+            "oldest": oldest,
+            "held": len(held),
+        }
+
+
+# One per process, attached and detached by the lifespan so that importing this
+# module (which the test bench does, twice) never installs a handler on the
+# vehicle's logger as a side effect of the import.
+VEHICLE_LOG = VehicleLog()
 
 
 # HOW MANY FRAMES A CLIENT MAY FALL BEHIND BEFORE IT STARTS LOSING THEM. At
@@ -627,6 +765,10 @@ async def _control_loop(app: FastAPI) -> None:
     nav_ever_answered = False  # has navigation EVER contributed to a frame this session
     nav_fail_logged = -1e9  # last time the nav-stitch exception was logged (see below)
     nav_fail_n = 0  # how many it has collapsed since
+    # WHETHER ANYTHING IS MEASURING THE SPEED. None until the first frame, so the
+    # baseline is never announced as a change — a vehicle boots with no speed and
+    # no origin, and a line about it at every start is a line nobody reads.
+    speed_live: bool | None = None
     log.info("control loop @ %.0f Hz (watchdog %.2fs)", settings.telemetry_hz, settings.watchdog_timeout_s)
     while True:
         now = time.monotonic()
@@ -715,6 +857,23 @@ async def _control_loop(app: FastAPI) -> None:
         # the rest of the session, however healthy its own loop looks.
         if nav is not None and nav["used"]:
             nav_ever_answered = True
+        # THE PADDLEWHEEL IS AN INSTRUMENT TOO, and it is the only one whose null
+        # never reaches rov.py: speed is stitched in above, from navigation, so the
+        # edge detector in RovState cannot see it. A wheel that stalls, jams,
+        # goes stale or has no datum to be interpreted against all end in the same
+        # place on screen — "--" and NO SPEED — and only speed_src says which. The
+        # EDGE is logged, not the state: at telemetry_hz a level-triggered line
+        # would be fifteen a second, which is the same as not logging it.
+        now_live = tel.speed_ms is not None
+        if speed_live is not None and now_live != speed_live:
+            if now_live:
+                log.info("SPEED is being measured again (source=%s)", tel.speed_src)
+            else:
+                log.warning(
+                    "SPEED went to cannot-tell (source=%s) — nothing is measuring how fast the hull is moving",
+                    tel.speed_src or "none",
+                )
+        speed_live = now_live
         if mgr.count:
             # seq counts BROADCAST frames only, and is stamped here so the journal
             # below records the same number the client will see. Numbering unsent
@@ -763,6 +922,12 @@ async def lifespan(app: FastAPI):
     # is why a nav service with no loop is not yet a nav service that died — see
     # fill_nav_fields and log_nav_change.
     app.state.subsystems_up = False
+    # FIRST, BEFORE ANYTHING CAN HAVE SOMETHING TO SAY. get_hardware() below is
+    # where a half-built vehicle names the groups that did not come up and the
+    # chips that have never answered, and those lines are the first half of every
+    # sensor's life story — a ring attached after them would open the console's
+    # LOGS overlay in the middle of the sentence.
+    log.addHandler(VEHICLE_LOG)
     app.state.hw = get_hardware()
     app.state.rov = RovState(app.state.hw)
     app.state.manager = ConnectionManager()
@@ -813,6 +978,9 @@ async def lifespan(app: FastAPI):
             app.state.bb.event("session_end", {})
             app.state.bb.close()
         log.info("NEPTUNE API down — vehicle safed")
+        # Detached LAST, so the line above is in the ring: a console still holding
+        # the tether can read the reason its vehicle went away.
+        log.removeHandler(VEHICLE_LOG)
 
 
 app = FastAPI(title="NEPTUNE Sub API", lifespan=lifespan)
@@ -868,6 +1036,34 @@ def system() -> JSONResponse:
     snap["vehicle_hw"] = "mock" if app.state.hw.is_mock else "real"
     snap["clients"] = app.state.manager.count
     return JSONResponse(snap)
+
+
+@app.get("/api/logs")
+def vehicle_logs(since: int = 0, limit: int = 100) -> JSONResponse:
+    """The boat's own log, tailed by the console's LOGS overlay.
+
+    THE WHOLE POINT OF THIS ROUTE is that a fault underwater is diagnosed while
+    the vehicle is still in the water. The console's overlay was built for that
+    and could only show what the browser itself had noticed — which is the far end
+    of the chain, where every failure looks the same: a field arrived null. The
+    line that says WHICH part, and WHY, and WHEN, is written on the Pi, and until
+    now it stayed there.
+
+    A CURSOR, NOT A TAIL. The client passes the last sequence number it holds and
+    gets what came after; nothing is deleted by being read, so two consoles (a
+    handheld and a laptop) can both follow the same log without stealing lines
+    from each other. `boot` changes when the vehicle restarts, which is the
+    client's signal to throw its cursor away rather than sit silently waiting for
+    line 4000 of a log that has started again at 1.
+
+    Independent of the vehicle link on purpose, like /api/system: this has to
+    answer when the control socket is the thing that is broken.
+    """
+    try:
+        return JSONResponse(VEHICLE_LOG.since(int(since), int(limit)))
+    except Exception as exc:  # noqa: BLE001 — the log must never 500 the console
+        # Not logged: a failure in the log tail that logs is a failure that grows.
+        return JSONResponse({"ok": False, "error": str(exc), "lines": []}, status_code=200)
 
 
 @app.get("/stream.mjpg")
