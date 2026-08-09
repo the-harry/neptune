@@ -97,6 +97,23 @@ MAP_DEPS = (
      "decodes the float32 GeoTIFF the service returns and writes the overlay PNGs"),
 )
 
+# Tools that belong to a DESK, not to either machine in this system: (module to probe,
+# what to install, what having it gets you). They measure or shape the work; neither the
+# vehicle nor the handheld needs one to fly, and nothing here is in api/requirements.txt
+# because install.sh builds the Pi's venv from that file.
+#
+# They are reported for one reason: so that "not installed" can be told apart from "the
+# thing it measures came out at zero". A run of api/tests/run.py --coverage on a machine
+# without coverage prints no figures at all, deliberately, and this section is where you
+# find out why before you go looking for a bug in the runner.
+#
+# Keep this list in step with the dev tooling section of api/requirements.txt.
+DEV_TOOLS = (
+    ("coverage", "coverage",
+     "python api/tests/run.py --coverage - which lines and branches of api/ the "
+     "suites actually execute"),
+)
+
 
 def say(mark, what, detail=""):
     print(f"[{mark}] {what}" + (f"   {detail}" if detail else ""))
@@ -468,6 +485,41 @@ def map_deps() -> int:
     return len(absent)
 
 
+def dev_tools() -> None:
+    """Report the desk-only tooling. Installs nothing, and CANNOT count anything missing.
+
+    Returns None rather than a tally, on purpose: every other section here hands main() a
+    number and main() adds it up, and a reader scanning that sum should not have to work
+    out whether this one can contribute to it. It cannot. Absent is the normal, correct
+    state on both machines in this system - the vehicle does not run tests, and the
+    handheld does not have to measure them to fly - so "Everything this machine needs is
+    present" stays true over a bench with no coverage installed, because it is.
+
+    Probed through the SAME interpreter the api's tests would run under (see
+    probe_imports and venv_python), because that is the python api/tests/run.py hops to
+    and therefore the only one whose answer means anything. Asking this process would
+    report the tool missing on a machine whose venv has it, and then print an install
+    command that has already been run.
+    """
+    print("\n--- DEV TOOLING (a desk, not a machine in this system) ---")
+    py = venv_python()
+    found = probe_imports(py, tuple(m for m, _, _ in DEV_TOOLS))
+    absent = [(pkg, what) for mod, pkg, what in DEV_TOOLS if not found[mod]]
+    for mod, pkg, what in DEV_TOOLS:
+        say(OK if found[mod] else WARN, pkg,
+            what if found[mod] else f"not installed   ({what})")
+    if not absent:
+        return
+    print("  Optional, absent by default, and NOT counted below. None of it is in")
+    print("  api/requirements.txt - install.sh builds the Pi's venv from that file, and")
+    print("  the vehicle has no use for a tool that watches tests it never runs.")
+    print("  Without it the test runner behaves exactly as it always has and names what")
+    print("  is missing instead of printing a figure it did not measure.")
+    print("\n  Nothing here is installed by this check. If you want it:")
+    print(f"      {py or sys.executable} -m pip install "
+          + " ".join(pkg for pkg, _ in absent))
+
+
 def api_suite_totals(py: Path | None):
     """(suites, checks, names that cannot load here) — ASKED, never typed.
 
@@ -575,6 +627,9 @@ def main() -> int:
     missing += hardware_deps()
     missing += core_deps()
     missing += map_deps()
+    # Not added to the tally, and it has no number to add - see dev_tools(). Printed
+    # immediately above the API TESTS section because that is the only thing it changes.
+    dev_tools()
     missing += api_tests(args)
 
     print()

@@ -65,6 +65,35 @@ Pillow>=10.0
 # numpy>=2.0
 # scipy>=1.11
 
+# --- dev tooling (TOPSIDE ONLY — pip-installable, DO NOT install on the Pi) ---
+# WHAT IT IS FOR. `python api/tests/run.py --coverage` prints one extra table: how much
+# of api/ that run actually executed, per file, LINES and BRANCHES, with api/tests/
+# itself excluded. It is a measurement of the test suite, not of the vehicle.
+#   coverage  the only tool involved. No plugin, no config file, no .coverage artifact —
+#             the runner passes data_file=None and config_file=False so the numbers are
+#             decided in api/tests/run.py and nowhere else, and nothing is left in the
+#             tree afterwards.
+#
+#   pip install "coverage>=7.4"
+#
+# WHY IT IS COMMENTED OUT, like the three lines above it. install.sh builds the Pi's
+# venv from THIS FILE with one exclusion and one only —
+#     grep -viE '^\s*Pillow' api/requirements.txt
+# — so an uncommented `coverage` here is a measurement tool downloaded onto a Raspberry
+# Pi 3B+ over a canal-side hotspot, to watch tests the vehicle never runs. The Pi serves
+# the ROV; the tests are run at a desk. Same rule as the map libraries: the wrong
+# section installed costs one of the two machines this repo runs on, so it has to be a
+# decision somebody makes rather than a side effect of a file being read.
+#
+# THE RUNNER WORKS WITHOUT IT, AND SAYS SO. api/tests/run.py imports coverage inside the
+# function that starts it, never at module scope, so a machine that has not run the
+# command above still runs every suite, still returns the same exit code, and still
+# prints the same verdict. What it prints instead of the table is that the tool is
+# absent and how to get it — because "nobody measured this" and "this is 0% covered"
+# are different facts, and a runner that printed the second when it meant the first
+# would be the same lie as a depth reading from a sensor that is not answering.
+# coverage>=7.4
+
 # --- Pi only (NOT pip-installable — install via apt) ---
 # sudo apt install -y python3-picamera2
 # picamera2 provides the real CSI camera MJPEG feed.

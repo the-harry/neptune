@@ -34,6 +34,21 @@ A SUITE THAT WOULD NOT IMPORT IS NOT A SUITE THAT FAILED
     file, so the suite simply stops appearing and the count gets smaller. The files on
     disk are therefore the roll call, and a file discovery skipped is reported NONE.
 
+COVERAGE IS A MEASUREMENT, NOT A GATE
+    `--coverage` adds one table: how much of api/ this run actually executed, per file,
+    lines AND branches. It changes nothing else — the same suites run, the same checks
+    pass or fail, the same exit code comes out — because a measuring instrument that
+    alters the thing it measures is not one.
+
+    coverage.py is a DEV-ONLY tool and is deliberately NOT in api/requirements.txt.
+    install.sh builds the Pi's venv from that file, so every line in it is something a
+    Raspberry Pi 3B+ fetches over a canal-side hotspot before the vehicle can serve; the
+    vehicle does not run tests and has no use for a tool that watches them. The flag
+    therefore has to survive the tool being absent, and it does: the run proceeds
+    untouched and the missing instrument is NAMED. Absent is not zero. Printing 0% for a
+    measurement that was never taken is the same lie as a depth of 0.0 from a sensor that
+    is not answering, and this runner is the last place that lie should appear.
+
 USAGE
     python api/tests/run.py              # every suite, from the repo root
     python tests/run.py                  # the same, from api/
@@ -41,6 +56,7 @@ USAGE
     python api/tests/run.py --list
     python api/tests/run.py -v           # name every check, not just the failures
     python api/tests/run.py --no-venv    # stay in THIS python, do not hop to the venv
+    python api/tests/run.py --coverage   # also print the line/branch table for api/
 
     Exit status:
         0   every check ran and passed
@@ -48,11 +64,17 @@ USAGE
         2   nothing failed, but something could not be RUN — a missing dependency, or
             a suite file with no checks in it. Not success. Non-zero on purpose, so a
             pre-push gate stops either way.
+
+    Coverage never touches those three. It is a report about the run, not a verdict on
+    it; there is no threshold here and no --fail-under, because a number that gates a
+    push is a number people learn to move rather than earn.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import io
+import json
 import os
 import platform
 import re
@@ -219,6 +241,152 @@ def _reexec_in_venv(argv: list[str]) -> int | None:
         return None
 
 
+# ---------------------------------------------------------------- coverage (optional)
+#
+# Everything below is inert unless --coverage is passed AND coverage.py is installed.
+# Nothing above imports it, nothing on the Pi ever will, and the runner's behaviour with
+# the flag absent is byte-for-byte what it was before this section existed.
+
+# The columns, once, so the header, the rows and the TOTAL line cannot drift apart.
+_COV_ROW = "  {:<24}{:>7}{:>7}{:>8}{:>8}{:>8}{:>9}"
+_COV_RULE = "  " + "-" * 71
+
+
+def _start_coverage():
+    """Begin measuring api/. Returns (coverage object, []) or (None, lines to print).
+
+    STARTED BEFORE unittest DISCOVERY, on purpose. Discovery imports every test module,
+    which imports the api modules under test, and the module-level statements in those
+    files — the imports, the constants, the dataclass bodies, every FastAPI route
+    decorator in nav/service.py — execute exactly once, right there. An instrument
+    switched on after discovery reports all of that as never executed, which is not a
+    gap in the tests; it is the instrument being late. The cost is that the flag has to
+    be handled before the run knows which suites it is going to run, which is why this
+    returns its own explanation rather than printing one: main() decides where it goes.
+
+    NEVER RAISES. A bench with a half-installed coverage must still be able to run its
+    tests, so a tool that will not start is reported as a tool that will not start.
+    """
+    try:
+        import coverage
+    except ImportError:
+        return None, [
+            "cover  : NOT INSTALLED - this run cannot say how much of api/ it exercised,",
+            "         and a measurement nobody took is not a measurement of zero, so no",
+            "         figure is printed. coverage is a DEV-ONLY tool, deliberately absent",
+            "         from api/requirements.txt: install.sh builds the Pi's venv from that",
+            "         file, and the vehicle does not run tests.",
+            f"             {sys.executable} -m pip install coverage",
+            "         Every suite below runs exactly as it would without --coverage, and",
+            "         the exit code is the one the checks earn.",
+        ]
+    try:
+        cov = coverage.Coverage(
+            # NO .coverage FILE. This is a report printed once, not an artifact; a test
+            # runner that leaves state in the tree is a test runner that gets .gitignore
+            # entries and then gets stale. The data lives in memory for the one report.
+            data_file=None,
+            branch=True,
+            # config_file=False so what this table means is decided HERE and nowhere
+            # else. There is no .coveragerc and no pyproject.toml in this repo today;
+            # if one appears later it must not be able to change these numbers without
+            # a line of this file changing too.
+            config_file=False,
+            # source=api/ rather than "whatever happened to get imported". With an
+            # explicit source tree coverage lists the files NO suite ever imported, at
+            # 0%, instead of leaving them out — and a module nothing tested IS the
+            # finding. A table that silently omits it reports the tested half of the api
+            # and calls it the api, which is the same shape of lie as a suite vanishing
+            # from the count (see the module docstring).
+            source=[str(API)],
+            # The tests are not the subject. api/.venv is not ours at all.
+            omit=[str(HERE / "*"), str(API / ".venv" / "*")],
+        )
+        cov.start()
+    except Exception as exc:  # noqa: BLE001 - a broken install must not take the run down
+        return None, [
+            f"cover  : installed, but would not start ({exc.__class__.__name__}: {exc})",
+            "         no figures are printed rather than partial ones. Every suite below",
+            "         runs exactly as it would without --coverage.",
+        ]
+    return cov, []
+
+
+def _pct(covered: int, total: int) -> str:
+    """A percentage that never rounds itself into a claim it cannot support.
+
+    0% is reserved for "nothing was covered" and 100% for "nothing was missed"; anything
+    between is clamped to 1..99 before rounding. A file with one missed branch out of
+    four hundred is not 100% covered, and a table that rounds it there is exactly the
+    reassuring-but-false instrument this runner was written to stop being.
+
+    `-` where there is no denominator. A module with no branches in it has no branch
+    coverage — not 0%, which reads as a gap somebody should close, and not 100%, which
+    reads as work someone did. Same rule as the DEPS lines above: no number where there
+    was no measurement.
+    """
+    if total <= 0:
+        return "-"
+    if covered <= 0:
+        return "0%"
+    if covered >= total:
+        return "100%"
+    return f"{min(max(100.0 * covered / total, 1.0), 99.0):.0f}%"
+
+
+def _cov_name(key: str) -> str:
+    """A file's row label: its path relative to api/, in forward slashes.
+
+    coverage reports paths relative to the CURRENT DIRECTORY, and this runner is
+    documented as runnable from both the repo root and api/ — so the same file would be
+    called `api\\nav\\geo.py` in one place and `nav/geo.py` in the other, and two runs of
+    the same command would produce tables that cannot be diffed against each other.
+    """
+    try:
+        return Path(key).resolve().relative_to(API).as_posix()
+    except (ValueError, OSError):
+        return key.replace("\\", "/")
+
+
+def _coverage_lines(cov) -> list[str]:
+    """The per-file line/branch table, as lines ready to print. Never raises.
+
+    The numbers come out of coverage's own JSON report — its public API, rendered to
+    stdout and caught here — rather than being recomputed from the raw data, because the
+    arithmetic of a partial branch is coverage's business and a second implementation of
+    it in this file would eventually disagree with the tool and be believed anyway.
+    """
+    try:
+        import coverage
+        buf = io.StringIO()
+        # "-" means "write it to stdout"; stdout is this buffer for the duration.
+        with contextlib.redirect_stdout(buf):
+            cov.json_report(outfile="-")
+        data = json.loads(buf.getvalue())
+        files = data["files"]
+        totals = data["totals"]
+    except Exception as exc:  # noqa: BLE001 - a report that will not render is not a crash
+        return ["", f"cover  : measured, but the report would not render "
+                    f"({exc.__class__.__name__}: {exc}); no figures rather than wrong ones"]
+
+    def row(label, s):
+        return _COV_ROW.format(
+            label, s["num_statements"], s["missing_lines"],
+            _pct(s["covered_lines"], s["num_statements"]),
+            s["num_branches"], s["missing_branches"],
+            _pct(s["covered_branches"], s["num_branches"]))
+
+    out = ["", f"coverage of api/, api/tests/ excluded  "
+               f"(coverage {getattr(coverage, '__version__', '?')}, branch mode)",
+           _COV_ROW.format("file", "stmts", "miss", "line%", "branch", "brmiss", "branch%"),
+           _COV_RULE]
+    out += [row(_cov_name(k), files[k]["summary"]) for k in sorted(files, key=_cov_name)]
+    out += [_COV_RULE, row("TOTAL", totals)]
+    out.append("  A file at 0% is a file this run never imported, not a file that is "
+               "missing.")
+    return out
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     ap = argparse.ArgumentParser(description="Run the Neptune api tests.")
@@ -228,6 +396,9 @@ def main(argv=None) -> int:
                     help="print every check, not just the failures")
     ap.add_argument("--no-venv", action="store_true",
                     help="run in this interpreter instead of hopping to the repo venv")
+    ap.add_argument("--coverage", action="store_true",
+                    help="also print which lines and branches of api/ this run executed "
+                         "(needs the dev-only coverage package; says so if it is absent)")
     args = ap.parse_args(argv)
 
     # Before anything is discovered: discovery itself is what fails when pydantic is
@@ -237,6 +408,16 @@ def main(argv=None) -> int:
         rc = _reexec_in_venv(argv)
         if rc is not None:
             return rc
+
+    # AFTER the interpreter is settled and BEFORE anything is imported. The hop above
+    # re-runs this whole file in the venv with the same argv, so measuring on this side
+    # of it would measure a process that is about to hand the work to another one.
+    # Skipped for --list, which imports the suites but never executes a check: measuring
+    # it would report the api as almost entirely unexercised by a command nobody asked
+    # to exercise it.
+    cov, cov_absent = None, []
+    if args.coverage and not args.list:
+        cov, cov_absent = _start_coverage()
 
     # top_level_dir=api so the modules load as `tests.test_x`, i.e. the same package
     # path they have when anything else imports them.
@@ -269,6 +450,9 @@ def main(argv=None) -> int:
 
     names = sorted(groups)
     if args.list:
+        if args.coverage:
+            print("cover  : nothing to measure - --list discovers the suites without "
+                  "running them\n")
         for n in names:
             if n in blocked:
                 print(f"{_label(n):<24} cannot load here - needs {blocked[n]}")
@@ -298,65 +482,87 @@ def main(argv=None) -> int:
           f"{platform.machine() or 'unknown arch'})")
     print(f"python : {sys.version.split()[0]}  {sys.executable}")
     print(f"api    : {API}")
-    print(f"suites : {len(names)}\n")
+    print(f"suites : {len(names)}")
+    # The instrument is part of the result too, and it is stated BEFORE the run for the
+    # same reason the machine is: whichever of these two lines gets printed, it belongs
+    # to the report below it and not to some other run somebody pasted next to it.
+    if cov is not None:
+        print("cover  : measuring api/ (lines and branches); api/tests/ excluded")
+    for line in cov_absent:
+        print(line)
+    print()
 
     total = failed = skipped = 0
     dep_skipped = 0                       # skips whose reason is also a missing package
     missing: set[str] = set()
+    cov_stop_error = None
     t0 = time.time()
-    for name in names:
-        if name in blocked:
-            missing.add(blocked[name])
-            # No count in the count column, on purpose. This project's rule for a signal
-            # whose sensor is absent is to show CANNOT-TELL and never a plausible
-            # number; a suite whose module never loaded is the same situation, and a
-            # "0/1" here would be a number where there is no measurement.
-            print(f"  {_label(name):<24} DEPS {'-':>3}/-   never loaded: needs {blocked[name]}")
-            continue
-        if name in empty:
-            # Same rule as DEPS, different cause: no count where there was no
-            # measurement. "0/0" would read as a suite that ran and had nothing to say.
-            print(f"  {_label(name):<24} NONE {'-':>3}/-   no checks discovered in "
-                  f"{name}.py")
-            continue
-        suite = unittest.TestSuite(groups[name])
-        # The suite's own stdout goes nowhere: this runner prints the report, and a
-        # dotted progress line interleaved with it makes both harder to read.
-        res = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
-        bad = res.failures + res.errors
-        total += res.testsRun
-        failed += len(bad)
-        skipped += len(res.skipped)
-        mark = "ok  " if not bad else "FAIL"
-        # A skipped check is NOT a passed check, so it is subtracted from the count and
-        # named. unittest's testsRun includes skips, and a runner that quietly folded
-        # them into the pass total would report a suite that verified nothing as green.
-        passed = res.testsRun - len(bad) - len(res.skipped)
-        # A suite can also lose individual checks to the same missing package without
-        # dying outright - test_filters skips its two estimator cases rather than take
-        # the whole module down, so the pure filter maths stays checkable on a bare
-        # bench. Those skips belong in the verdict with the blocked suites, not in the
-        # ordinary "skipped" bucket, because they share one cause and one cure.
-        dep_reasons = [d for _t, why in res.skipped if (d := _missing_dependency(why))]
-        dep_skipped += len(dep_reasons)
-        deps_here = set(dep_reasons)
-        missing |= deps_here
-        note = ""
-        if res.skipped:
-            note = (f"  ({len(res.skipped)} skipped: needs {', '.join(sorted(deps_here))})"
-                    if deps_here else f"  ({len(res.skipped)} skipped)")
-        print(f"  {_label(name):<24} {mark} {passed:>3}/{res.testsRun}{note}")
-        if args.verbose:
-            bad_ids = {t.id() for t, _ in bad}
-            for test in groups[name]:
-                if test.id() not in bad_ids:
-                    print(f"      pass  {test.id().rsplit('.', 1)[-1]}")
-        for test, tb in bad:
-            print(f"      FAIL  {test.id().rsplit('.', 1)[-1]}")
-            for line in _detail(tb):
-                print(f"            {line}")
-        for test, why in res.skipped:
-            print(f"      skip  {test.id().rsplit('.', 1)[-1]}  ({why})")
+    try:
+        for name in names:
+            if name in blocked:
+                missing.add(blocked[name])
+                # No count in the count column, on purpose. This project's rule for a signal
+                # whose sensor is absent is to show CANNOT-TELL and never a plausible
+                # number; a suite whose module never loaded is the same situation, and a
+                # "0/1" here would be a number where there is no measurement.
+                print(f"  {_label(name):<24} DEPS {'-':>3}/-   never loaded: "
+                      f"needs {blocked[name]}")
+                continue
+            if name in empty:
+                # Same rule as DEPS, different cause: no count where there was no
+                # measurement. "0/0" would read as a suite that ran and had nothing to say.
+                print(f"  {_label(name):<24} NONE {'-':>3}/-   no checks discovered in "
+                      f"{name}.py")
+                continue
+            suite = unittest.TestSuite(groups[name])
+            # The suite's own stdout goes nowhere: this runner prints the report, and a
+            # dotted progress line interleaved with it makes both harder to read.
+            res = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
+            bad = res.failures + res.errors
+            total += res.testsRun
+            failed += len(bad)
+            skipped += len(res.skipped)
+            mark = "ok  " if not bad else "FAIL"
+            # A skipped check is NOT a passed check, so it is subtracted from the count and
+            # named. unittest's testsRun includes skips, and a runner that quietly folded
+            # them into the pass total would report a suite that verified nothing as green.
+            passed = res.testsRun - len(bad) - len(res.skipped)
+            # A suite can also lose individual checks to the same missing package without
+            # dying outright - test_filters skips its two estimator cases rather than take
+            # the whole module down, so the pure filter maths stays checkable on a bare
+            # bench. Those skips belong in the verdict with the blocked suites, not in the
+            # ordinary "skipped" bucket, because they share one cause and one cure.
+            dep_reasons = [d for _t, why in res.skipped if (d := _missing_dependency(why))]
+            dep_skipped += len(dep_reasons)
+            deps_here = set(dep_reasons)
+            missing |= deps_here
+            note = ""
+            if res.skipped:
+                note = (f"  ({len(res.skipped)} skipped: needs {', '.join(sorted(deps_here))})"
+                        if deps_here else f"  ({len(res.skipped)} skipped)")
+            print(f"  {_label(name):<24} {mark} {passed:>3}/{res.testsRun}{note}")
+            if args.verbose:
+                bad_ids = {t.id() for t, _ in bad}
+                for test in groups[name]:
+                    if test.id() not in bad_ids:
+                        print(f"      pass  {test.id().rsplit('.', 1)[-1]}")
+            for test, tb in bad:
+                print(f"      FAIL  {test.id().rsplit('.', 1)[-1]}")
+                for line in _detail(tb):
+                    print(f"            {line}")
+            for test, why in res.skipped:
+                print(f"      skip  {test.id().rsplit('.', 1)[-1]}  ({why})")
+    finally:
+        # The tracer comes off whatever happens, including the way out of an exception
+        # that escaped a suite entirely. It cannot change the outcome - it swallows
+        # nothing, re-raises nothing, and records its own failure instead of raising a
+        # second one over the top of the first, which would replace a real finding about
+        # the api with a complaint about the measuring equipment.
+        if cov is not None:
+            try:
+                cov.stop()
+            except Exception as exc:  # noqa: BLE001
+                cov_stop_error = f"{exc.__class__.__name__}: {exc}"
 
     dt = time.time() - t0
     ran = len(names) - len(blocked) - len(empty)
@@ -371,6 +577,31 @@ def main(argv=None) -> int:
     # totals would make three skipped checks look like six.
     if skipped - dep_skipped:
         print(f"{skipped - dep_skipped} skipped - not run, and not counted as passed")
+
+    # BEFORE the verdict, never after it. The verdict is the line a person reads, and a
+    # forty-row table pushed underneath it would bury the one sentence that says whether
+    # this run means anything.
+    if cov is not None:
+        if cov_stop_error:
+            print(f"\ncover  : the measurement could not be stopped cleanly "
+                  f"({cov_stop_error});")
+            print("         no table is printed rather than a partial one. The check "
+                  "results above")
+            print("         are unaffected - coverage watches the run, it does not "
+                  "take part in it.")
+        else:
+            for line in _coverage_lines(cov):
+                print(line)
+            if blocked or dep_skipped or empty:
+                # The two reports have to be read together or the table lies by
+                # omission: a suite that never loaded exercised nothing, so every file
+                # only that suite would have touched sits at 0% for a reason that has
+                # nothing to do with what the api's tests actually cover.
+                print("  These figures come from an INCOMPLETE run - see below. Code a "
+                      "suite that")
+                print("  never loaded would have exercised is counted as unexercised, "
+                      "which it was")
+                print("  here and need not be on a machine that has the dependencies.")
 
     # The verdict goes LAST because it is the line a person actually reads, and when
     # something could not be run it has to be the thing that contradicts the pass
