@@ -12,7 +12,7 @@
 /* Bump SHELL on every client release. It is the ONLY thing that evicts the old
    app shell — a stale cache silently pins the dashboard to old JS, which makes a
    deployed fix look like it did nothing. */
-const SHELL = "neptune-shell-v54";
+const SHELL = "neptune-shell-v55";
 const TILES = "neptune-tiles";
 /* EVERY <script> AND <link> IN index.html IS IN THIS LIST. There is no build step to
    derive it from, so it is a hand-kept mirror, and a file that lands in index.html

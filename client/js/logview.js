@@ -148,11 +148,29 @@ function openLogView(){
   LOGVIEW.open = true;
   LOGVIEW.el.classList.add('show');
   if(!LOGVIEW.unsub) LOGVIEW.unsub = LOG.subscribe(_lvOnLine);
+  // WHERE THE COMPLETE RECORD IS. The scrollback above is the bounded in-memory ring;
+  // this one line is the only pointer to the copy that is NOT bounded, so it has to be
+  // true. It used to be gated on `window.REC`, which is always undefined — recorder.js
+  // declares `const REC`, and a top-level const is a global BINDING, not a property of
+  // window — so the naming branch was dead code and every console, launcher or no
+  // launcher, was told that nothing was being written to disk while the session log was
+  // being written perfectly well.
+  //
+  // Three states, because there are three facts, and the middle one is what a bare "is
+  // there a filename" test gets wrong: the recorder names its file at boot whether or
+  // not anything is listening, so a NAME proves a queue and nothing else. `diskPath` is
+  // what the launcher wrote back after actually accepting a batch, which is the only
+  // evidence this console has that a file exists at all.
   const f = $('lv-file');
-  if(f) f.textContent = (window.REC && REC.diskFile)
-    ? ('full session log: navigation_logs/logs/' + REC.diskFile + '  (this view is the last '
-       + LOG.ring().length + ' lines held in memory)')
-    : 'no launcher: this view is in-memory only, nothing is being written to disk';
+  if(f){
+    const rec  = (typeof REC !== 'undefined') ? REC : null;
+    const tail = '  (this view is the last ' + LOG.ring().length + ' lines held in memory)';
+    f.textContent =
+        (rec && rec.diskPath) ? ('full session log: ' + rec.diskPath + tail)
+      : (rec && rec.diskFile) ? ('session log ' + rec.diskFile + ' is queued in this browser — '
+                                 + 'nothing has reached the launcher yet' + tail)
+      : 'no launcher: this view is in-memory only, nothing is being written to disk';
+  }
   _lvSyncButtons();
   renderLogView();
 }

@@ -98,14 +98,27 @@ class Offset:
         return t + self.at(t) if from_client else t
 
     def reliable_at(self, ct: float) -> bool:
-        """A sample near ct with acceptable jitter/sample-count."""
+        """A sample near ct with acceptable jitter/sample-count.
+
+        ABSENT IS NOT ZERO, and here that rule decides whether a timestamp is allowed to
+        look like a measurement. `jitter_ms` used to default to 0 when a clock_sync
+        record did not carry it, and 0 ms of jitter is not a neutral placeholder — it is
+        the steadiest link anyone has ever measured. So the sync with the least to say
+        about itself vouched for more rows than any real one could, and every row it
+        covered lost the ~unrel mark that says its time is a translation. The sample
+        count already defaulted the honest way, to a value that fails the test below;
+        both halves of the same question now answer it the same way.
+        """
         if not self.samples:
             return False
         near = min(self.samples, key=lambda s: abs(s[0] - ct))
         if abs(near[0] - ct) > 30_000:  # >30 s from any sync → extrapolating
             return False
         meta = near[2]
-        return meta.get("jitter_ms", 0) <= 50 and meta.get("samples", 0) >= 3
+        jitter = meta.get("jitter_ms")
+        if not isinstance(jitter, (int, float)) or isinstance(jitter, bool):
+            return False  # this sync never said how steady the link under it was
+        return jitter <= 50 and meta.get("samples", 0) >= 3
 
 
 # ---- merge (§6) ------------------------------------------------------------
@@ -656,8 +669,15 @@ def _tlm_brief(d: dict) -> str:
         "ARMED" if d.get("armed") else "safe",
         f"depth={q('depth')}",
         f"hdg={q('heading')}",
-        f"leak={d.get('leak_state')}",
-        f"batt={q('battery_v')}({d.get('battery_band')})",
+        # The leak stage and the battery band go through q() like every other reading.
+        # They used to be interpolated raw, so an unanswered probe printed `leak=None`
+        # and an unwatched pack `batt=?(None)` — the word None in the middle of a column
+        # the eye is scanning for `?`, which is the one spelling of cannot-tell this
+        # helper exists to enforce. It matters most on these two: `leak=NORMAL` is a
+        # positive claim that the hull is dry (§24.1), and the absence of that claim must
+        # not be readable as any kind of value.
+        f"leak={q('leak_state')}",
+        f"batt={q('battery_v')}({q('battery_band')})",
         f"ball={q('ballast_level')}",
         f"spd={q('speed_ms')}/{q('speed_src')}",
     ]
