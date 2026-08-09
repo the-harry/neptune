@@ -24,6 +24,12 @@ from .config import READ_TO_WRITE, SLOW_PROPERTIES, WRITE_TO_READ, cam_settings
 
 log = logging.getLogger("neptune.cam.cgi")
 
+# A QUEUED REQUEST MAY WAIT FOR OTHERS AHEAD OF IT, so the outer budget is a
+# multiple of the single-request timeout rather than equal to it. Generous enough
+# that a busy queue is never mistaken for a dead one; finite so a dead one is
+# always eventually named.
+QUEUE_WAIT_FACTOR = 4.0
+
 PRIORITY_USER = 0
 PRIORITY_TELEMETRY = 10
 
@@ -100,6 +106,16 @@ class CgiClient:
                 await self._worker
             except asyncio.CancelledError:
                 pass
+            # CLEAR IT, or this client can never be started again. start() is guarded
+            # on `self._worker is None`, so a cancelled-but-still-referenced task made
+            # the guard see a worker that would never run: a second start() in one
+            # process created nothing, and _enqueue() then parked a job on a queue with
+            # no reader. CameraService.start() calls refresh_menu() on the way up, so
+            # the app's lifespan never completed and the server never came up at all.
+            # Intermittent, because _enqueue short-circuits while the breaker is still
+            # open — a second boot seconds later raises and carries on, one minutes
+            # later hangs forever.
+            self._worker = None
         await self._client.aclose()
 
     # ---- public verbs -----------------------------------------------------
@@ -132,7 +148,21 @@ class CgiClient:
         fut: asyncio.Future = asyncio.get_event_loop().create_future()
         job = _Job(priority, self._seq, (params, prop_for_timing, raw), fut)
         await self._queue.put(job)
-        return await fut
+        # BOUNDED, because an unbounded await here trusts the worker to exist. It did
+        # not always: a queue with no reader parked every caller forever, and the first
+        # caller is CameraService.start()'s refresh_menu(), so the whole app's lifespan
+        # hung and the server never came up. The worker's own per-request timeouts are
+        # in _do(); this is the outer guarantee that a caller ALWAYS gets an answer,
+        # including the answer "nothing is draining this queue".
+        budget = (cam_settings.timeout_slow_s if self._is_slow(params)
+                  else cam_settings.timeout_fast_s) * QUEUE_WAIT_FACTOR
+        try:
+            return await asyncio.wait_for(fut, timeout=budget)
+        except asyncio.TimeoutError:
+            fut.cancel()
+            raise CameraUnavailable(
+                f"the camera queue did not answer {prop_for_timing!r} within {budget:.0f}s — "
+                f"nothing is draining it") from None
 
     async def _run(self) -> None:
         while True:
