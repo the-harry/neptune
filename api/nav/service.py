@@ -2,6 +2,7 @@
 dive logging — over REST + a nav WebSocket. Plus the area manager (§10.2) and the
 readiness check (§9). Mounts into the existing FastAPI app.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -18,8 +19,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlencode as _urlencode
 
 from fastapi import APIRouter, Body, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import (FileResponse, JSONResponse, RedirectResponse, Response,
-                               StreamingResponse)
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 
 from . import areas as areamod
 from . import nominal as nominalmod
@@ -31,7 +31,7 @@ from .models import Adjustment, FlowVector, NavState, Origin, ReadinessItem, Rea
 from .sensors import SimSensorSource, get_sensor_source
 from .speedlut import DEFAULT_LUT, SpeedLUT
 
-if TYPE_CHECKING:                     # which class this is depends on NAV_FILTER at runtime;
+if TYPE_CHECKING:  # which class this is depends on NAV_FILTER at runtime;
     from .estimator import Estimator  # only the update(SensorSample)->NavState shape matters here
 
 log = logging.getLogger("neptune.nav")
@@ -84,16 +84,16 @@ class NavService:
         # tell them apart before, so both were reported as "no state", i.e. as
         # nothing at all.
         self.last_tick_ts: float | None = None
-        self.tick_faults = 0                    # ticks that raised, cumulative
-        self.last_fault: str | None = None      # and what the most recent one said
+        self.tick_faults = 0  # ticks that raised, cumulative
+        self.last_fault: str | None = None  # and what the most recent one said
         self.last_fault_ts: float | None = None
         self._fault_logged_at: float | None = None
         # Why the loop task ended, once it has. None while it is still running —
         # and still None if it was never started, which loop_state() separates.
         self.loop_end_reason: str | None = None
-        self.last_sample = None            # latest raw sensor sample (heading0/IMU cal, even with no dive)
+        self.last_sample = None  # latest raw sensor sample (heading0/IMU cal, even with no dive)
         self.active_area: str | None = None
-        self.centreline: list[tuple[float, float]] | None = None   # [lon,lat]
+        self.centreline: list[tuple[float, float]] | None = None  # [lon,lat]
         self._subs: set[WebSocket] = set()
         self._task: asyncio.Task | None = None
         # ---- the bootstrap fetch (§3), which is NOT part of the runtime path ----
@@ -105,7 +105,7 @@ class NavService:
         self.fetch: AreaFetch | None = None
         self._fetch_task: asyncio.Task | None = None
         self._autofetch_task: asyncio.Task | None = None
-        self.last_fetch: dict | None = None     # the last FINISHED job's snapshot
+        self.last_fetch: dict | None = None  # the last FINISHED job's snapshot
         # ---- and the NATIONAL fetch, which belongs to no area at all ----
         # Its own job, on its own task, because it is not per-area and must not wait
         # for one: the whole Trust network is fetched ONCE on launch and every area
@@ -113,8 +113,8 @@ class NavService:
         # button and an area fetch that finds the set incomplete all drive the SAME
         # download rather than three racing each other at a rate limit built for one.
         self.national: NationalFetch | None = None
-        self._national_task: asyncio.Task | None = None   # the DOWNLOAD
-        self._national_boot: asyncio.Task | None = None   # the launch-time decision
+        self._national_task: asyncio.Task | None = None  # the DOWNLOAD
+        self._national_boot: asyncio.Task | None = None  # the launch-time decision
         self.last_national: dict | None = None
         # Until when each area is left alone after a no-internet verdict. The
         # console re-POSTs the stored origin on every page load (navui.js does it in
@@ -141,9 +141,13 @@ class NavService:
         # goes on the same line for the same reason: "dr" and "filtered" draw
         # DIFFERENT tracks from byte-identical samples, so a log that does not name
         # the one that ran leaves nothing to argue with when the track looks wrong.
-        log.info("nav service started (source=%s, simulated=%s, filter=%s, autolog=%s)",
-                 type(self.sensors).__name__, self.sensors.is_sim,
-                 settings.filter_backend, settings.autolog)
+        log.info(
+            "nav service started (source=%s, simulated=%s, filter=%s, autolog=%s)",
+            type(self.sensors).__name__,
+            self.sensors.is_sim,
+            settings.filter_backend,
+            settings.autolog,
+        )
         # ---- THE WHOLE CANAL & RIVER TRUST NETWORK, FETCHED ON LAUNCH ----
         # This line is the decision. The maps are how this thing is navigated — real
         # sub, simulator, or a bench at home planning a run — so they are not something
@@ -163,8 +167,10 @@ class NavService:
             # nothing and said nothing about why.
             self._national_boot = asyncio.create_task(self._national_bootstrap())
         else:
-            log.info("the national Canal & River Trust fetch is switched off "
-                     "(NAV_CRT_NATIONAL_AUTO=0) — what is on this card is what there is")
+            log.info(
+                "the national Canal & River Trust fetch is switched off "
+                "(NAV_CRT_NATIONAL_AUTO=0) — what is on this card is what there is"
+            )
 
     def _recover_orphans(self) -> None:
         """Turn journals with no finished GeoJSON into readable dives.
@@ -183,8 +189,9 @@ class NavService:
                     if feat is None:
                         continue
                     gf.write_text(json.dumps(feat, indent=2))
-                    log.warning("recovered an unfinished dive from %s (%d samples)",
-                                jf.name, len(feat.get("samples", [])))
+                    log.warning(
+                        "recovered an unfinished dive from %s (%d samples)", jf.name, len(feat.get("samples", []))
+                    )
                 except Exception as exc:  # noqa: BLE001
                     log.warning("could not recover %s: %s", jf.name, exc)
         except Exception as exc:  # noqa: BLE001
@@ -233,7 +240,7 @@ class NavService:
             # cannot-tell. What must NOT happen is the loop leaving with it.
             try:
                 await self._tick(dt, i, bcast_every)
-            except asyncio.CancelledError:      # shutdown, not a fault — let it through
+            except asyncio.CancelledError:  # shutdown, not a fault — let it through
                 raise
             except Exception as exc:  # noqa: BLE001 — see _note_fault
                 self._note_fault(exc)
@@ -250,14 +257,14 @@ class NavService:
         # SAFETY: a navigation log is not something to remember to switch on. The
         # moment an origin exists there is a position to record, so record it -
         # unasked, every session. A dive nobody logged is a dive nobody can review.
-        if (settings.autolog and self.dive is None and self.origin is not None):
+        if settings.autolog and self.dive is None and self.origin is not None:
             try:
                 self.start_dive(auto=True)
             except Exception as exc:  # noqa: BLE001 — never let logging stop navigation
                 log.warning("auto dive log could not start: %s", exc)
         s = self.sensors.read(dt)
         if s is not None:
-            self.last_sample = s          # IMU heading/cal available even without a dive
+            self.last_sample = s  # IMU heading/cal available even without a dive
         if s is not None and self.dr is not None:
             ns = self.dr.update(s)
             self.last_state = ns
@@ -266,8 +273,8 @@ class NavService:
             # which a stale state looks current to everything downstream.
             self.last_state_ts = time.monotonic()
             if self.dive is not None:
-                self.dive.add(ns, s)   # `s` = the raw sample: calibration needs it
-            if i % bcast_every == 0 and self._subs:               # decouple redraw from DR rate (§7.5)
+                self.dive.add(ns, s)  # `s` = the raw sample: calibration needs it
+            if i % bcast_every == 0 and self._subs:  # decouple redraw from DR rate (§7.5)
                 await self._broadcast(json.dumps(self.nav_frame(ns)))
 
     def _note_fault(self, exc: BaseException) -> None:
@@ -283,8 +290,12 @@ class NavService:
         self.last_fault = f"{type(exc).__name__}: {exc}"
         self.last_fault_ts = now
         if self._fault_logged_at is None or (now - self._fault_logged_at) >= _FAULT_LOG_GAP_S:
-            log.error("navigation tick failed (%d so far) — the loop continues, but it is "
-                      "publishing nothing: %s", self.tick_faults, self.last_fault, exc_info=True)
+            log.error(
+                "navigation tick failed (%d so far) — the loop continues, but it is " "publishing nothing: %s",
+                self.tick_faults,
+                self.last_fault,
+                exc_info=True,
+            )
             self._fault_logged_at = now
 
     def _loop_ended(self, task: asyncio.Task) -> None:
@@ -305,13 +316,18 @@ class NavService:
         exc = task.exception()
         if exc is None:
             self.loop_end_reason = "returned"
-            log.error("navigation loop RETURNED — it is an infinite loop, so this is a bug; "
-                      "the map and every nav field topside now report cannot-tell")
+            log.error(
+                "navigation loop RETURNED — it is an infinite loop, so this is a bug; "
+                "the map and every nav field topside now report cannot-tell"
+            )
             return
         self.loop_end_reason = f"{type(exc).__name__}: {exc}"
-        log.error("navigation loop DIED: %s — no position, speed, snag or heading estimate "
-                  "will be produced until the service is restarted", self.loop_end_reason,
-                  exc_info=exc)
+        log.error(
+            "navigation loop DIED: %s — no position, speed, snag or heading estimate "
+            "will be produced until the service is restarted",
+            self.loop_end_reason,
+            exc_info=exc,
+        )
 
     # ---- what navigation can currently be asked --------------------------
     @property
@@ -332,7 +348,7 @@ class NavService:
         return not isinstance(self.sensors, SimSensorSource)
 
     def loop_state(self) -> str:
-        """"never-started" | "running" | "stalled" | "stopped".
+        """ "never-started" | "running" | "stalled" | "stopped".
 
         Four states because they mean four different things to whoever is holding
         the controller. never-started: nav is not part of this process. running:
@@ -346,7 +362,7 @@ class NavService:
         if self._task.done():
             return "stopped"
         if self.last_tick_ts is None:
-            return "running"        # created, first period not finished yet
+            return "running"  # created, first period not finished yet
         return "running" if (time.monotonic() - self.last_tick_ts) <= self.state_max_age_s else "stalled"
 
     def health(self) -> dict:
@@ -421,9 +437,12 @@ class NavService:
         inherit the fresh_state() gate below, and that gate answers "is the
         ESTIMATE current" — it would blank a live attitude for want of an origin.
         """
-        f = {"type": "nav", **ns.model_dump(),
-             "simulated": bool(self.sensors.is_sim),
-             "reads_vehicle": self.reads_vehicle}
+        f = {
+            "type": "nav",
+            **ns.model_dump(),
+            "simulated": bool(self.sensors.is_sim),
+            "reads_vehicle": self.reads_vehicle,
+        }
         if ns.heading_deg is None:
             f["gyro_only"] = None
         return f
@@ -465,15 +484,20 @@ class NavService:
     def start_dive(self, auto: bool = False) -> str:
         if not self.origin:
             raise ValueError("no origin set")
-        if self.dive is not None:                 # an explicit start supersedes the auto log
+        if self.dive is not None:  # an explicit start supersedes the auto log
             self.stop_dive()
         dive_id = "dive-" + time.strftime("%Y%m%d-%H%M%S")
         self.sensors.reset()
-        self.dr = make_estimator(self.origin, self.speed_lut, self.flow,
-                                 centreline_lonlat=self.centreline)
-        self.dive = DiveLog(dive_id, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                            self.origin, self.speed_lut.id, self.flow,
-                            directory=settings.dives_dir, auto=auto)
+        self.dr = make_estimator(self.origin, self.speed_lut, self.flow, centreline_lonlat=self.centreline)
+        self.dive = DiveLog(
+            dive_id,
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            self.origin,
+            self.speed_lut.id,
+            self.flow,
+            directory=settings.dives_dir,
+            auto=auto,
+        )
         log.info("dive started: %s%s", dive_id, " (automatic)" if auto else "")
         return dive_id
 
@@ -534,14 +558,21 @@ class NavService:
             return {**self.last_fetch, "running": False}
         return {
             "scope": "area",
-            "state": "idle", "running": False, "area": None, "sources": {},
-            "title": ("No offline-data fetch has run in this session. That does not mean "
-                      "the card is empty and it does not mean it is full — ask "
-                      "/api/areas/<name>/complete which of the three sources are "
-                      "actually on it."),
-            "aria_label": ("No download job has run since this service started. The state "
-                           "of the card is a separate question, answered by the area "
-                           "completeness endpoint."),
+            "state": "idle",
+            "running": False,
+            "area": None,
+            "sources": {},
+            "title": (
+                "No offline-data fetch has run in this session. That does not mean "
+                "the card is empty and it does not mean it is full — ask "
+                "/api/areas/<name>/complete which of the three sources are "
+                "actually on it."
+            ),
+            "aria_label": (
+                "No download job has run since this service started. The state "
+                "of the card is a separate question, answered by the area "
+                "completeness endpoint."
+            ),
         }
 
     async def _fetch_changed(self, snap: dict) -> None:
@@ -558,21 +589,34 @@ class NavService:
             log.warning("could not record fetch progress for %s: %s", snap.get("area"), exc)
         await self._broadcast(json.dumps({"type": "area_fetch", **snap}))
 
-    async def start_fetch(self, area: str, bbox: list[float], zmin: int, zmax: int,
-                          *, refresh: bool = False, reason: str = "",
-                          radius_m: float | None = None,
-                          net: tuple[bool, str] | None = None) -> dict:
+    async def start_fetch(
+        self,
+        area: str,
+        bbox: list[float],
+        zmin: int,
+        zmax: int,
+        *,
+        refresh: bool = False,
+        reason: str = "",
+        radius_m: float | None = None,
+        net: tuple[bool, str] | None = None,
+    ) -> dict:
         """Begin one background fetch. Returns immediately, with what it started."""
         if self.fetch is not None and self.fetch.is_running:
             # NOT an error, and not a queue either. A second request for the SAME
             # area while the first is still running is what a double-tap looks
             # like, and the honest answer to it is the job that is already going.
-            return {**self.fetch.snapshot(), "running": True, "started": False,
-                    "why": f"a fetch for {self.fetch.area!r} is already running — "
-                           f"this one was not started, because these are rate-limited "
-                           f"public services and two jobs would halve the rate each"}
-        job = AreaFetch(area, bbox, zmin, zmax, refresh=refresh, reason=reason,
-                        radius_m=radius_m, on_change=self._fetch_changed)
+            return {
+                **self.fetch.snapshot(),
+                "running": True,
+                "started": False,
+                "why": f"a fetch for {self.fetch.area!r} is already running — "
+                f"this one was not started, because these are rate-limited "
+                f"public services and two jobs would halve the rate each",
+            }
+        job = AreaFetch(
+            area, bbox, zmin, zmax, refresh=refresh, reason=reason, radius_m=radius_m, on_change=self._fetch_changed
+        )
         self.fetch = job
         self._fetch_task = asyncio.create_task(job.run(net=net))
         self._fetch_task.add_done_callback(self._fetch_ended)
@@ -631,18 +675,23 @@ class NavService:
         base = live or self.last_national
         if base is not None:
             return {**base, "running": False, "card": _national_summary(card)}
-        stale, why = (crt.national_is_stale() if crt else
-                      (True, "api/nav/crt.py is not in this build"))
+        stale, why = crt.national_is_stale() if crt else (True, "api/nav/crt.py is not in this build")
         return {
-            "scope": "national", "state": "idle", "running": False, "area": None,
-            "sources": {}, "order": [],
-            "stale": stale, "why": why,
+            "scope": "national",
+            "state": "idle",
+            "running": False,
+            "area": None,
+            "sources": {},
+            "order": [],
+            "stale": stale,
+            "why": why,
             "card": _national_summary(card),
-            "title": (f"No national download has run in this session. "
-                      f"{'The whole Trust network is on this handheld. ' if not stale else ''}"
-                      f"{why}"),
-            "aria_label": (f"No national Canal and River Trust download has run since "
-                           f"this service started. {why}"),
+            "title": (
+                f"No national download has run in this session. "
+                f"{'The whole Trust network is on this handheld. ' if not stale else ''}"
+                f"{why}"
+            ),
+            "aria_label": (f"No national Canal and River Trust download has run since " f"this service started. {why}"),
         }
 
     async def _national_changed(self, snap: dict) -> None:
@@ -657,13 +706,20 @@ class NavService:
         """
         await self._broadcast(json.dumps({"type": "area_fetch", **snap}))
 
-    async def ensure_national(self, *, reason: str = "", refresh: bool = False,
-                              net: tuple[bool, str] | None = None) -> dict:
+    async def ensure_national(
+        self, *, reason: str = "", refresh: bool = False, net: tuple[bool, str] | None = None
+    ) -> dict:
         """Start the national fetch, or hand back the one already running."""
         if self.national is not None and self.national.is_running:
-            return {**self.national.snapshot(), "running": True, "started": False,
-                    "why": ("the national fetch is already running — it is one download "
-                            "for the whole country and every area draws from it")}
+            return {
+                **self.national.snapshot(),
+                "running": True,
+                "started": False,
+                "why": (
+                    "the national fetch is already running — it is one download "
+                    "for the whole country and every area draws from it"
+                ),
+            }
         job = NationalFetch(reason=reason, refresh=refresh, on_change=self._national_changed)
         self.national = job
         self._national_task = asyncio.create_task(job.run(net=net))
@@ -729,9 +785,8 @@ class NavService:
                 ok, net_why = await internet_available()
                 if ok:
                     await self.ensure_national(
-                        reason="the map backend started and the national layers "
-                               "were incomplete",
-                        net=(ok, net_why))
+                        reason="the map backend started and the national layers " "were incomplete", net=(ok, net_why)
+                    )
                     snap = await self.await_national()
                     if (snap or {}).get("state") == "done":
                         return
@@ -778,9 +833,10 @@ class NavService:
         the day this console was written: nothing ever created one.
         """
         if not settings.area_auto:
-            return {"scheduled": False,
-                    "why": "automatic areas and fetching are switched off "
-                           "(NAV_AREA_AUTO=0 / NAV_AUTOFETCH=0)"}
+            return {
+                "scheduled": False,
+                "why": "automatic areas and fetching are switched off " "(NAV_AREA_AUTO=0 / NAV_AUTOFETCH=0)",
+            }
         # ---- 1. THE AREA, MADE HERE AND NOW, WITH NO NETWORK INVOLVED --------
         # Defining an area is writing down a plan: a box, a name and a state of
         # ABSENT. It needs a launch point and nothing else, which is exactly why it
@@ -793,7 +849,7 @@ class NavService:
         # every page load.
         try:
             plan = areamod.create_area(origin.lat, origin.lon)
-        except ValueError as exc:      # not a place, or the box would be too big
+        except ValueError as exc:  # not a place, or the box would be too big
             log.info("no area for %s,%s: %s", origin.lat, origin.lon, exc)
             return {"scheduled": False, "why": str(exc)}
         except Exception as exc:  # noqa: BLE001 — setting a datum must never fail here
@@ -808,18 +864,30 @@ class NavService:
         # water with a complete area must not spend one socket finding that out.
         comp = area_completeness(name)
         if comp["complete"]:
-            return {"scheduled": False, "area": name, "action": plan["action"],
-                    "why": (f"{name} is already complete — imagery, hazard charts and "
-                            f"centreline are all on this card, so nothing was fetched "
-                            f"and nothing was asked of the network"),
-                    "complete": True}
+            return {
+                "scheduled": False,
+                "area": name,
+                "action": plan["action"],
+                "why": (
+                    f"{name} is already complete — imagery, hazard charts and "
+                    f"centreline are all on this card, so nothing was fetched "
+                    f"and nothing was asked of the network"
+                ),
+                "complete": True,
+            }
         until = self._offline_until.get(name)
         if until is not None and time.monotonic() < until:
-            return {"scheduled": False, "area": name, "action": plan["action"],
-                    "why": (f"there was no internet {int(_OFFLINE_RETRY_GAP_S)}s ago and "
-                            f"{name} is not being re-probed yet. No signal is the normal "
-                            f"state here, and retrying it on every origin fix is how a "
-                            f"console spends a dive on DNS timeouts")}
+            return {
+                "scheduled": False,
+                "area": name,
+                "action": plan["action"],
+                "why": (
+                    f"there was no internet {int(_OFFLINE_RETRY_GAP_S)}s ago and "
+                    f"{name} is not being re-probed yet. No signal is the normal "
+                    f"state here, and retrying it on every origin fix is how a "
+                    f"console spends a dive on DNS timeouts"
+                ),
+            }
 
         # ---- 3. SAY DOWNLOADING BEFORE RETURNING -----------------------------
         # DOWNLOADING IS ITS OWN STATE and the operator has to be able to watch it
@@ -831,9 +899,10 @@ class NavService:
         # own staleness rule catches the case where this process dies in between.
         try:
             areamod.set_area_state(
-                name, "downloading",
-                why=("checking for internet, then downloading this area's imagery, "
-                     "hazard charts and centreline"))
+                name,
+                "downloading",
+                why=("checking for internet, then downloading this area's imagery, " "hazard charts and centreline"),
+            )
         except Exception as exc:  # noqa: BLE001
             log.warning("could not mark %s downloading: %s", name, exc)
         try:
@@ -842,18 +911,24 @@ class NavService:
             # mid-await — which would look exactly like a fetch that decided to do
             # nothing and said nothing about why.
             self._autofetch_task = asyncio.create_task(self._autofetch(origin, name))
-        except RuntimeError:            # no running loop — nav embedded in a sync test
-            areamod.set_area_state(name, "absent",
-                                   why="no event loop was running to fetch on")
-            return {"scheduled": False, "area": name,
-                    "why": "no event loop is running to schedule it on"}
-        return {"scheduled": True, "area": name, "action": plan["action"],
-                "missing": comp["missing"], "bbox": plan.get("bbox"),
-                "est_tiles": plan.get("est_tiles"), "est_mb": plan.get("est_mb"),
-                "why": (f"{name} is missing {', '.join(comp['missing'])}. A background "
-                        f"fetch was scheduled; it checks for internet first and does "
-                        f"nothing at all if there is none"),
-                "watch": "/api/areas/fetch"}
+        except RuntimeError:  # no running loop — nav embedded in a sync test
+            areamod.set_area_state(name, "absent", why="no event loop was running to fetch on")
+            return {"scheduled": False, "area": name, "why": "no event loop is running to schedule it on"}
+        return {
+            "scheduled": True,
+            "area": name,
+            "action": plan["action"],
+            "missing": comp["missing"],
+            "bbox": plan.get("bbox"),
+            "est_tiles": plan.get("est_tiles"),
+            "est_mb": plan.get("est_mb"),
+            "why": (
+                f"{name} is missing {', '.join(comp['missing'])}. A background "
+                f"fetch was scheduled; it checks for internet first and does "
+                f"nothing at all if there is none"
+            ),
+            "watch": "/api/areas/fetch",
+        }
 
     async def _autofetch(self, origin: Origin, name: str) -> None:
         """The download decision, off the request path. Network only if needed."""
@@ -872,9 +947,14 @@ class NavService:
                 rec = _offline_record(name, why, reason="a launch point was set")
                 self.last_fetch = rec
                 areamod.set_area_state(
-                    name, "absent",
-                    why=(f"nothing has been downloaded into this area yet, and there is "
-                         f"no internet here to do it with: {why}"), fetch=rec)
+                    name,
+                    "absent",
+                    why=(
+                        f"nothing has been downloaded into this area yet, and there is "
+                        f"no internet here to do it with: {why}"
+                    ),
+                    fetch=rec,
+                )
                 await self._broadcast(json.dumps({"type": "area_fetch", **rec}))
                 log.info("auto-fetch not started for %s: %s", name, why)
                 return
@@ -886,9 +966,15 @@ class NavService:
                 return
             zmin = int(meta.get("minzoom") or settings.sat_min_zoom)
             zmax = int(meta.get("maxzoom") or settings.sat_max_zoom)
-            await self.start_fetch(name, bbox, zmin, zmax,
-                                   radius_m=(meta.get("origin") or {}).get("radius_m"),
-                                   reason="a launch point was set", net=(ok, why))
+            await self.start_fetch(
+                name,
+                bbox,
+                zmin,
+                zmax,
+                radius_m=(meta.get("origin") or {}).get("radius_m"),
+                reason="a launch point was set",
+                net=(ok, why),
+            )
         except asyncio.CancelledError:
             # THE DECISION WAS KILLED BEFORE IT DECIDED, and the area is sitting
             # there saying DOWNLOADING because autofetch() said so before handing
@@ -899,15 +985,18 @@ class NavService:
             # on the card with no data behind it yet.
             with contextlib.suppress(Exception):
                 areamod.set_area_state(
-                    name, "absent",
-                    why=("the download was stopped before it started, so nothing has "
-                         "been downloaded into this area yet"))
+                    name,
+                    "absent",
+                    why=(
+                        "the download was stopped before it started, so nothing has "
+                        "been downloaded into this area yet"
+                    ),
+                )
             raise
         except Exception as exc:  # noqa: BLE001 — setting an origin must never fail here
             log.warning("auto-fetch decision failed: %s", exc, exc_info=True)
             with contextlib.suppress(Exception):
-                areamod.set_area_state(name, "failed",
-                                       why=f"the fetch could not be started: {exc}")
+                areamod.set_area_state(name, "failed", why=f"the fetch could not be started: {exc}")
 
     # ---- readiness (§9) ---------------------------------------------------
     def _hw(self):
@@ -938,12 +1027,17 @@ class NavService:
             bb = area_meta.get("bbox")
             if bb and self.origin:
                 covers = bb[0] <= self.origin.lon <= bb[2] and bb[1] <= self.origin.lat <= bb[3]
-        add("basemap present + covers launch", bool(area_meta and area_meta.get("present") and covers),
-            f"area={self.active_area}")
+        add(
+            "basemap present + covers launch",
+            bool(area_meta and area_meta.get("present") and covers),
+            f"area={self.active_area}",
+        )
         # 2 centreline cached or snapping off
-        add("waterway centreline cached (or snapping off)",
+        add(
+            "waterway centreline cached (or snapping off)",
             bool(self.centreline) or not settings.snapping_enabled,
-            "centreline loaded" if self.centreline else "snapping disabled")
+            "centreline loaded" if self.centreline else "snapping disabled",
+        )
         # 2b CRT hazard layers cached for this area (§3 bootstrap → §9 pre-dive)
         #
         # WHY THIS IS A GO/NO-GO ITEM AND NOT A NICETY. A canal is full of things
@@ -981,16 +1075,19 @@ class NavService:
         corrupt = crt_block.get("unreadable") or []
         part = [p.get("layer_key") for p in crt_block.get("partial") or []]
         if crt_block["status"] != "present":
-            hz_ok, hz_why = False, (crt_block.get("why", "not fetched")
-                                    + " — an absent hazard layer is NOT a clear channel")
+            hz_ok, hz_why = False, (
+                crt_block.get("why", "not fetched") + " — an absent hazard layer is NOT a clear channel"
+            )
         elif part:
             # STILL COMING IS NOT A PASS AND IT IS NOT A FAILURE EITHER. It is "not
             # yet", and diving on a half-downloaded card is exactly what this gate is
             # written against: what has not landed draws as clear water.
             hz_ok = False
-            hz_why = (f"{len(part)} layer(s) are still downloading "
-                      f"({', '.join(part[:4])}) — the map draws what has landed and "
-                      f"blanks the rest, which is missing data and not empty water")
+            hz_why = (
+                f"{len(part)} layer(s) are still downloading "
+                f"({', '.join(part[:4])}) — the map draws what has landed and "
+                f"blanks the rest, which is missing data and not empty water"
+            )
         elif failed or corrupt:
             # BOTH sentences, when both apply. They send the operator to two different
             # jobs — one to the internet, one to the card — and a gate that reports
@@ -998,25 +1095,32 @@ class NavService:
             hz_ok = False
             parts = []
             if failed:
-                parts.append(f"{len(failed)} layer(s) did not download and no file was "
-                             f"written for them ({', '.join(failed[:4])}) — nothing is "
-                             f"known about those hazards here")
+                parts.append(
+                    f"{len(failed)} layer(s) did not download and no file was "
+                    f"written for them ({', '.join(failed[:4])}) — nothing is "
+                    f"known about those hazards here"
+                )
             if corrupt:
-                parts.append(f"{len(corrupt)} layer(s) are on the card and CANNOT BE READ "
-                             f"({', '.join(corrupt[:4])}) — a half-written hazard layer "
-                             f"draws as an empty canal; delete those files and re-fetch "
-                             f"while there is still internet")
+                parts.append(
+                    f"{len(corrupt)} layer(s) are on the card and CANNOT BE READ "
+                    f"({', '.join(corrupt[:4])}) — a half-written hazard layer "
+                    f"draws as an empty canal; delete those files and re-fetch "
+                    f"while there is still internet"
+                )
             hz_why = "; ".join(parts)
         else:
             n = len(crt_block.get("layers") or [])
             hz_ok = True
-            hz_why = (f"{n} layer(s) held "
-                      f"{'NATIONALLY' if crt_block.get('scope') == 'national' else 'for this area'} "
-                      f"and certified (not merely present on disk), fetched "
-                      f"{crt_block.get('fetched')}; "
-                      f"{len(crt_block.get('skipped') or [])} skipped on purpose")
-        add("CRT hazard layers held AND readable (absent is not 'no hazards', "
-            "and neither is corrupt)", hz_ok, hz_why)
+            hz_why = (
+                f"{n} layer(s) held "
+                f"{'NATIONALLY' if crt_block.get('scope') == 'national' else 'for this area'} "
+                f"and certified (not merely present on disk), fetched "
+                f"{crt_block.get('fetched')}; "
+                f"{len(crt_block.get('skipped') or [])} skipped on purpose"
+            )
+        add(
+            "CRT hazard layers held AND readable (absent is not 'no hazards', " "and neither is corrupt)", hz_ok, hz_why
+        )
         # 2c IS THIS AREA ACTUALLY FINISHED? The three items above each answer about
         # ONE source, and an operator reading three greens still has to work out
         # whether that is all of them — which is the question they actually have at
@@ -1044,13 +1148,18 @@ class NavService:
         # the survey behind it, which is the ordinary outcome of a good build and is
         # reported in this line's detail rather than failing it.
         comp = area_completeness(self.active_area or "")
-        add("offline area COMPLETE — imagery, hazard charts, the launch-bank overlay "
+        add(
+            "offline area COMPLETE — imagery, hazard charts, the launch-bank overlay "
             "and the centreline all on this card and nothing still downloading",
-            bool(comp["complete"]), comp["detail"])
+            bool(comp["complete"]),
+            comp["detail"],
+        )
         # 3 origin + accuracy
-        add("origin set within accuracy threshold",
+        add(
+            "origin set within accuracy threshold",
             bool(self.origin) and (self.origin.accuracy <= settings.max_origin_accuracy_m if self.origin else False),
-            f"accuracy={self.origin.accuracy}m ≤ {settings.max_origin_accuracy_m}m" if self.origin else "no origin")
+            f"accuracy={self.origin.accuracy}m ≤ {settings.max_origin_accuracy_m}m" if self.origin else "no origin",
+        )
         # 4 heading0 + IMU cal
         mag_cal = self.last_sample.mag_cal if self.last_sample else None
         # The detail has to name the half that FAILED. Reporting "mag_cal=3" against a
@@ -1065,8 +1174,7 @@ class NavService:
         elif not has_origin:
             why = f"no origin set (the compass is fine, mag_cal={mag_cal})"
         elif not cal_ok:
-            why = ("no IMU is reporting a calibration" if mag_cal is None
-                   else f"mag_cal={mag_cal}, needs 2 or better")
+            why = "no IMU is reporting a calibration" if mag_cal is None else f"mag_cal={mag_cal}, needs 2 or better"
         else:
             why = f"origin set, mag_cal={mag_cal}"
         add("heading0 captured + IMU cal good", has_origin and cal_ok, why)
@@ -1075,9 +1183,11 @@ class NavService:
         # 6 speed LUT
         add("speed LUT loaded", self.speed_lut is not None, f"lut={self.speed_lut.id}")
         # 9 tether encoder zeroed
-        add("tether encoder zeroed at launch",
+        add(
+            "tether encoder zeroed at launch",
             self.last_state is None or self.last_state.payout_m < 1.0,
-            f"payout={self.last_state.payout_m if self.last_state else 0}m")
+            f"payout={self.last_state.payout_m if self.last_state else 0}m",
+        )
         hw = self._hw()
         # §5 leak probes — the one failure the two-probe design otherwise hides.
         # Both probes are pull-ups that only read wet when water bridges them, so a
@@ -1103,22 +1213,27 @@ class NavService:
             try:
                 homed_ok = bool(hw.ballast_homed())
                 level = hw.get_ballast_level()
-                homed_detail = (f"level={level:.2f} of stroke" if homed_ok and level is not None
-                                else "never homed — run ballast home before launch")
+                homed_detail = (
+                    f"level={level:.2f} of stroke"
+                    if homed_ok and level is not None
+                    else "never homed — run ballast home before launch"
+                )
             except Exception as exc:  # noqa: BLE001
                 homed_ok, homed_detail = False, f"ballast read failed: {exc}"
             try:
                 rehome = bool(hw.ballast_needs_rehome())
-                rehome_detail = ("re-home required — step count disagrees with the span"
-                                 if rehome else "step count agrees with the span")
+                rehome_detail = (
+                    "re-home required — step count disagrees with the span"
+                    if rehome
+                    else "step count agrees with the span"
+                )
             except Exception as exc:  # noqa: BLE001
                 rehome, rehome_detail = True, f"rehome flag unreadable: {exc}"
         add("ballast homed (position known)", homed_ok, homed_detail)
         # Its own line on purpose: homed-but-drifted is a different failure from
         # never-homed, and a skipped-step event that only reaches the log is an
         # event nobody sees at the water's edge.
-        add("ballast step count trusted (no skipped steps)",
-            hw is not None and not rehome, rehome_detail)
+        add("ballast step count trusted (no skipped steps)", hw is not None and not rehome, rehome_detail)
         # 7,8 camera preflight + video — cross-subsystem, checked by the camera plane; noted here
         add("camera pre-flight + video (see camera plane)", True, "run /api/preflight separately")
         passed = all(x.ok for x in items)
@@ -1172,8 +1287,9 @@ def _crt_mod():
     """
     try:
         from . import crt
+
         return crt
-    except ImportError:      # noqa: BLE001 — a build without the downloader still serves
+    except ImportError:  # noqa: BLE001 — a build without the downloader still serves
         return None
 
 
@@ -1188,8 +1304,9 @@ def _soundings_mod():
     """
     try:
         from . import soundings
+
         return soundings
-    except ImportError:      # noqa: BLE001
+    except ImportError:  # noqa: BLE001
         return None
 
 
@@ -1266,9 +1383,11 @@ _BANK_LIBS = (("numpy", "numpy"), ("scipy", "scipy"), ("PIL", "Pillow"))
 _BANK_INSTALL = "pip install numpy scipy Pillow"
 # Where they belong, said once so every sentence below can quote it. The Pi is not a
 # chart server and never becomes one: this is the handheld's work, done once, at home.
-_BANK_WHERE = ("the launch-bank layer is built on the HANDHELD, where the maps live and "
-               "where this is one-time work — the vehicle is deliberately never given "
-               "these libraries")
+_BANK_WHERE = (
+    "the launch-bank layer is built on the HANDHELD, where the maps live and "
+    "where this is one-time work — the vehicle is deliberately never given "
+    "these libraries"
+)
 
 
 def _bank_libraries() -> dict:
@@ -1291,28 +1410,40 @@ def _bank_libraries() -> dict:
             doc = fn()
             if isinstance(doc, dict) and isinstance(doc.get("missing"), (list, tuple)):
                 missing = [str(m) for m in doc["missing"]]
-                return {"ok": not missing, "missing": missing,
-                        "install": doc.get("install") or _BANK_INSTALL,
-                        "why": doc.get("why") or _bank_lib_why(missing, _BANK_INSTALL),
-                        "libraries": doc.get("libraries") or {}}
+                return {
+                    "ok": not missing,
+                    "missing": missing,
+                    "install": doc.get("install") or _BANK_INSTALL,
+                    "why": doc.get("why") or _bank_lib_why(missing, _BANK_INSTALL),
+                    "libraries": doc.get("libraries") or {},
+                }
         except Exception as exc:  # noqa: BLE001 — its answer failing is not this file's
             log.warning("nav/bank.py library_state() raised (%s) — probing directly", exc)
     missing = [pkg for mod, pkg in _BANK_LIBS if not _has_module(mod)]
-    return {"ok": not missing, "missing": missing, "install": _BANK_INSTALL,
-            "why": _bank_lib_why(missing, _BANK_INSTALL), "libraries": {}}
+    return {
+        "ok": not missing,
+        "missing": missing,
+        "install": _BANK_INSTALL,
+        "why": _bank_lib_why(missing, _BANK_INSTALL),
+        "libraries": {},
+    }
 
 
 def _bank_lib_why(missing: list[str], install: str) -> str:
     if not missing:
-        return ("numpy, scipy and Pillow are installed for this python, so this machine "
-                "can build the launch-bank overlay.")
+        return (
+            "numpy, scipy and Pillow are installed for this python, so this machine "
+            "can build the launch-bank overlay."
+        )
     names = ", ".join("Pillow" if m == "PIL" else m for m in missing)
-    return (f"The launch-bank overlay cannot be built on this machine because {names} "
-            f"{'is' if len(missing) == 1 else 'are'} not installed for the python "
-            f"running this service. Install with: {install}  ({_BANK_WHERE}). Nothing "
-            f"else is affected — the API, the map, the hazard layers and the vehicle "
-            f"all run exactly as they did, and tiles already on this card are still "
-            f"served.")
+    return (
+        f"The launch-bank overlay cannot be built on this machine because {names} "
+        f"{'is' if len(missing) == 1 else 'are'} not installed for the python "
+        f"running this service. Install with: {install}  ({_BANK_WHERE}). Nothing "
+        f"else is affected — the API, the map, the hazard layers and the vehicle "
+        f"all run exactly as they did, and tiles already on this card are still "
+        f"served."
+    )
 
 
 # The five answers the launch-bank overlay can give. nav/bank.py's card() says
@@ -1365,32 +1496,45 @@ def _bank_block(area: str) -> dict:
             held = lidar.card(area)
         except Exception as exc:  # noqa: BLE001 — a card that will not answer is an answer
             log.warning("nav/lidar.py card(%s) raised: %s", area, exc)
-    base = {"area": area, "layer": "bank", "url": "/api/bank",
-            "libraries": libs, "lidar": held}
+    base = {"area": area, "layer": "bank", "url": "/api/bank", "libraries": libs, "lidar": held}
     if bank is None:
         why = _BANK_IMPORT.get("bank") or "api/nav/bank.py could not be loaded"
         return {
-            **base, "status": "unavailable", "why": why,
-            "means": ("nothing on this machine can build or read a launch-bank layer, so "
-                      "nothing is known about which bank could be got down with the sub "
-                      "and the cable. That is a missing capability, not a survey result"),
-            "remedy": (libs["install"] if not libs["ok"] else
-                       "install a build of this repo that includes api/nav/bank.py"),
-            "title": (f"LAUNCH BANKS: UNAVAILABLE on this machine — {why}. Nothing here "
-                      f"claims a bank is low and nothing claims it is high."),
-            "aria_label": (f"The launch bank layer is unavailable for area {area} "
-                           f"because the module that builds it could not be loaded."),
+            **base,
+            "status": "unavailable",
+            "why": why,
+            "means": (
+                "nothing on this machine can build or read a launch-bank layer, so "
+                "nothing is known about which bank could be got down with the sub "
+                "and the cable. That is a missing capability, not a survey result"
+            ),
+            "remedy": (
+                libs["install"] if not libs["ok"] else "install a build of this repo that includes api/nav/bank.py"
+            ),
+            "title": (
+                f"LAUNCH BANKS: UNAVAILABLE on this machine — {why}. Nothing here "
+                f"claims a bank is low and nothing claims it is high."
+            ),
+            "aria_label": (
+                f"The launch bank layer is unavailable for area {area} "
+                f"because the module that builds it could not be loaded."
+            ),
         }
     try:
         card = bank.card(area)
     except Exception as exc:  # noqa: BLE001 — an unreadable card is an answer, never a 500
         log.warning("nav/bank.py card(%s) raised: %s", area, exc)
         return {
-            **base, "status": "unreadable", "why": f"{type(exc).__name__}: {exc}",
-            "means": _UNREADABLE_MEANS, "remedy": _UNREADABLE_REMEDY,
-            "title": (f"LAUNCH BANKS, {area}: the record beside this area's bank tiles "
-                      f"could not be read ({exc}). Nothing is claimed about these banks "
-                      f"either way."),
+            **base,
+            "status": "unreadable",
+            "why": f"{type(exc).__name__}: {exc}",
+            "means": _UNREADABLE_MEANS,
+            "remedy": _UNREADABLE_REMEDY,
+            "title": (
+                f"LAUNCH BANKS, {area}: the record beside this area's bank tiles "
+                f"could not be read ({exc}). Nothing is claimed about these banks "
+                f"either way."
+            ),
             "aria_label": f"The launch bank layer for area {area} could not be read.",
         }
     if not isinstance(card, dict):
@@ -1403,44 +1547,56 @@ def _bank_block(area: str) -> dict:
         # this undone, and no fetch will produce it here. Once tiles ARE on the card
         # the libraries stop mattering entirely and this branch is not taken.
         return {
-            **base, **card, "status": "unavailable", "why": libs["why"],
-            "means": ("the launch-bank layer is classified from a LIDAR ground model and "
-                      "the arithmetic that does it needs these libraries. Without them "
-                      "nothing is known about where the bank is low — which is not the "
-                      "same as knowing there is no low bank here"),
+            **base,
+            **card,
+            "status": "unavailable",
+            "why": libs["why"],
+            "means": (
+                "the launch-bank layer is classified from a LIDAR ground model and "
+                "the arithmetic that does it needs these libraries. Without them "
+                "nothing is known about where the bank is low — which is not the "
+                "same as knowing there is no low bank here"
+            ),
             "remedy": libs["install"],
             "title": f"LAUNCH BANKS, {area}: UNAVAILABLE — {libs['why']}",
-            "aria_label": (f"The launch bank layer is unavailable on this machine. "
-                           f"{libs['why']}"),
+            "aria_label": (f"The launch bank layer is unavailable on this machine. " f"{libs['why']}"),
         }
     if status not in _BANK_STATES:
         # NOT UNDERSTOOD IS NOT FINE. Reported as PARTIAL, which is the conservative end
         # of this vocabulary: it never claims the layer is whole, and unlike "unreadable"
         # it does not send anybody off to delete files over a word this file simply has
         # not been taught yet.
-        log.warning("nav/bank.py reported state %r for %s, which is not one of %s",
-                    status, area, list(_BANK_STATES))
-        card = {**card, "why": (f"the bank module answered {status!r}, which this "
-                                f"service does not know how to read")}
+        log.warning("nav/bank.py reported state %r for %s, which is not one of %s", status, area, list(_BANK_STATES))
+        card = {
+            **card,
+            "why": (f"the bank module answered {status!r}, which this " f"service does not know how to read"),
+        }
         status = "partial"
     n = card.get("pounds")
-    tiles = ((card.get("tiles") or {}).get("tiles")
-             if isinstance(card.get("tiles"), dict) else card.get("tiles"))
+    tiles = (card.get("tiles") or {}).get("tiles") if isinstance(card.get("tiles"), dict) else card.get("tiles")
     default_titles = {
-        "present": (f"LAUNCH BANKS, {area}: on this card"
-                    + (f", {tiles} overlay tile(s)" if isinstance(tiles, int) else "")
-                    + (f", {n} water level(s) detected" if isinstance(n, int) else "")
-                    + ". Amber is bank measured under the launch height above the water "
-                      "beside it, which is a geometric fact and not permission to launch; "
-                      "unpainted ground has NOT been surveyed and found high."),
-        "partial": (f"LAUNCH BANKS, {area}: PARTIAL. Part of this corridor has no "
-                    f"terrain behind it and is drawn as nothing — which is NOT bank that "
-                    f"was measured and found high."),
-        "absent": (f"LAUNCH BANKS, {area}: ABSENT. No bank classification has been built "
-                   f"for this area, so nothing here knows which side could be got down "
-                   f"with the sub and the cable. Bare imagery is not a high bank."),
-        "unreadable": (f"LAUNCH BANKS, {area}: the layer is on the card and cannot be "
-                       f"read, so nothing is claimed about these banks."),
+        "present": (
+            f"LAUNCH BANKS, {area}: on this card"
+            + (f", {tiles} overlay tile(s)" if isinstance(tiles, int) else "")
+            + (f", {n} water level(s) detected" if isinstance(n, int) else "")
+            + ". Amber is bank measured under the launch height above the water "
+            "beside it, which is a geometric fact and not permission to launch; "
+            "unpainted ground has NOT been surveyed and found high."
+        ),
+        "partial": (
+            f"LAUNCH BANKS, {area}: PARTIAL. Part of this corridor has no "
+            f"terrain behind it and is drawn as nothing — which is NOT bank that "
+            f"was measured and found high."
+        ),
+        "absent": (
+            f"LAUNCH BANKS, {area}: ABSENT. No bank classification has been built "
+            f"for this area, so nothing here knows which side could be got down "
+            f"with the sub and the cable. Bare imagery is not a high bank."
+        ),
+        "unreadable": (
+            f"LAUNCH BANKS, {area}: the layer is on the card and cannot be "
+            f"read, so nothing is claimed about these banks."
+        ),
         "unavailable": f"LAUNCH BANKS: UNAVAILABLE on this machine — {_BANK_WHERE}.",
     }
     default_aria = {
@@ -1451,8 +1607,11 @@ def _bank_block(area: str) -> dict:
         "unavailable": "The launch bank layer cannot be built on this machine.",
     }
     return {
-        **base, **card,
-        "status": status, "area": area, "layer": "bank",
+        **base,
+        **card,
+        "status": status,
+        "area": area,
+        "layer": "bank",
         "title": card.get("title") or default_titles[status],
         "aria_label": card.get("aria_label") or default_aria[status],
     }
@@ -1552,8 +1711,8 @@ def _unsurveyed_sentence(snd) -> str:
     short, so it is obvious in a diff which one is being shown.
     """
     return getattr(snd, "UNSURVEYED", None) or (
-        "no dive has left bottom evidence here, so the bed is UNSURVEYED. Absent is "
-        "not shallow and it is not zero.")
+        "no dive has left bottom evidence here, so the bed is UNSURVEYED. Absent is " "not shallow and it is not zero."
+    )
 
 
 def _surveyed_collection(area: str, store: dict, snd) -> dict:
@@ -1588,38 +1747,50 @@ def _surveyed_collection(area: str, store: dict, snd) -> dict:
         else:
             continue
         d = f"{depth:.2f}" if isinstance(depth, (int, float)) else "?"
-        feats.append({
-            "type": "Feature", "geometry": geometry,
-            "properties": {
-                "layer": "depth-surveyed",
-                # `depth_m` is the name every depth renderer on this console looks
-                # for first; the store's own name for the quantity is carried
-                # beside it, unchanged, so nothing has to trust this translation.
-                "depth_m": depth,
-                quantity: depth,
-                "quantity": quantity,
-                "bound": cell.get("bound", "lower"),
-                "measured": True, "nominal": False, "is_survey": True,
-                "cell_m": cell_m,
-                "line": cell.get("line"), "cell": cell.get("cell"),
-                "from_m": cell.get("from_m"), "to_m": cell.get("to_m"),
-                "samples": cell.get("samples"), "contacts": cell.get("contacts"),
-                "dives": cell.get("dives"),
-                "confidence_min": cell.get("confidence_min"),
-                "confidence_mean": cell.get("confidence_mean"),
-                "offset_m_max": cell.get("offset_m_max"),
-                "deepest_from": cell.get("deepest_from"),
-                "title": (f"MEASURED: the bed here is at least {d} m below the surface "
-                          f"of the day. This is a LOWER BOUND, not a depth — it is the "
-                          f"deepest this sub got while the journal showed it resting on "
-                          f"something solid, and the pressure port sits above the keel, "
-                          f"so there may be more water under it. There is no vertical "
-                          f"datum: canal levels move with rain and lock use."),
-                "aria_label": (f"Measured lower bound on bed depth, at least {d} metres, "
-                               f"from {len(cell.get('dives') or [])} dive(s). The bed is "
-                               f"at least this deep and may be deeper."),
-            },
-        })
+        feats.append(
+            {
+                "type": "Feature",
+                "geometry": geometry,
+                "properties": {
+                    "layer": "depth-surveyed",
+                    # `depth_m` is the name every depth renderer on this console looks
+                    # for first; the store's own name for the quantity is carried
+                    # beside it, unchanged, so nothing has to trust this translation.
+                    "depth_m": depth,
+                    quantity: depth,
+                    "quantity": quantity,
+                    "bound": cell.get("bound", "lower"),
+                    "measured": True,
+                    "nominal": False,
+                    "is_survey": True,
+                    "cell_m": cell_m,
+                    "line": cell.get("line"),
+                    "cell": cell.get("cell"),
+                    "from_m": cell.get("from_m"),
+                    "to_m": cell.get("to_m"),
+                    "samples": cell.get("samples"),
+                    "contacts": cell.get("contacts"),
+                    "dives": cell.get("dives"),
+                    "confidence_min": cell.get("confidence_min"),
+                    "confidence_mean": cell.get("confidence_mean"),
+                    "offset_m_max": cell.get("offset_m_max"),
+                    "deepest_from": cell.get("deepest_from"),
+                    "title": (
+                        f"MEASURED: the bed here is at least {d} m below the surface "
+                        f"of the day. This is a LOWER BOUND, not a depth — it is the "
+                        f"deepest this sub got while the journal showed it resting on "
+                        f"something solid, and the pressure port sits above the keel, "
+                        f"so there may be more water under it. There is no vertical "
+                        f"datum: canal levels move with rain and lock use."
+                    ),
+                    "aria_label": (
+                        f"Measured lower bound on bed depth, at least {d} metres, "
+                        f"from {len(cell.get('dives') or [])} dive(s). The bed is "
+                        f"at least this deep and may be deeper."
+                    ),
+                },
+            }
+        )
     n = len(feats)
     return {
         "type": "FeatureCollection",
@@ -1627,7 +1798,9 @@ def _surveyed_collection(area: str, store: dict, snd) -> dict:
         "status": "present",
         "layer": "depth-surveyed",
         "area": area,
-        "measured": True, "nominal": False, "is_survey": True,
+        "measured": True,
+        "nominal": False,
+        "is_survey": True,
         "quantity": quantity,
         # `cell_m` ON THE WIRE, both here and on every feature above. The store calls
         # its bin width `cell_length_m` and this collection used to publish that name
@@ -1652,21 +1825,25 @@ def _surveyed_collection(area: str, store: dict, snd) -> dict:
         "means": getattr(snd, "MEANS", None),
         "unsurveyed": _unsurveyed_sentence(snd),
         "datum": getattr(snd, "DATUM", None),
-        "title": (f"{n} surveyed cell(s) for {area}, from "
-                  f"{len(store.get('dives') or {})} dive(s). Each is a LOWER BOUND on "
-                  f"bed depth: the bed is at least this deep and may be deeper. "
-                  f"Anywhere not drawn is UNSURVEYED, which is not shallow and not "
-                  f"zero."),
-        "aria_label": (f"Measured soundings for area {area}: {n} cells, each a lower "
-                       f"bound on the depth of the bed. Anywhere not listed has never "
-                       f"been surveyed by this vehicle."),
+        "title": (
+            f"{n} surveyed cell(s) for {area}, from "
+            f"{len(store.get('dives') or {})} dive(s). Each is a LOWER BOUND on "
+            f"bed depth: the bed is at least this deep and may be deeper. "
+            f"Anywhere not drawn is UNSURVEYED, which is not shallow and not "
+            f"zero."
+        ),
+        "aria_label": (
+            f"Measured soundings for area {area}: {n} cells, each a lower "
+            f"bound on the depth of the bed. Anywhere not listed has never "
+            f"been surveyed by this vehicle."
+        ),
     }
 
 
 def _absent(area: str, layer: str, why: str, means: str, remedy: str) -> dict:
     """The answer for a layer that is not on this card. Deliberately not GeoJSON."""
     return {
-        "type": "AbsentLayer",          # NOT "FeatureCollection". See the note above.
+        "type": "AbsentLayer",  # NOT "FeatureCollection". See the note above.
         "status": "absent",
         "area": area,
         "layer": layer,
@@ -1674,8 +1851,9 @@ def _absent(area: str, layer: str, why: str, means: str, remedy: str) -> dict:
         "means": means,
         "remedy": remedy,
         "title": f"{layer}: ABSENT for {area}. {why} {means}",
-        "aria_label": (f"The {layer} layer is absent for area {area}. {why} {means} "
-                       f"This is missing data, not an empty result."),
+        "aria_label": (
+            f"The {layer} layer is absent for area {area}. {why} {means} " f"This is missing data, not an empty result."
+        ),
     }
 
 
@@ -1683,11 +1861,13 @@ def _absent(area: str, layer: str, why: str, means: str, remedy: str) -> dict:
 # rows in _crt_layers both have to say it, and a sentence that exists twice is a
 # sentence that will one day disagree with itself about whether a corrupt hazard
 # layer is a missing one.
-_UNREADABLE_MEANS = ("this layer's file is on the card and could not be parsed — almost "
-                     "always a download killed part-way or a card that was pulled while "
-                     "writing. It is NOT an empty layer and it is NOT a missing one: "
-                     "something is there and nothing can be read out of it, so nothing "
-                     "is claimed about this water")
+_UNREADABLE_MEANS = (
+    "this layer's file is on the card and could not be parsed — almost "
+    "always a download killed part-way or a card that was pulled while "
+    "writing. It is NOT an empty layer and it is NOT a missing one: "
+    "something is there and nothing can be read out of it, so nothing "
+    "is claimed about this water"
+)
 _UNREADABLE_REMEDY = "delete the file and re-run the fetch while there is still internet"
 
 
@@ -1710,10 +1890,14 @@ def _unreadable(area: str, layer: str, path, exc: Exception) -> dict:
         "error": str(exc),
         "means": _UNREADABLE_MEANS,
         "remedy": _UNREADABLE_REMEDY,
-        "title": (f"{layer}: UNREADABLE for {area}. The file exists and cannot be "
-                  f"parsed, so nothing is claimed about this water."),
-        "aria_label": (f"The {layer} layer for area {area} is present on disk and "
-                       f"cannot be read. No claim is made about this water."),
+        "title": (
+            f"{layer}: UNREADABLE for {area}. The file exists and cannot be "
+            f"parsed, so nothing is claimed about this water."
+        ),
+        "aria_label": (
+            f"The {layer} layer for area {area} is present on disk and "
+            f"cannot be read. No claim is made about this water."
+        ),
     }
 
 
@@ -1782,13 +1966,11 @@ _layer_cache: dict[str, tuple[tuple, str, str | None, int | None, int | None]] =
 # saved as a layer is the common one, and it parses perfectly and contains no
 # features. Answering "0 features" for it is the empty-canal lie arriving by the one
 # route a JSON parse cannot catch.
-_NOT_A_LAYER = ("the file is valid JSON and is not a GeoJSON FeatureCollection, so "
-                "nothing can be read out of it")
+_NOT_A_LAYER = "the file is valid JSON and is not a GeoJSON FeatureCollection, so " "nothing can be read out of it"
 
 
 def _is_layer_doc(doc) -> bool:
-    return (isinstance(doc, dict) and doc.get("type") == "FeatureCollection"
-            and isinstance(doc.get("features"), list))
+    return isinstance(doc, dict) and doc.get("type") == "FeatureCollection" and isinstance(doc.get("features"), list)
 
 
 def _read_layer(path: Path) -> tuple[str, str | None, int | None, int | None]:
@@ -1829,8 +2011,12 @@ def _read_layer(path: Path) -> tuple[str, str | None, int | None, int | None]:
         # file, so the operator's log gets one line per corrupt layer rather than one
         # per readiness poll — and a warning nobody can read is a warning nobody
         # reads.
-        log.warning("CRT hazard layer %s is on the card and could not be read: %s — it is "
-                    "NOT being served as an empty layer", path, err)
+        log.warning(
+            "CRT hazard layer %s is on the card and could not be read: %s — it is "
+            "NOT being served as an empty layer",
+            path,
+            err,
+        )
     _layer_cache[key] = (sig, state, err, n, st.st_size)
     return state, err, n, st.st_size
 
@@ -1881,6 +2067,7 @@ def _national_card_sig(crt) -> tuple:
             return (st.st_mtime_ns, st.st_size)
         except OSError:
             return None
+
     d = crt.national_dir()
     return (stamp(d), stamp(d / "provenance.json"))
 
@@ -1906,12 +2093,23 @@ def _verify_national(path: Path, rec: dict) -> dict:
     try:
         st = path.stat()
     except FileNotFoundError:
-        return {"status": "absent", "features": None, "bytes": None,
-                "check": "absent", "verified": "not on the card", "error": None}
+        return {
+            "status": "absent",
+            "features": None,
+            "bytes": None,
+            "check": "absent",
+            "verified": "not on the card",
+            "error": None,
+        }
     except OSError as exc:
-        return {"status": "unreadable", "features": None, "bytes": None,
-                "check": "unopenable", "verified": "could not be opened",
-                "error": f"{type(exc).__name__}: {exc}"}
+        return {
+            "status": "unreadable",
+            "features": None,
+            "bytes": None,
+            "check": "unopenable",
+            "verified": "could not be opened",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
     sig = (st.st_mtime_ns, st.st_size, rec.get("bytes"), rec.get("features"))
     hit = _national_cache.get(str(path))
     if hit is not None and hit[0] == sig:
@@ -1919,19 +2117,36 @@ def _verify_national(path: Path, rec: dict) -> dict:
     claimed_bytes, claimed_n = rec.get("bytes"), rec.get("features")
     out: dict
     if claimed_bytes is not None and st.st_size != claimed_bytes:
-        out = {"status": "unreadable", "features": None, "bytes": st.st_size,
-               "check": "size", "verified": "size against the fetch's own record",
-               "error": (f"the file is {st.st_size} bytes and the fetch recorded writing "
-                         f"{claimed_bytes} — it is not the file that was downloaded")}
+        out = {
+            "status": "unreadable",
+            "features": None,
+            "bytes": st.st_size,
+            "check": "size",
+            "verified": "size against the fetch's own record",
+            "error": (
+                f"the file is {st.st_size} bytes and the fetch recorded writing "
+                f"{claimed_bytes} — it is not the file that was downloaded"
+            ),
+        }
     elif st.st_size <= settings.crt_parse_max_mb * 1e6:
         state, err, n, size = _read_layer(path)
-        out = {"status": state, "features": n, "bytes": size,
-               "check": "parsed", "verified": "parsed in full", "error": err}
+        out = {
+            "status": state,
+            "features": n,
+            "bytes": size,
+            "check": "parsed",
+            "verified": "parsed in full",
+            "error": err,
+        }
         if state == "present" and claimed_n is not None and n != claimed_n:
-            out = {"status": "unreadable", "features": n, "bytes": size,
-                   "check": "parsed", "verified": "parsed in full",
-                   "error": (f"this file holds {n} feature(s) and the fetch recorded "
-                             f"writing {claimed_n}")}
+            out = {
+                "status": "unreadable",
+                "features": n,
+                "bytes": size,
+                "check": "parsed",
+                "verified": "parsed in full",
+                "error": (f"this file holds {n} feature(s) and the fetch recorded " f"writing {claimed_n}"),
+            }
     else:
         # THE TAIL IS THE CHECK A TRUNCATED DOWNLOAD CANNOT PASS. crt.py closes every
         # collection with "]}" through an atomic rename, so a file that is the recorded
@@ -1944,18 +2159,32 @@ def _verify_national(path: Path, rec: dict) -> dict:
             ok = tail.endswith(b"]}")
         except OSError as exc:
             ok, tail = False, str(exc).encode()
-        out = {"status": "present" if ok else "unreadable",
-               "features": claimed_n, "bytes": st.st_size,
-               "check": "size+terminator",
-               "verified": (f"recorded size and closing bracket — {st.st_size / 1e6:.0f} "
-                            f"MB is too large to re-parse on every check "
-                            f"(NAV_CRT_PARSE_MAX_MB={settings.crt_parse_max_mb:.0f})"),
-               "error": None if ok else ("the file does not end in a closing bracket, "
-                                         "which is exactly what a download killed "
-                                         "part-way loses")}
+        out = {
+            "status": "present" if ok else "unreadable",
+            "features": claimed_n,
+            "bytes": st.st_size,
+            "check": "size+terminator",
+            "verified": (
+                f"recorded size and closing bracket — {st.st_size / 1e6:.0f} "
+                f"MB is too large to re-parse on every check "
+                f"(NAV_CRT_PARSE_MAX_MB={settings.crt_parse_max_mb:.0f})"
+            ),
+            "error": (
+                None
+                if ok
+                else (
+                    "the file does not end in a closing bracket, "
+                    "which is exactly what a download killed "
+                    "part-way loses"
+                )
+            ),
+        }
     if out["status"] == "unreadable":
-        log.warning("national CRT layer %s could not be certified: %s — it is NOT being "
-                    "served as an empty layer", path, out["error"])
+        log.warning(
+            "national CRT layer %s could not be certified: %s — it is NOT being " "served as an empty layer",
+            path,
+            out["error"],
+        )
     _national_cache[str(path)] = (sig, out)
     return out
 
@@ -1969,35 +2198,62 @@ def _national_layers(area: str | None = None) -> dict:
     """
     crt = _crt_mod()
     if crt is None:
-        return {"status": "absent", "scope": "national", "layers": [], "skipped": [],
-                "warnings": [], "failed": [], "unreadable": [], "complete": False,
-                "why": "api/nav/crt.py is not in this build",
-                "means": ("nothing on this handheld can have downloaded the Trust's "
-                          "layers, so no claim whatsoever is made about obstructions "
-                          "anywhere"),
-                "remedy": _NATIONAL_CMD}
+        return {
+            "status": "absent",
+            "scope": "national",
+            "layers": [],
+            "skipped": [],
+            "warnings": [],
+            "failed": [],
+            "unreadable": [],
+            "complete": False,
+            "why": "api/nav/crt.py is not in this build",
+            "means": (
+                "nothing on this handheld can have downloaded the Trust's "
+                "layers, so no claim whatsoever is made about obstructions "
+                "anywhere"
+            ),
+            "remedy": _NATIONAL_CMD,
+        }
     try:
         card = _national_card_cached(crt)
     except Exception as exc:  # noqa: BLE001 — an unreadable card is an answer, never a 500
         log.warning("the national CRT card could not be read: %s", exc)
-        return {"status": "unreadable", "scope": "national", "layers": [], "skipped": [],
-                "warnings": [], "failed": [], "unreadable": [], "complete": False,
-                "why": f"the national card could not be read ({exc})",
-                "means": "what is on this handheld cannot be accounted for",
-                "remedy": _NATIONAL_CMD}
+        return {
+            "status": "unreadable",
+            "scope": "national",
+            "layers": [],
+            "skipped": [],
+            "warnings": [],
+            "failed": [],
+            "unreadable": [],
+            "complete": False,
+            "why": f"the national card could not be read ({exc})",
+            "means": "what is on this handheld cannot be accounted for",
+            "remedy": _NATIONAL_CMD,
+        }
     if not card["layers"]:
-        return {"status": "absent", "scope": "national", "layers": [], "skipped": [],
-                "warnings": card.get("warnings") or [], "failed": [], "unreadable": [],
-                "complete": False, "dir": card["dir"],
-                "partial": card.get("partial") or [],
-                "why": ("the Canal & River Trust's layers have never been downloaded on "
-                        "this handheld"),
-                "means": ("nothing has been downloaded about sluices, weirs, culverts, "
-                          "stop-plank grooves, outfalls or safety gates ANYWHERE. That "
-                          "is NOT a clear channel — it is no information at all, and "
-                          "the two look identical on a map that draws an absent layer "
-                          "as an empty one"),
-                "remedy": _NATIONAL_CMD}
+        return {
+            "status": "absent",
+            "scope": "national",
+            "layers": [],
+            "skipped": [],
+            "warnings": card.get("warnings") or [],
+            "failed": [],
+            "unreadable": [],
+            "complete": False,
+            "dir": card["dir"],
+            "partial": card.get("partial") or [],
+            "why": ("the Canal & River Trust's layers have never been downloaded on " "this handheld"),
+            "means": (
+                "nothing has been downloaded about sluices, weirs, culverts, "
+                "stop-plank grooves, outfalls or safety gates ANYWHERE. That "
+                "is NOT a clear channel — it is no information at all, and "
+                "the two look identical on a map that draws an absent layer "
+                "as an empty one"
+            ),
+            "remedy": _NATIONAL_CMD,
+        }
     d = Path(card["dir"])
     area_index = _crt_index(area) if area else None
     area_rows = {r.get("layer_key"): r for r in (area_index or {}).get("layers") or []}
@@ -2005,45 +2261,64 @@ def _national_layers(area: str | None = None) -> dict:
     for rec in card["layers"]:
         key = rec.get("layer_key")
         seen = _verify_national(d / f"{key}.geojson", rec)
-        row = {"layer": key, "title": rec.get("title"),
-               "scope": "national",
-               "features": seen["features"],
-               "features_recorded": rec.get("features"),
-               "national_features": rec.get("national_features"),
-               "geometry_type": rec.get("geometry_type"),
-               "attribution": rec.get("attribution"),
-               "licence": rec.get("licence"), "licence_class": rec.get("licence_class"),
-               "redistributable": rec.get("redistributable"),
-               "count_check": rec.get("count_check"), "fetched": rec.get("fetched"),
-               "bytes": seen["bytes"], "verified": seen["verified"],
-               "check": seen["check"],
-               "currency": rec.get("currency"),
-               "url": f"/api/crt/{key}"}
+        row = {
+            "layer": key,
+            "title": rec.get("title"),
+            "scope": "national",
+            "features": seen["features"],
+            "features_recorded": rec.get("features"),
+            "national_features": rec.get("national_features"),
+            "geometry_type": rec.get("geometry_type"),
+            "attribution": rec.get("attribution"),
+            "licence": rec.get("licence"),
+            "licence_class": rec.get("licence_class"),
+            "redistributable": rec.get("redistributable"),
+            "count_check": rec.get("count_check"),
+            "fetched": rec.get("fetched"),
+            "bytes": seen["bytes"],
+            "verified": seen["verified"],
+            "check": seen["check"],
+            "currency": rec.get("currency"),
+            "url": f"/api/crt/{key}",
+        }
         if seen["status"] == "present":
             row["status"] = "present"
         elif seen["status"] == "unreadable":
-            row.update(status="unreadable", error=seen["error"],
-                       why="the file is on this handheld and could not be certified",
-                       means=_UNREADABLE_MEANS, remedy=_UNREADABLE_REMEDY)
+            row.update(
+                status="unreadable",
+                error=seen["error"],
+                why="the file is on this handheld and could not be certified",
+                means=_UNREADABLE_MEANS,
+                remedy=_UNREADABLE_REMEDY,
+            )
             corrupt.append(key)
         else:
-            row.update(status="absent",
-                       why="the fetch recorded writing this layer and the file is gone",
-                       means=("this layer's file has been removed since the fetch. "
-                              "Nothing is known about its hazards, anywhere"),
-                       remedy=_NATIONAL_CMD)
+            row.update(
+                status="absent",
+                why="the fetch recorded writing this layer and the file is gone",
+                means=(
+                    "this layer's file has been removed since the fetch. "
+                    "Nothing is known about its hazards, anywhere"
+                ),
+                remedy=_NATIONAL_CMD,
+            )
             missing.append(key)
         # THE AREA IS AN OPTIMISATION, OFFERED BESIDE THE DATA AND NEVER INSTEAD OF IT.
         # A clipped copy is a smaller thing for a renderer to draw over one pound of
         # canal; the national file above is the answer to "do we have this layer".
         clip = area_rows.get(key)
         if clip is not None and area:
-            row["clipped"] = {"area": area, "features": clip.get("features"),
-                              "url": f"/api/areas/{area}/crt/{key}",
-                              "fetched": clip.get("fetched"),
-                              "means": ("the same layer cut to this area — fewer "
-                                        "features to draw, and not a different claim "
-                                        "about the water")}
+            row["clipped"] = {
+                "area": area,
+                "features": clip.get("features"),
+                "url": f"/api/areas/{area}/crt/{key}",
+                "fetched": clip.get("fetched"),
+                "means": (
+                    "the same layer cut to this area — fewer "
+                    "features to draw, and not a different claim "
+                    "about the water"
+                ),
+            }
         rows.append(row)
     partial = card.get("partial") or []
     return {
@@ -2053,26 +2328,36 @@ def _national_layers(area: str | None = None) -> dict:
         "fetched": card.get("finished"),
         "state": card.get("state"),
         "bbox": None,
-        "clip_rule": ("none — these are the whole national layers. An area clips a copy "
-                      "for drawing and is never a precondition for having the data"),
+        "clip_rule": (
+            "none — these are the whole national layers. An area clips a copy "
+            "for drawing and is never a precondition for having the data"
+        ),
         "attribution": card.get("attribution"),
         "dir": card["dir"],
         "layers": rows,
-        "skipped": [{"layer": s.get("layer_key"), "title": s.get("title"),
-                     "status": "absent", "skipped": s.get("skipped"),
-                     "why": s.get("why"),
-                     "deliberate": s.get("skipped") in _DELIBERATE_SKIPS,
-                     "scope": "national",
-                     "means": ("left out on purpose — nothing was lost"
-                               if s.get("skipped") in _DELIBERATE_SKIPS else
-                               "THIS LAYER IS MISSING AND SHOULD NOT BE. The fetch could "
-                               "not complete it and wrote no file rather than a partial "
-                               "one, because a truncated hazard layer reads exactly like "
-                               "an empty canal"),
-                     "remedy": _NATIONAL_CMD}
-                    for s in card.get("skipped") or []],
-        "failed": [s.get("layer_key") for s in card.get("skipped") or []
-                   if s.get("skipped") not in _DELIBERATE_SKIPS] + missing,
+        "skipped": [
+            {
+                "layer": s.get("layer_key"),
+                "title": s.get("title"),
+                "status": "absent",
+                "skipped": s.get("skipped"),
+                "why": s.get("why"),
+                "deliberate": s.get("skipped") in _DELIBERATE_SKIPS,
+                "scope": "national",
+                "means": (
+                    "left out on purpose — nothing was lost"
+                    if s.get("skipped") in _DELIBERATE_SKIPS
+                    else "THIS LAYER IS MISSING AND SHOULD NOT BE. The fetch could "
+                    "not complete it and wrote no file rather than a partial "
+                    "one, because a truncated hazard layer reads exactly like "
+                    "an empty canal"
+                ),
+                "remedy": _NATIONAL_CMD,
+            }
+            for s in card.get("skipped") or []
+        ],
+        "failed": [s.get("layer_key") for s in card.get("skipped") or [] if s.get("skipped") not in _DELIBERATE_SKIPS]
+        + missing,
         "unreadable": corrupt,
         "partial": partial,
         "expected_layers": card.get("expected_layers"),
@@ -2108,10 +2393,12 @@ def _crt_layers(area: str) -> dict:
         # The national set is not here yet and this area's clip is. Said out loud on
         # the block, because "we have the hazards for this pound" and "we have the
         # hazards" are different claims and only one of them survives moving the van.
-        area_block["national"] = {"status": national["status"],
-                                  "why": national.get("why"),
-                                  "means": national.get("means"),
-                                  "remedy": _NATIONAL_CMD}
+        area_block["national"] = {
+            "status": national["status"],
+            "why": national.get("why"),
+            "means": national.get("means"),
+            "remedy": _NATIONAL_CMD,
+        }
         return area_block
     # Neither. Prefer the NATIONAL sentence: it is the one an operator can act on
     # anywhere, and it does not send them to fetch data for a place they have not
@@ -2124,28 +2411,48 @@ def _area_crt_layers(area: str) -> dict:
     crt = _crt_mod()
     remedy = _FETCH_CMD.format(area=area)
     if crt is None:
-        return {"status": "absent", "layers": [], "skipped": [], "warnings": [],
-                "why": "api/nav/crt.py is not in this build",
-                "means": ("nothing on this card can have downloaded CRT hazard data, so "
-                          "no claim whatsoever is made about obstructions here"),
-                "remedy": remedy}
+        return {
+            "status": "absent",
+            "layers": [],
+            "skipped": [],
+            "warnings": [],
+            "why": "api/nav/crt.py is not in this build",
+            "means": (
+                "nothing on this card can have downloaded CRT hazard data, so "
+                "no claim whatsoever is made about obstructions here"
+            ),
+            "remedy": remedy,
+        }
     index = _crt_index(area)
     if index is None:
-        return {"status": "absent", "layers": [], "skipped": [], "warnings": [],
-                "why": "no CRT fetch has ever run for this area",
-                "means": ("nothing has been downloaded about sluices, weirs, culverts, "
-                          "stop-plank grooves, outfalls or safety gates on this water. "
-                          "That is NOT a clear channel — it is no information at all, "
-                          "and the two look identical on a map that draws an absent "
-                          "layer as an empty one"),
-                "remedy": remedy}
+        return {
+            "status": "absent",
+            "layers": [],
+            "skipped": [],
+            "warnings": [],
+            "why": "no CRT fetch has ever run for this area",
+            "means": (
+                "nothing has been downloaded about sluices, weirs, culverts, "
+                "stop-plank grooves, outfalls or safety gates on this water. "
+                "That is NOT a clear channel — it is no information at all, "
+                "and the two look identical on a map that draws an absent "
+                "layer as an empty one"
+            ),
+            "remedy": remedy,
+        }
     if "_unreadable" in index:
-        return {"status": "unreadable", "layers": [], "skipped": [], "warnings": [],
-                "why": f"the fetch's provenance index could not be parsed "
-                       f"({index['_unreadable']})",
-                "means": ("a fetch ran and its own record of what it did is corrupt, so "
-                          "what is on this card cannot be accounted for"),
-                "remedy": remedy}
+        return {
+            "status": "unreadable",
+            "layers": [],
+            "skipped": [],
+            "warnings": [],
+            "why": f"the fetch's provenance index could not be parsed " f"({index['_unreadable']})",
+            "means": (
+                "a fetch ran and its own record of what it did is corrupt, so "
+                "what is on this card cannot be accounted for"
+            ),
+            "remedy": remedy,
+        }
 
     # Unreachable today — _crt_index already answered None for an unusable name —
     # but the fallback that used to sit here was `or area`, which would have handed
@@ -2153,10 +2460,15 @@ def _area_crt_layers(area: str) -> dict:
     # directory is not a name, and the check is cheaper than the argument.
     name = crt.safe_area_name(area)
     if name is None:
-        return {"status": "absent", "layers": [], "skipped": [], "warnings": [],
-                "why": f"{area!r} is not a usable area name",
-                "means": "nothing can be looked up for it",
-                "remedy": remedy}
+        return {
+            "status": "absent",
+            "layers": [],
+            "skipped": [],
+            "warnings": [],
+            "why": f"{area!r} is not a usable area name",
+            "means": "nothing can be looked up for it",
+            "remedy": remedy,
+        }
     d = crt.area_dir(name)
     rows, missing, corrupt = [], [], []
     for rec in index.get("layers") or []:
@@ -2165,53 +2477,70 @@ def _area_crt_layers(area: str) -> dict:
         # READ, not stat()ed. See _read_layer: "the file has a size" is not a claim
         # anybody can dive on.
         state, err, n, size = _read_layer(f)
-        row = {"layer": key, "title": rec.get("title"),
-               # COUNTED OUT OF THE FILE just now — null while it cannot be. The
-               # fetch's own number rides along under its own name instead of
-               # standing in for this one, so the two can be compared rather than
-               # confused: crt.py sets rec["features"] = len(feats) in the same
-               # breath as it writes the file, so the day they differ, the file on
-               # this card is not the file that was downloaded.
-               "features": n,
-               "features_recorded": rec.get("features"),
-               "geometry_type": rec.get("geometry_type"),
-               "attribution": rec.get("attribution"),
-               "licence": rec.get("licence"), "licence_class": rec.get("licence_class"),
-               "redistributable": rec.get("redistributable"),
-               "count_check": rec.get("count_check"), "fetched": rec.get("fetched"),
-               "url": f"/api/areas/{area}/crt/{key}"}
+        row = {
+            "layer": key,
+            "title": rec.get("title"),
+            # COUNTED OUT OF THE FILE just now — null while it cannot be. The
+            # fetch's own number rides along under its own name instead of
+            # standing in for this one, so the two can be compared rather than
+            # confused: crt.py sets rec["features"] = len(feats) in the same
+            # breath as it writes the file, so the day they differ, the file on
+            # this card is not the file that was downloaded.
+            "features": n,
+            "features_recorded": rec.get("features"),
+            "geometry_type": rec.get("geometry_type"),
+            "attribution": rec.get("attribution"),
+            "licence": rec.get("licence"),
+            "licence_class": rec.get("licence_class"),
+            "redistributable": rec.get("redistributable"),
+            "count_check": rec.get("count_check"),
+            "fetched": rec.get("fetched"),
+            "url": f"/api/areas/{area}/crt/{key}",
+        }
         if state == "present":
             row.update(status="present", bytes=size)
             claimed = rec.get("features")
             if claimed is not None and n != claimed:
                 row["count_disagrees"] = True
-                row["means"] = (f"this file holds {n} feature(s) and the fetch recorded "
-                                f"writing {claimed}. It has been edited or replaced since "
-                                f"it was downloaded, so what would be drawn here is not "
-                                f"what the Trust served")
+                row["means"] = (
+                    f"this file holds {n} feature(s) and the fetch recorded "
+                    f"writing {claimed}. It has been edited or replaced since "
+                    f"it was downloaded, so what would be drawn here is not "
+                    f"what the Trust served"
+                )
             elif not n:
                 # A layer that fetched cleanly and matched nothing is a RESULT, and it
                 # is the one case where an empty feature list is the honest answer.
                 # Said out loud so a client showing "0" knows which zero it has.
-                row["means"] = ("this layer downloaded cleanly and there is nothing of "
-                                "its kind inside this area. An empty result, not a "
-                                "missing one")
+                row["means"] = (
+                    "this layer downloaded cleanly and there is nothing of "
+                    "its kind inside this area. An empty result, not a "
+                    "missing one"
+                )
         elif state == "unreadable":
             # The third state, and the reason this loop parses at all. The file is on
             # the card, so the fetch ran and re-running it is not the fix; nothing can
             # be read out of it, so no claim is made about this water either way.
-            row.update(status="unreadable", bytes=size, error=err,
-                       why="the file is on this card and could not be parsed",
-                       means=_UNREADABLE_MEANS, remedy=_UNREADABLE_REMEDY)
+            row.update(
+                status="unreadable",
+                bytes=size,
+                error=err,
+                why="the file is on this card and could not be parsed",
+                means=_UNREADABLE_MEANS,
+                remedy=_UNREADABLE_REMEDY,
+            )
             corrupt.append(key)
         else:
             # The index says it was written and it is not there. Somebody deleted it,
             # or the card is failing. Either way it is not an empty layer.
-            row.update(status="absent",
-                       why="the fetch recorded writing this layer and the file is gone",
-                       means=("this layer's file has been removed since the fetch. "
-                              "Nothing is known about its hazards here"),
-                       remedy=remedy)
+            row.update(
+                status="absent",
+                why="the fetch recorded writing this layer and the file is gone",
+                means=(
+                    "this layer's file has been removed since the fetch. " "Nothing is known about its hazards here"
+                ),
+                remedy=remedy,
+            )
             missing.append(key)
         rows.append(row)
 
@@ -2219,17 +2548,25 @@ def _area_crt_layers(area: str) -> dict:
     for rec in index.get("skipped") or []:
         kind = rec.get("skipped")
         deliberate = kind in _DELIBERATE_SKIPS
-        skipped.append({
-            "layer": rec.get("layer_key"), "title": rec.get("title"),
-            "status": "absent", "skipped": kind, "why": rec.get("why"),
-            "deliberate": deliberate,
-            "means": ("left out on purpose — nothing was lost" if deliberate else
-                      "THIS LAYER IS MISSING AND SHOULD NOT BE. The fetch could not "
-                      "complete it and wrote no file rather than a partial one, "
-                      "because a truncated hazard layer reads exactly like an empty "
-                      "canal. Nothing is known about this kind of hazard here"),
-            "remedy": remedy,
-        })
+        skipped.append(
+            {
+                "layer": rec.get("layer_key"),
+                "title": rec.get("title"),
+                "status": "absent",
+                "skipped": kind,
+                "why": rec.get("why"),
+                "deliberate": deliberate,
+                "means": (
+                    "left out on purpose — nothing was lost"
+                    if deliberate
+                    else "THIS LAYER IS MISSING AND SHOULD NOT BE. The fetch could not "
+                    "complete it and wrote no file rather than a partial one, "
+                    "because a truncated hazard layer reads exactly like an empty "
+                    "canal. Nothing is known about this kind of hazard here"
+                ),
+                "remedy": remedy,
+            }
+        )
     failed = [s["layer"] for s in skipped if not s["deliberate"]]
     return {
         "status": "present",
@@ -2271,6 +2608,7 @@ def _nominal_signature(area: str) -> tuple:
             return (st.st_mtime_ns, st.st_size)
         except OSError:
             return None
+
     crt = _crt_mod()
     name = (crt.safe_area_name(area) if crt else None) or area
     sig = [stamp(settings.areas_dir / f"{area}.geojson")]
@@ -2292,7 +2630,7 @@ def nominal_layer(area: str) -> tuple[dict | None, str | None]:
         return hit[1], hit[2]
     try:
         layer, err = nominalmod.load(area), None
-    except ValueError as exc:            # the waterway source is there and corrupt
+    except ValueError as exc:  # the waterway source is there and corrupt
         layer, err = None, str(exc)
     _nominal_cache[area] = (sig, layer, err)
     return layer, err
@@ -2328,6 +2666,7 @@ def _feature_from_journal(path):
     skipped, everything readable is kept.
     """
     from .geo import to_latlon
+
     header, samples = None, []
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -2352,20 +2691,29 @@ def _feature_from_journal(path):
         if olat is not None and olon is not None:
             lat, lon = to_latlon(smp.get("x", 0.0), smp.get("y", 0.0), olat, olon)
             coords.append([round(lon, 7), round(lat, 7)])
-        out.append({"t": smp.get("t"), "depth_m": smp.get("depth_m"),
-                    "heading_deg": smp.get("heading_deg"),
-                    "snapped": smp.get("snapped"), "confidence": smp.get("confidence")})
+        out.append(
+            {
+                "t": smp.get("t"),
+                "depth_m": smp.get("depth_m"),
+                "heading_deg": smp.get("heading_deg"),
+                "snapped": smp.get("snapped"),
+                "confidence": smp.get("confidence"),
+            }
+        )
     return {
         "type": "Feature",
         "properties": {
-            "dive_id": header.get("dive_id"), "started_at": header.get("started_at"),
-            "speed_lut_id": header.get("speed_lut_id"), "auto": header.get("auto", False),
-            "recovered": True,          # this dive never got a clean stop
+            "dive_id": header.get("dive_id"),
+            "started_at": header.get("started_at"),
+            "speed_lut_id": header.get("speed_lut_id"),
+            "auto": header.get("auto", False),
+            "recovered": True,  # this dive never got a clean stop
             "samples": len(out),
         },
         "geometry": {"type": "LineString", "coordinates": coords},
         "samples": out,
     }
+
 
 # ==========================================================================
 # THE BOOTSTRAP FETCH — one background job that fills an area from the network
@@ -2413,21 +2761,32 @@ def _feature_from_journal(path):
 # above the imagery because a bank you cannot climb out onto is a recovery problem and a
 # blank background is not.
 FETCH_SOURCES: tuple[tuple[str, str, str], ...] = (
-    ("centreline", "the waterway centreline (OpenStreetMap, via Overpass)",
-     "the estimator has nothing to snap the track to and the map has no water drawn "
-     "on it — which is missing data, not a stretch with no canal in it"),
-    ("charts", "the Canal & River Trust hazard layers",
-     "nothing is known about sluices, weirs, culverts, stop-plank grooves, outfalls "
-     "or safety gates on this water, and an absent hazard layer draws exactly like an "
-     "empty one"),
-    ("bank", "the launch-bank overlay (an Environment Agency LIDAR ground model, "
-             "downloaded and then classified on this handheld)",
-     "nothing is known about which side of this cut could be got down with the sub and "
-     "the cable — and imagery with no bank paint on it looks exactly like imagery of a "
-     "bank that was measured and found to be a wall"),
-    ("imagery", "the satellite basemap tiles (Esri World Imagery)",
-     "the map has no picture under the track — the track and the hazards still draw, "
-     "on a blank background"),
+    (
+        "centreline",
+        "the waterway centreline (OpenStreetMap, via Overpass)",
+        "the estimator has nothing to snap the track to and the map has no water drawn "
+        "on it — which is missing data, not a stretch with no canal in it",
+    ),
+    (
+        "charts",
+        "the Canal & River Trust hazard layers",
+        "nothing is known about sluices, weirs, culverts, stop-plank grooves, outfalls "
+        "or safety gates on this water, and an absent hazard layer draws exactly like an "
+        "empty one",
+    ),
+    (
+        "bank",
+        "the launch-bank overlay (an Environment Agency LIDAR ground model, "
+        "downloaded and then classified on this handheld)",
+        "nothing is known about which side of this cut could be got down with the sub and "
+        "the cable — and imagery with no bank paint on it looks exactly like imagery of a "
+        "bank that was measured and found to be a wall",
+    ),
+    (
+        "imagery",
+        "the satellite basemap tiles (Esri World Imagery)",
+        "the map has no picture under the track — the track and the hazards still draw, " "on a blank background",
+    ),
 )
 
 # A source is in exactly one of these. "skipped" is the successful idempotent case —
@@ -2500,8 +2859,7 @@ _IMAGERY_STALL_S = 15.0
 # list. `origin` is the load-bearing one: it is where the operator actually stood,
 # it is what this file prints as the launch point and what a later geocode is asked
 # about, and losing it makes an area that can never be told where it came from.
-_PRESERVE_ACROSS_IMAGERY = ("label", "origin", "created_by", "est_tiles", "est_mb",
-                            "extended_at", "extended_from")
+_PRESERVE_ACROSS_IMAGERY = ("label", "origin", "created_by", "est_tiles", "est_mb", "extended_at", "extended_from")
 
 
 def _iso() -> str:
@@ -2522,17 +2880,29 @@ def fetch_cap(bbox: list[float], zmin: int, zmax: int) -> dict:
     cap_tiles, cap_mb = int(settings.sat_tile_cap), float(settings.area_size_cap_mb)
     within = est["tiles"] <= cap_tiles and est["mb"] <= cap_mb
     return {
-        "tiles": est["tiles"], "mb": est["mb"], "zmin": zmin, "zmax": zmax,
-        "tile_cap": cap_tiles, "mb_cap": cap_mb, "within": within,
-        "title": (f"This area is {est['tiles']} satellite tiles, about {est['mb']} MB at "
-                  f"zoom {zmin}-{zmax}. The ceiling for one area is {cap_tiles} tiles / "
-                  f"{cap_mb:.0f} MB, and this is "
-                  + ("inside it." if within else "OVER it, so nothing will be downloaded "
-                     "until the area is made smaller or the detail is lowered.")),
-        "aria_label": (f"Estimated download: {est['tiles']} tiles, about {est['mb']} "
-                       f"megabytes. The limit is {cap_tiles} tiles or {cap_mb:.0f} "
-                       f"megabytes. This area is "
-                       + ("within the limit." if within else "over the limit.")),
+        "tiles": est["tiles"],
+        "mb": est["mb"],
+        "zmin": zmin,
+        "zmax": zmax,
+        "tile_cap": cap_tiles,
+        "mb_cap": cap_mb,
+        "within": within,
+        "title": (
+            f"This area is {est['tiles']} satellite tiles, about {est['mb']} MB at "
+            f"zoom {zmin}-{zmax}. The ceiling for one area is {cap_tiles} tiles / "
+            f"{cap_mb:.0f} MB, and this is "
+            + (
+                "inside it."
+                if within
+                else "OVER it, so nothing will be downloaded "
+                "until the area is made smaller or the detail is lowered."
+            )
+        ),
+        "aria_label": (
+            f"Estimated download: {est['tiles']} tiles, about {est['mb']} "
+            f"megabytes. The limit is {cap_tiles} tiles or {cap_mb:.0f} "
+            f"megabytes. This area is " + ("within the limit." if within else "over the limit.")
+        ),
     }
 
 
@@ -2566,8 +2936,9 @@ def _record_fetch(name: str, snap: dict) -> None:
     there is a plan on this card and no data behind it yet, which is a different
     thing from a download that died, and it sends the operator somewhere different.
     """
-    state = {"done": "present", "offline": "absent",
-             "failed": "failed", "cancelled": "failed"}.get(snap.get("state"), "downloading")
+    state = {"done": "present", "offline": "absent", "failed": "failed", "cancelled": "failed"}.get(
+        snap.get("state"), "downloading"
+    )
     try:
         areamod.set_area_state(name, state, why=snap.get("title"), fetch=snap)
     except Exception as exc:  # noqa: BLE001 — a fetch must not die of its own bookkeeping
@@ -2595,8 +2966,10 @@ async def internet_available() -> tuple[bool, str]:
     try:
         from .cli import _reachable
     except Exception as exc:  # noqa: BLE001 — a build without the CLI still serves
-        return False, (f"nav/cli.py is not importable ({exc}), so nothing here can tell "
-                       f"whether there is internet — and a fetch that guessed would hang")
+        return False, (
+            f"nav/cli.py is not importable ({exc}), so nothing here can tell "
+            f"whether there is internet — and a fetch that guessed would hang"
+        )
     return await asyncio.to_thread(_reachable, settings.crt_hub_search_url)
 
 
@@ -2652,7 +3025,8 @@ def _tiles_present(name: str, bbox, zmin: int, zmax: int) -> tuple[int, int, str
                 have += con.execute(
                     "SELECT COUNT(*) FROM tiles WHERE zoom_level=? AND tile_column "
                     "BETWEEN ? AND ? AND tile_row BETWEEN ? AND ?",
-                    (z, x0, x1, r0, r1)).fetchone()[0]
+                    (z, x0, x1, r0, r1),
+                ).fetchone()[0]
         finally:
             con.close()
     except Exception as exc:  # noqa: BLE001 — a corrupt archive is an answer, never a 500
@@ -2675,13 +3049,19 @@ def area_completeness(name: str) -> dict:
     places and only one of them is fixable at the bank.
     """
     if not name:
-        return {"area": None, "complete": False, "sources": {}, "fetch": None,
-                "detail": "no area is activated, so there is nothing to be complete",
-                "title": ("No offline area is active. Nothing here claims this water is "
-                          "charted or that it is not — there is simply no area to ask "
-                          "about."),
-                "aria_label": ("No offline area is active, so its completeness cannot be "
-                               "reported.")}
+        return {
+            "area": None,
+            "complete": False,
+            "sources": {},
+            "fetch": None,
+            "detail": "no area is activated, so there is nothing to be complete",
+            "title": (
+                "No offline area is active. Nothing here claims this water is "
+                "charted or that it is not — there is simply no area to ask "
+                "about."
+            ),
+            "aria_label": ("No offline area is active, so its completeness cannot be " "reported."),
+        }
     meta = _area_meta(name) or {}
     bbox = meta.get("bbox")
     zmin = int(meta.get("minzoom", settings.sat_min_zoom) or settings.sat_min_zoom)
@@ -2694,9 +3074,9 @@ def area_completeness(name: str) -> dict:
             "absent",
             f"No area metadata for {name}, so there is no box to have downloaded "
             f"imagery for and none can be checked.",
-            f"Satellite imagery for area {name} cannot be checked: the area has no "
-            f"stored bounding box.",
-            why="areas/%s.json carries no bbox" % name)
+            f"Satellite imagery for area {name} cannot be checked: the area has no " f"stored bounding box.",
+            why="areas/%s.json carries no bbox" % name,
+        )
     else:
         have, want, err = _tiles_present(name, bbox, zmin, zmax)
         if err is not None:
@@ -2706,14 +3086,19 @@ def area_completeness(name: str) -> dict:
                 f"That is not an empty map and it is not a missing download — delete "
                 f"areas/{name}.mbtiles and fetch again while there is internet.",
                 f"The satellite tile archive for area {name} exists and cannot be read.",
-                have=0, want=want, why=err)
+                have=0,
+                want=want,
+                why=err,
+            )
         elif have >= want:
             sources["imagery"] = _src(
                 "present",
                 f"All {want} satellite tiles for {name} are on this card, zoom "
                 f"{zmin} to {zmax}. Nothing about the imagery needs the internet again.",
                 f"All {want} satellite tiles for area {name} are downloaded.",
-                have=have, want=want)
+                have=have,
+                want=want,
+            )
         else:
             sources["imagery"] = _src(
                 "partial" if have else "absent",
@@ -2721,7 +3106,9 @@ def area_completeness(name: str) -> dict:
                 f"will draw the ones it has and blank the rest — which is missing "
                 f"imagery, not water with nothing in it.",
                 f"{have} of {want} satellite tiles are downloaded for area {name}.",
-                have=have, want=want)
+                have=have,
+                want=want,
+            )
 
     # --- charts (CRT) --------------------------------------------------------
     # NO LONGER A PER-AREA QUESTION. The Trust's vectors are national and held once, so
@@ -2730,8 +3117,7 @@ def area_completeness(name: str) -> dict:
     # a clipped copy and no national fetch yet is still reported as having its charts.
     crt_block = _crt_layers(name)
     scope = crt_block.get("scope", "area")
-    where = ("this handheld, nationally" if scope == "national"
-             else f"this card, clipped to {name}")
+    where = "this handheld, nationally" if scope == "national" else f"this card, clipped to {name}"
     failed = list(crt_block.get("failed") or [])
     corrupt = list(crt_block.get("unreadable") or [])
     part = [p.get("layer_key") for p in crt_block.get("partial") or []]
@@ -2739,12 +3125,15 @@ def area_completeness(name: str) -> dict:
     if crt_block["status"] != "present":
         sources["charts"] = _src(
             "absent",
-            f"No Canal & River Trust layer has been downloaded onto this handheld. "
-            f"{crt_block.get('means', '')}",
-            "No hazard charts are downloaded. This is missing data, not a clear "
-            "channel.",
-            why=crt_block.get("why"), scope=scope, layers=0, failed=[], unreadable=[],
-            remedy=crt_block.get("remedy"))
+            f"No Canal & River Trust layer has been downloaded onto this handheld. " f"{crt_block.get('means', '')}",
+            "No hazard charts are downloaded. This is missing data, not a clear " "channel.",
+            why=crt_block.get("why"),
+            scope=scope,
+            layers=0,
+            failed=[],
+            unreadable=[],
+            remedy=crt_block.get("remedy"),
+        )
     elif failed or corrupt or part:
         sources["charts"] = _src(
             "partial",
@@ -2753,8 +3142,12 @@ def area_completeness(name: str) -> dict:
             f"known about the hazards those would have shown.",
             f"The hazard charts are incomplete: {len(failed)} missing, {len(corrupt)} "
             f"unreadable, {len(part)} still downloading.",
-            scope=scope, layers=n_layers, failed=failed, unreadable=corrupt,
-            partial=part)
+            scope=scope,
+            layers=n_layers,
+            failed=failed,
+            unreadable=corrupt,
+            partial=part,
+        )
     else:
         sources["charts"] = _src(
             "present",
@@ -2762,8 +3155,13 @@ def area_completeness(name: str) -> dict:
             f"feature(s), and every one of them was certified rather than merely found. "
             f"Fetched {crt_block.get('fetched')}.",
             f"All {n_layers} hazard chart layers are downloaded and readable.",
-            scope=scope, layers=n_layers, failed=[], unreadable=[],
-            features=crt_block.get("features"), fetched=crt_block.get("fetched"))
+            scope=scope,
+            layers=n_layers,
+            failed=[],
+            unreadable=[],
+            features=crt_block.get("features"),
+            fetched=crt_block.get("fetched"),
+        )
 
     # --- the launch banks ----------------------------------------------------
     # Straight through from the modules that own the claim, with this file adding
@@ -2782,11 +3180,15 @@ def area_completeness(name: str) -> dict:
     bank = _bank_block(name)
     libs = bank.get("libraries") or {}
     sources["bank"] = _src(
-        bank["status"], bank["title"], bank["aria_label"],
-        why=bank.get("why"), means=bank.get("means"), remedy=bank.get("remedy"),
-        url=bank.get("url"), layer="bank",
-        tiles=(bank["tiles"].get("tiles") if isinstance(bank.get("tiles"), dict)
-               else bank.get("tiles")),
+        bank["status"],
+        bank["title"],
+        bank["aria_label"],
+        why=bank.get("why"),
+        means=bank.get("means"),
+        remedy=bank.get("remedy"),
+        url=bank.get("url"),
+        layer="bank",
+        tiles=(bank["tiles"].get("tiles") if isinstance(bank.get("tiles"), dict) else bank.get("tiles")),
         pounds=bank.get("pounds"),
         vintage=(bank.get("source") or {}).get("survey_vintage"),
         # The download half's own verdict, beside the paint's. They fail differently
@@ -2795,8 +3197,8 @@ def area_completeness(name: str) -> dict:
         # over terrain that never arrived.
         terrain=(bank.get("lidar") or {}).get("state"),
         terrain_why=(bank.get("lidar") or {}).get("why"),
-        libraries={"ok": libs.get("ok"), "missing": libs.get("missing"),
-                   "install": libs.get("install")})
+        libraries={"ok": libs.get("ok"), "missing": libs.get("missing"), "install": libs.get("install")},
+    )
 
     # --- centreline ----------------------------------------------------------
     cl = settings.areas_dir / f"{name}.geojson"
@@ -2807,20 +3209,24 @@ def area_completeness(name: str) -> dict:
             f"The waterway centreline for {name} is on this card: {feats} way(s). The "
             f"estimator can snap to it and the map has water drawn on it.",
             f"The waterway centreline for area {name} is downloaded, with {feats} ways.",
-            features=feats)
+            features=feats,
+        )
     elif state == "unreadable":
         sources["centreline"] = _src(
             "unreadable",
             f"The centreline file for {name} is on the card and will not parse ({err}). "
             f"Delete areas/{name}.geojson and fetch again while there is internet.",
-            f"The centreline file for area {name} exists and cannot be read.", why=err)
+            f"The centreline file for area {name} exists and cannot be read.",
+            why=err,
+        )
     else:
         sources["centreline"] = _src(
             "absent",
             f"No waterway centreline has been downloaded for {name}. Snapping has "
             f"nothing to snap to and the published depth guidance has nothing to hang "
             f"on — that is missing data, not a stretch with no canal in it.",
-            f"No waterway centreline is downloaded for area {name}.")
+            f"No waterway centreline is downloaded for area {name}.",
+        )
 
     # THE AREA'S OWN WORD FOR WHAT IT IS comes from nav/areas.py and is not
     # recomputed here. Its _derive_state() reads disk first and the record only for
@@ -2846,15 +3252,13 @@ def area_completeness(name: str) -> dict:
     # in its own list, in `detail`, in `title` and in `aria_label`: named every time,
     # never dressed up as a pass, and never counted as a fault.
     unavailable = [k for k, s in sources.items() if s["status"] == "unavailable"]
-    missing = [k for k, s in sources.items()
-               if not _source_held(k, s["status"]) and s["status"] != "unavailable"]
+    missing = [k for k, s in sources.items() if not _source_held(k, s["status"]) and s["status"] != "unavailable"]
     # HELD BUT NOT WHOLE, named in its own right. _source_held lets the bank layer's
     # PARTIAL satisfy the gate — the reasoning is written beside it — and this is what
     # stops that from being a silence: the word and the module's own sentence travel in
     # the detail below, so a corridor the survey never flew is said out loud on the same
     # line that says the area is ready.
-    incomplete = [k for k, s in sources.items()
-                  if _source_held(k, s["status"]) and s["status"] != "present"]
+    incomplete = [k for k, s in sources.items() if _source_held(k, s["status"]) and s["status"] != "present"]
     # A DOWNLOAD IN FLIGHT IS NOT COMPLETE EVEN IF EVERY SOURCE HAPPENS TO READ
     # PRESENT AT THIS INSTANT. The imagery archive gains rows as it goes and the
     # counts are only a snapshot; "still coming" is its own answer and the pre-dive
@@ -2867,51 +3271,68 @@ def area_completeness(name: str) -> dict:
     cannot = ""
     aria_cannot = ""
     if unavailable:
-        why1 = (sources[unavailable[0]].get("why")
-                or "this machine cannot build it")
-        cannot = (f" {', '.join(unavailable)} cannot be built on this machine at all "
-                  f"({why1}) — that is not a download anybody is waiting for, and "
-                  f"nothing here claims anything about it either way.")
-        aria_cannot = (f" {', '.join(unavailable)} cannot be built on this machine, so "
-                       f"nothing is known about it.")
+        why1 = sources[unavailable[0]].get("why") or "this machine cannot build it"
+        cannot = (
+            f" {', '.join(unavailable)} cannot be built on this machine at all "
+            f"({why1}) — that is not a download anybody is waiting for, and "
+            f"nothing here claims anything about it either way."
+        )
+        aria_cannot = f" {', '.join(unavailable)} cannot be built on this machine, so " f"nothing is known about it."
     for k in incomplete:
-        cannot += (f" {k} is HELD BUT NOT WHOLE: "
-                   f"{sources[k].get('why') or sources[k].get('title')}")
+        cannot += f" {k} is HELD BUT NOT WHOLE: " f"{sources[k].get('why') or sources[k].get('title')}"
         aria_cannot += f" {k} is held but incomplete."
     if live:
-        detail = (f"area={name}: state=downloading — "
-                  f"{', '.join(missing) if missing else 'finishing up'}. Not yet.{cannot}")
+        detail = (
+            f"area={name}: state=downloading — "
+            f"{', '.join(missing) if missing else 'finishing up'}. Not yet.{cannot}"
+        )
     elif missing:
-        detail = (f"area={name}: {', '.join(missing)} not on this card (area state="
-                  f"{state}"
-                  + (f", {meta.get('state_why')}" if meta.get("state_why") else "") + ")"
-                  + cannot)
+        detail = (
+            f"area={name}: {', '.join(missing)} not on this card (area state="
+            f"{state}" + (f", {meta.get('state_why')}" if meta.get("state_why") else "") + ")" + cannot
+        )
     else:
-        detail = (f"area={name}: "
-                  + ", ".join(k for k in sources
-                              if k not in unavailable and k not in incomplete)
-                  + f" all present and readable (area state={state}).{cannot}")
+        detail = (
+            f"area={name}: "
+            + ", ".join(k for k in sources if k not in unavailable and k not in incomplete)
+            + f" all present and readable (area state={state}).{cannot}"
+        )
     return {
-        "area": name, "complete": complete, "missing": missing,
+        "area": name,
+        "complete": complete,
+        "missing": missing,
         # Its own key, beside `missing` and never inside it — the same separation
         # _crt_layers keeps between `failed` and `unreadable`, and for the same
         # reason: the two send somebody to two different places, and one of them is
         # nowhere at all.
-        "unavailable": unavailable, "incomplete": incomplete,
-        "state": state, "downloading": live, "sources": sources, "fetch": rec,
-        "bbox": bbox, "zmin": zmin, "zmax": zmax, "detail": detail,
-        "title": (f"Offline data for {name}: "
-                  + ("everything this machine can hold is on this card." if complete else
-                     f"{', '.join(missing) or 'a fetch'} still "
-                     + ("downloading." if live else "missing."))
-                  + cannot),
-        "aria_label": (f"Area {name} is "
-                       + ("complete: every source this machine can hold is downloaded "
-                          "and readable."
-                          if complete else
-                          f"incomplete. Missing or unfinished: "
-                          f"{', '.join(missing) or 'a download is in progress'}.")
-                       + aria_cannot),
+        "unavailable": unavailable,
+        "incomplete": incomplete,
+        "state": state,
+        "downloading": live,
+        "sources": sources,
+        "fetch": rec,
+        "bbox": bbox,
+        "zmin": zmin,
+        "zmax": zmax,
+        "detail": detail,
+        "title": (
+            f"Offline data for {name}: "
+            + (
+                "everything this machine can hold is on this card."
+                if complete
+                else f"{', '.join(missing) or 'a fetch'} still " + ("downloading." if live else "missing.")
+            )
+            + cannot
+        ),
+        "aria_label": (
+            f"Area {name} is "
+            + (
+                "complete: every source this machine can hold is downloaded " "and readable."
+                if complete
+                else f"incomplete. Missing or unfinished: " f"{', '.join(missing) or 'a download is in progress'}."
+            )
+            + aria_cannot
+        ),
     }
 
 
@@ -2950,24 +3371,33 @@ def _offline_record(area: str, why: str, reason: str = "") -> dict:
     sources = {}
     for k, label, _means in FETCH_SOURCES:
         if k == "bank" and bank.get("status") == "unavailable":
-            sources[k] = _src("unavailable", bank["title"], bank["aria_label"],
-                              why=bank.get("why"), remedy=bank.get("remedy"))
+            sources[k] = _src(
+                "unavailable", bank["title"], bank["aria_label"], why=bank.get("why"), remedy=bank.get("remedy")
+            )
         else:
-            sources[k] = _src("pending", f"Not started: {label} needs internet.",
-                              f"{label} was not downloaded because there is no internet.",
-                              why=why)
+            sources[k] = _src(
+                "pending",
+                f"Not started: {label} needs internet.",
+                f"{label} was not downloaded because there is no internet.",
+                why=why,
+            )
     return {
         "scope": "area",
-        "area": area, "state": "offline", "reason": reason,
-        "started": _iso(), "finished": _iso(), "pid": os.getpid(),
+        "area": area,
+        "state": "offline",
+        "reason": reason,
+        "started": _iso(),
+        "finished": _iso(),
+        "pid": os.getpid(),
         "net": {"ok": False, "why": why},
         "sources": sources,
-        "title": (f"Nothing was downloaded for {area}: there is no internet here. "
-                  f"{why}. This is the normal state at the water's edge and not a "
-                  f"fault — but anything missing from this card stays missing until "
-                  f"you are back on a connection."),
-        "aria_label": (f"No download was started for area {area} because there is no "
-                       f"internet connection. {why}"),
+        "title": (
+            f"Nothing was downloaded for {area}: there is no internet here. "
+            f"{why}. This is the normal state at the water's edge and not a "
+            f"fault — but anything missing from this card stays missing until "
+            f"you are back on a connection."
+        ),
+        "aria_label": (f"No download was started for area {area} because there is no " f"internet connection. {why}"),
     }
 
 
@@ -3025,8 +3455,7 @@ def _point_in_box(feature, box: list[float]) -> bool:
     return w <= lon <= e and s <= lat <= n
 
 
-def _window_response(crt, layer: str, path: Path, rec: dict, box: list[float],
-                     seen: dict):
+def _window_response(crt, layer: str, path: Path, rec: dict, box: list[float], seen: dict):
     """A FeatureCollection of just the features overlapping `box`, or None.
 
     None means "no index beside this layer", and the caller then hands back the whole
@@ -3039,30 +3468,40 @@ def _window_response(crt, layer: str, path: Path, rec: dict, box: list[float],
         idx = json.loads(idx_path.read_text(encoding="utf-8"))
         entries = idx["entries"]
     except Exception as exc:  # noqa: BLE001 — an older card has no index; say so once
-        log.info("no window index beside %s (%s) — the whole layer will be served",
-                 path.name, exc)
+        log.info("no window index beside %s (%s) — the whole layer will be served", path.name, exc)
         return None
     w, s, e, n = box
-    picks = [(int(row[0]), int(row[1])) for row in entries
-             # A feature with no box could not be placed at all, so it can never be
-             # windowed OUT: excluding it would be this file deciding not to show
-             # something on the strength of not understanding it.
-             if len(row) < 6 or not (row[4] < w or row[2] > e or row[5] < s or row[3] > n)]
+    picks = [
+        (int(row[0]), int(row[1]))
+        for row in entries
+        # A feature with no box could not be placed at all, so it can never be
+        # windowed OUT: excluding it would be this file deciding not to show
+        # something on the strength of not understanding it.
+        if len(row) < 6 or not (row[4] < w or row[2] > e or row[5] < s or row[3] > n)
+    ]
     total = rec.get("features")
     head = {
         "type": "FeatureCollection",
         "attribution": rec.get("attribution"),
-        "scope": "national", "status": "present", "layer": layer,
-        "windowed": True, "window": box,
-        "features_in_window": len(picks), "features_total": total,
+        "scope": "national",
+        "status": "present",
+        "layer": layer,
+        "windowed": True,
+        "window": box,
+        "features_in_window": len(picks),
+        "features_total": total,
         "fetched": rec.get("fetched"),
-        "title": (f"{layer}: {len(picks)} of the {total} feature(s) this handheld holds "
-                  f"nationally, being the ones inside the box the map is looking at. "
-                  f"This is PAGING and not pruning — the whole layer is on this "
-                  f"machine, and what is outside this box is outside the screen too."),
-        "aria_label": (f"National layer {layer}, windowed: {len(picks)} of {total} "
-                       f"features, being those inside the current map view. The whole "
-                       f"layer is held on this handheld."),
+        "title": (
+            f"{layer}: {len(picks)} of the {total} feature(s) this handheld holds "
+            f"nationally, being the ones inside the box the map is looking at. "
+            f"This is PAGING and not pruning — the whole layer is on this "
+            f"machine, and what is outside this box is outside the screen too."
+        ),
+        "aria_label": (
+            f"National layer {layer}, windowed: {len(picks)} of {total} "
+            f"features, being those inside the current map view. The whole "
+            f"layer is held on this handheld."
+        ),
     }
     prefix = (json.dumps(head)[:-1] + ',"features":[').encode("utf-8")
 
@@ -3087,12 +3526,16 @@ def _window_response(crt, layer: str, path: Path, rec: dict, box: list[float],
         yield b"]}"
 
     return StreamingResponse(
-        body(), media_type="application/geo+json",
-        headers={"X-Neptune-Scope": "national",
-                 "X-Neptune-Windowed": "true",
-                 "X-Neptune-Features": f"{len(picks)}/{total}",
-                 "X-Neptune-Verified": seen["check"],
-                 "Cache-Control": "no-cache"})
+        body(),
+        media_type="application/geo+json",
+        headers={
+            "X-Neptune-Scope": "national",
+            "X-Neptune-Windowed": "true",
+            "X-Neptune-Features": f"{len(picks)}/{total}",
+            "X-Neptune-Verified": seen["check"],
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 def _national_document(svc, block: dict) -> dict:
@@ -3107,25 +3550,30 @@ def _national_document(svc, block: dict) -> dict:
     # `path` beside `url`, same value. The console reads `meta.path || meta.url`, and
     # publishing both costs a key and removes the whole class of bug where one half of
     # this feature spells an endpoint one way and the other half spells it another.
-    rows = [{**row, "present": row.get("status") == "present",
-             "count": row.get("features"), "path": row.get("url")}
-            for row in block.get("layers") or []]
-    rows += [{**row, "present": False, "count": None,
-              "url": f"/api/crt/{row['layer']}", "path": f"/api/crt/{row['layer']}"}
-             for row in block.get("skipped") or []]
-    n_absent = ((1 if block["status"] != "present" else 0)
-                + len(block.get("failed") or []))
+    rows = [
+        {**row, "present": row.get("status") == "present", "count": row.get("features"), "path": row.get("url")}
+        for row in block.get("layers") or []
+    ]
+    rows += [
+        {**row, "present": False, "count": None, "url": f"/api/crt/{row['layer']}", "path": f"/api/crt/{row['layer']}"}
+        for row in block.get("skipped") or []
+    ]
+    n_absent = (1 if block["status"] != "present" else 0) + len(block.get("failed") or [])
     n_corrupt = len(block.get("unreadable") or [])
     n_part = len(block.get("partial") or [])
-    bits = ([f"{n_absent} layer(s) are MISSING"] if n_absent else []) + \
-           ([f"{n_corrupt} are on this handheld and UNREADABLE"] if n_corrupt else []) + \
-           ([f"{n_part} are still downloading"] if n_part else [])
-    summary = (" and ".join(bits) + " — absent is not empty, unreadable is not empty "
-               "either, and nothing here claims any water is clear."
-               if bits else
-               f"Every layer the Canal & River Trust publishes is on this handheld: "
-               f"{len(rows)} layer(s), {block.get('features')} feature(s). No area is "
-               f"needed to have them and none was used to get them.")
+    bits = (
+        ([f"{n_absent} layer(s) are MISSING"] if n_absent else [])
+        + ([f"{n_corrupt} are on this handheld and UNREADABLE"] if n_corrupt else [])
+        + ([f"{n_part} are still downloading"] if n_part else [])
+    )
+    summary = (
+        " and ".join(bits) + " — absent is not empty, unreadable is not empty "
+        "either, and nothing here claims any water is clear."
+        if bits
+        else f"Every layer the Canal & River Trust publishes is on this handheld: "
+        f"{len(rows)} layer(s), {block.get('features')} feature(s). No area is "
+        f"needed to have them and none was used to get them."
+    )
     return {
         "scope": "national",
         "status": block["status"],
@@ -3146,7 +3594,8 @@ def _national_document(svc, block: dict) -> dict:
         "unreadable": block.get("unreadable") or [],
         "partial": block.get("partial") or [],
         "warnings": block.get("warnings") or [],
-        "why": block.get("why"), "means": block.get("means"),
+        "why": block.get("why"),
+        "means": block.get("means"),
         "remedy": block.get("remedy") or _NATIONAL_CMD,
         # WHAT IS HAPPENING ABOUT IT, in the same document. An operator looking at a
         # missing layer's row has exactly one next question, and making them poll a
@@ -3162,15 +3611,20 @@ def _national_document(svc, block: dict) -> dict:
 
 def _national_summary(block: dict) -> dict:
     """The national card in the handful of numbers a panel actually renders."""
-    return {"status": block.get("status"), "complete": bool(block.get("complete")),
-            "layers": len(block.get("layers") or []),
-            "features": block.get("features"), "bytes": block.get("bytes"),
-            "fetched": block.get("fetched"),
-            "failed": block.get("failed") or [],
-            "unreadable": block.get("unreadable") or [],
-            "partial": block.get("partial") or [],
-            "why": block.get("why"), "means": block.get("means"),
-            "remedy": block.get("remedy")}
+    return {
+        "status": block.get("status"),
+        "complete": bool(block.get("complete")),
+        "layers": len(block.get("layers") or []),
+        "features": block.get("features"),
+        "bytes": block.get("bytes"),
+        "fetched": block.get("fetched"),
+        "failed": block.get("failed") or [],
+        "unreadable": block.get("unreadable") or [],
+        "partial": block.get("partial") or [],
+        "why": block.get("why"),
+        "means": block.get("means"),
+        "remedy": block.get("remedy"),
+    }
 
 
 def _national_offline_record(stale_why: str, net_why: str) -> dict:
@@ -3181,15 +3635,22 @@ def _national_offline_record(stale_why: str, net_why: str) -> dict:
     still drawn; what is missing stays missing until there is a connection.
     """
     return {
-        "scope": "national", "area": None, "state": "offline",
-        "started": _iso(), "finished": _iso(), "pid": os.getpid(),
-        "net": {"ok": False, "why": net_why}, "sources": {}, "order": [],
-        "title": (f"The Canal & River Trust's national layers are not complete on this "
-                  f"handheld and there is no internet here to finish them: {net_why}. "
-                  f"{stale_why}. What IS on the card is drawn exactly as it is — this "
-                  f"is the normal state at the water's edge and not a fault."),
-        "aria_label": (f"No national download was started because there is no internet "
-                       f"connection. {net_why}"),
+        "scope": "national",
+        "area": None,
+        "state": "offline",
+        "started": _iso(),
+        "finished": _iso(),
+        "pid": os.getpid(),
+        "net": {"ok": False, "why": net_why},
+        "sources": {},
+        "order": [],
+        "title": (
+            f"The Canal & River Trust's national layers are not complete on this "
+            f"handheld and there is no internet here to finish them: {net_why}. "
+            f"{stale_why}. What IS on the card is drawn exactly as it is — this "
+            f"is the normal state at the water's edge and not a fault."
+        ),
+        "aria_label": (f"No national download was started because there is no internet " f"connection. {net_why}"),
     }
 
 
@@ -3228,13 +3689,13 @@ class NationalFetch:
 
     def _set(self, key: str, **fields) -> None:
         if key not in self.sources:
-            self.sources[key] = {"status": "pending", "label": key, "done": 0,
-                                 "total": None, "why": "", "detail": ""}
+            self.sources[key] = {"status": "pending", "label": key, "done": 0, "total": None, "why": "", "detail": ""}
             self.order.append(key)
         status = fields.get("status")
         if status is not None and status not in _SRC_STATES:
-            log.warning("national fetch layer %s given an unknown status %r (not one "
-                        "of %s)", key, status, list(_SRC_STATES))
+            log.warning(
+                "national fetch layer %s given an unknown status %r (not one " "of %s)", key, status, list(_SRC_STATES)
+            )
         self.sources[key].update(fields)
 
     def snapshot(self) -> dict:
@@ -3245,10 +3706,16 @@ class NationalFetch:
             # `area` is null and stays null. This download belongs to no area, and a
             # panel that showed one would be telling the operator that the country's
             # worth of layers is a property of the pound they happen to be on.
-            "scope": "national", "area": None, "state": self.state,
-            "reason": self.reason, "refresh": self.refresh,
-            "started": self.started, "finished": self.finished,
-            "error": self.error, "net": self.net, "pid": os.getpid(),
+            "scope": "national",
+            "area": None,
+            "state": self.state,
+            "reason": self.reason,
+            "refresh": self.refresh,
+            "started": self.started,
+            "finished": self.finished,
+            "error": self.error,
+            "net": self.net,
+            "pid": os.getpid(),
             "sources": {k: dict(v) for k, v in self.sources.items()},
             "order": list(self.order),
             # `done` AND `total` ARE NUMBERS HERE, and that is deliberate rather than
@@ -3258,8 +3725,10 @@ class NationalFetch:
             # finished) and keeps its list. The names are kept apart —`done_layers` is
             # the list — because one of them being quietly the other is precisely how
             # the two halves of this feature have been broken before.
-            "done": len(done), "total": len(self.sources),
-            "done_layers": done, "failed": failed,
+            "done": len(done),
+            "total": len(self.sources),
+            "done_layers": done,
+            "failed": failed,
             "layer": (running[0] if running else None),
             "why": (self.sources[running[0]]["detail"] if running else (self.error or "")),
             "features": self.result.get("features") if self.result else None,
@@ -3270,36 +3739,48 @@ class NationalFetch:
 
     def _title(self, done, failed, running) -> str:
         if self.state == "offline":
-            return (f"Nothing was downloaded: there is no internet here. "
-                    f"{(self.net or {}).get('why', '')}")
+            return f"Nothing was downloaded: there is no internet here. " f"{(self.net or {}).get('why', '')}"
         if self.state == "cancelled":
-            return ("The national download was stopped. Every layer that finished is on "
-                    "this handheld and the part-downloaded one continues from where it "
-                    "stopped the next time this starts.")
+            return (
+                "The national download was stopped. Every layer that finished is on "
+                "this handheld and the part-downloaded one continues from where it "
+                "stopped the next time this starts."
+            )
         if self.state in _JOB_LIVE:
-            what = ", ".join(f"{k} ({self.sources[k]['detail']})" for k in running) \
-                or "asking the Trust what it publishes"
-            return (f"Downloading the Canal & River Trust's whole network: {what}. "
-                    f"{len(done)} of {len(self.sources)} layer(s) finished. This is a "
-                    f"one-time ~140 MB download, it resumes if it is interrupted, and "
-                    f"the console stays flyable throughout.")
+            what = (
+                ", ".join(f"{k} ({self.sources[k]['detail']})" for k in running) or "asking the Trust what it publishes"
+            )
+            return (
+                f"Downloading the Canal & River Trust's whole network: {what}. "
+                f"{len(done)} of {len(self.sources)} layer(s) finished. This is a "
+                f"one-time ~140 MB download, it resumes if it is interrupted, and "
+                f"the console stays flyable throughout."
+            )
         if failed:
-            return (f"The national layers: {len(done)} finished, {len(failed)} did not "
-                    f"({', '.join(failed[:4])}). What failed was not written, so the map "
-                    f"is missing it rather than drawing it as empty water — and the "
-                    f"pages that did arrive are kept for the next run.")
-        return (f"The Canal & River Trust's whole network is on this handheld: "
-                f"{len(done)} layer(s). Nothing about it needs the internet again.")
+            return (
+                f"The national layers: {len(done)} finished, {len(failed)} did not "
+                f"({', '.join(failed[:4])}). What failed was not written, so the map "
+                f"is missing it rather than drawing it as empty water — and the "
+                f"pages that did arrive are kept for the next run."
+            )
+        return (
+            f"The Canal & River Trust's whole network is on this handheld: "
+            f"{len(done)} layer(s). Nothing about it needs the internet again."
+        )
 
     def _aria(self, done, failed) -> str:
         if self.state in _JOB_LIVE:
-            return (f"Downloading the national Canal and River Trust layers. "
-                    f"{len(done)} of {len(self.sources)} finished.")
+            return (
+                f"Downloading the national Canal and River Trust layers. "
+                f"{len(done)} of {len(self.sources)} finished."
+            )
         if self.state == "offline":
             return "No national download was started: there is no internet."
         if failed:
-            return (f"The national download finished with failures. Completed: "
-                    f"{len(done)}. Failed: {', '.join(failed)}.")
+            return (
+                f"The national download finished with failures. Completed: "
+                f"{len(done)}. Failed: {', '.join(failed)}."
+            )
         return f"The national Canal and River Trust layers are complete: {len(done)}."
 
     def crash(self, exc: BaseException) -> None:
@@ -3318,8 +3799,10 @@ class NationalFetch:
         for s in self.sources.values():
             if s["status"] in ("pending", "running"):
                 s["status"] = "failed"
-                s["why"] = ("the download was stopped before this layer finished; the "
-                            "pages that arrived are kept and it continues from there")
+                s["why"] = (
+                    "the download was stopped before this layer finished; the "
+                    "pages that arrived are kept and it continues from there"
+                )
 
     async def _emit(self) -> None:
         if self._on_change is None:
@@ -3335,8 +3818,9 @@ class NationalFetch:
         try:
             if crt is None:
                 self.state = "failed"
-                self.error = ("api/nav/crt.py is not in this build, so nothing here can "
-                              "download the Trust's layers at all")
+                self.error = (
+                    "api/nav/crt.py is not in this build, so nothing here can " "download the Trust's layers at all"
+                )
                 return self.snapshot()
             self.state = "checking"
             await self._emit()
@@ -3372,32 +3856,59 @@ class NationalFetch:
         st = msg.get("state")
         key = msg.get("layer")
         if st == "layer" and key:
-            self._set(key, status="running", done=0, total=msg.get("expect"),
-                      label=msg.get("title") or key,
-                      detail=f"layer {msg.get('n')} of {msg.get('of')}")
+            self._set(
+                key,
+                status="running",
+                done=0,
+                total=msg.get("expect"),
+                label=msg.get("title") or key,
+                detail=f"layer {msg.get('n')} of {msg.get('of')}",
+            )
         elif st in ("paging", "resumed") and key:
-            self._set(key, status="running", done=msg.get("features"),
-                      total=msg.get("of"),
-                      detail=(f"{msg.get('features')} of {msg.get('of')} feature(s)"
-                              + (" — continuing where the last run stopped"
-                                 if st == "resumed" else "")))
+            self._set(
+                key,
+                status="running",
+                done=msg.get("features"),
+                total=msg.get("of"),
+                detail=(
+                    f"{msg.get('features')} of {msg.get('of')} feature(s)"
+                    + (" — continuing where the last run stopped" if st == "resumed" else "")
+                ),
+            )
         elif st == "current" and key:
             # SKIPPED, NOT DONE, and the difference is the whole of "incremental": this
             # layer was already whole on the handheld and not one byte was re-requested.
-            self._set(key, status="skipped", done=msg.get("features"),
-                      total=msg.get("features"),
-                      detail=f"already here, fetched {msg.get('fetched')}",
-                      why=msg.get("why") or "")
+            self._set(
+                key,
+                status="skipped",
+                done=msg.get("features"),
+                total=msg.get("features"),
+                detail=f"already here, fetched {msg.get('fetched')}",
+                why=msg.get("why") or "",
+            )
         elif st == "wrote" and key:
-            self._set(key, status="done", done=msg.get("features"),
-                      total=msg.get("features"), why="",
-                      detail=(f"{msg.get('features')} feature(s), "
-                              f"{(msg.get('bytes') or 0) / 1e6:.1f} MB in "
-                              f"{msg.get('seconds')}s"))
+            self._set(
+                key,
+                status="done",
+                done=msg.get("features"),
+                total=msg.get("features"),
+                why="",
+                detail=(
+                    f"{msg.get('features')} feature(s), "
+                    f"{(msg.get('bytes') or 0) / 1e6:.1f} MB in "
+                    f"{msg.get('seconds')}s"
+                ),
+            )
         elif st == "failed" and key:
-            self._set(key, status="failed", done=msg.get("kept"),
-                      why=(f"{msg.get('why')} — the {msg.get('kept', 0)} feature(s) that "
-                           f"did arrive are kept and the next run continues from there"))
+            self._set(
+                key,
+                status="failed",
+                done=msg.get("kept"),
+                why=(
+                    f"{msg.get('why')} — the {msg.get('kept', 0)} feature(s) that "
+                    f"did arrive are kept and the next run continues from there"
+                ),
+            )
         await self._emit()
 
 
@@ -3415,9 +3926,18 @@ class AreaFetch:
     with its reason, and the next source is attempted.
     """
 
-    def __init__(self, area: str, bbox: list[float], zmin: int, zmax: int, *,
-                 refresh: bool = False, reason: str = "", radius_m: float | None = None,
-                 on_change=None) -> None:
+    def __init__(
+        self,
+        area: str,
+        bbox: list[float],
+        zmin: int,
+        zmax: int,
+        *,
+        refresh: bool = False,
+        reason: str = "",
+        radius_m: float | None = None,
+        on_change=None,
+    ) -> None:
         self.area = area
         self.bbox = [float(v) for v in bbox]
         self.zmin, self.zmax = int(zmin), int(zmax)
@@ -3435,8 +3955,15 @@ class AreaFetch:
         # means visible before the first request, not explainable after the last.
         self.cap = fetch_cap(self.bbox, self.zmin, self.zmax)
         self.sources: dict[str, dict] = {
-            key: {"status": "pending", "label": label, "absence_means": means,
-                  "done": 0, "total": None, "why": "", "detail": ""}
+            key: {
+                "status": "pending",
+                "label": label,
+                "absence_means": means,
+                "done": 0,
+                "total": None,
+                "why": "",
+                "detail": "",
+            }
             for key, label, means in FETCH_SOURCES
         }
 
@@ -3462,14 +3989,25 @@ class AreaFetch:
             # separates them: the shape is deliberately identical so one panel renders
             # both.
             "scope": "area",
-            "area": self.area, "state": self.state, "reason": self.reason,
-            "started": self.started, "finished": self.finished,
-            "error": self.error, "net": self.net, "pid": os.getpid(),
-            "bbox": self.bbox, "zmin": self.zmin, "zmax": self.zmax,
-            "radius_m": self.radius_m, "refresh": self.refresh, "cap": self.cap,
+            "area": self.area,
+            "state": self.state,
+            "reason": self.reason,
+            "started": self.started,
+            "finished": self.finished,
+            "error": self.error,
+            "net": self.net,
+            "pid": os.getpid(),
+            "bbox": self.bbox,
+            "zmin": self.zmin,
+            "zmax": self.zmax,
+            "radius_m": self.radius_m,
+            "refresh": self.refresh,
+            "cap": self.cap,
             "sources": {k: dict(v) for k, v in self.sources.items()},
             "order": [k for k, _, _ in FETCH_SOURCES],
-            "done": done, "failed": failed, "unavailable": unavailable,
+            "done": done,
+            "failed": failed,
+            "unavailable": unavailable,
             "title": self._title(done, failed, unavailable),
             "aria_label": self._aria(done, failed, unavailable),
         }
@@ -3495,49 +4033,61 @@ class AreaFetch:
             log.warning("could not record the settled fetch for %s: %s", self.area, exc)
         return snap
 
-    def _title(self, done: list[str], failed: list[str],
-               unavailable: list[str] | None = None) -> str:
+    def _title(self, done: list[str], failed: list[str], unavailable: list[str] | None = None) -> str:
         running = [k for k, s in self.sources.items() if s["status"] == "running"]
         # SAID IN EVERY SENTENCE THIS JOB PRODUCES, including the happy one. A run that
         # fetched everything it could still has to name what it could not do at all,
         # or "up to date" is a claim about a card that is missing a layer.
         cannot = ""
-        for key in (unavailable or []):
-            cannot += (f" {key} was NOT attempted on this machine: "
-                       f"{self.sources[key].get('why') or 'it is unavailable here'}.")
+        for key in unavailable or []:
+            cannot += (
+                f" {key} was NOT attempted on this machine: "
+                f"{self.sources[key].get('why') or 'it is unavailable here'}."
+            )
         if self.state == "offline":
-            return (f"Nothing was downloaded for {self.area}: there is no internet here. "
-                    f"{(self.net or {}).get('why', '')}{cannot}")
+            return (
+                f"Nothing was downloaded for {self.area}: there is no internet here. "
+                f"{(self.net or {}).get('why', '')}{cannot}"
+            )
         if self.state == "cancelled":
-            return (f"The fetch for {self.area} was stopped. What had already landed is on "
-                    f"the card; the rest is not, and the map will draw the difference as "
-                    f"blank rather than as empty water.{cannot}")
+            return (
+                f"The fetch for {self.area} was stopped. What had already landed is on "
+                f"the card; the rest is not, and the map will draw the difference as "
+                f"blank rather than as empty water.{cannot}"
+            )
         if self.state in _JOB_LIVE:
             what = ", ".join(f"{k} ({self.sources[k]['detail']})" for k in running) or "starting"
-            return (f"Downloading offline data for {self.area}: {what}. "
-                    f"{len(done)} of {len(self.sources)} source(s) finished. The console "
-                    f"stays flyable throughout — this runs in the background.{cannot}")
+            return (
+                f"Downloading offline data for {self.area}: {what}. "
+                f"{len(done)} of {len(self.sources)} source(s) finished. The console "
+                f"stays flyable throughout — this runs in the background.{cannot}"
+            )
         if failed:
-            return (f"Offline data for {self.area}: {', '.join(done) or 'nothing'} finished, "
-                    f"{', '.join(failed)} FAILED. What failed was not written, so the map is "
-                    f"missing it rather than showing it as empty.{cannot}")
-        return (f"Offline data for {self.area} is up to date: "
-                f"{', '.join(done)} — nothing here needs the internet again.{cannot}")
+            return (
+                f"Offline data for {self.area}: {', '.join(done) or 'nothing'} finished, "
+                f"{', '.join(failed)} FAILED. What failed was not written, so the map is "
+                f"missing it rather than showing it as empty.{cannot}"
+            )
+        return (
+            f"Offline data for {self.area} is up to date: "
+            f"{', '.join(done)} — nothing here needs the internet again.{cannot}"
+        )
 
-    def _aria(self, done: list[str], failed: list[str],
-              unavailable: list[str] | None = None) -> str:
-        cannot = (f" {', '.join(unavailable)} could not be attempted on this machine."
-                  if unavailable else "")
+    def _aria(self, done: list[str], failed: list[str], unavailable: list[str] | None = None) -> str:
+        cannot = f" {', '.join(unavailable)} could not be attempted on this machine." if unavailable else ""
         if self.state in _JOB_LIVE:
-            return (f"Downloading offline data for area {self.area}. {len(done)} of "
-                    f"{len(self.sources)} sources finished.{cannot}")
+            return (
+                f"Downloading offline data for area {self.area}. {len(done)} of "
+                f"{len(self.sources)} sources finished.{cannot}"
+            )
         if self.state == "offline":
             return f"No download was started for area {self.area}: there is no internet."
         if failed:
-            return (f"Download for area {self.area} finished with failures. Completed: "
-                    f"{', '.join(done) or 'none'}. Failed: {', '.join(failed)}.{cannot}")
-        return (f"Download for area {self.area} is complete. Sources: "
-                f"{', '.join(done)}.{cannot}")
+            return (
+                f"Download for area {self.area} finished with failures. Completed: "
+                f"{', '.join(done) or 'none'}. Failed: {', '.join(failed)}.{cannot}"
+            )
+        return f"Download for area {self.area} is complete. Sources: " f"{', '.join(done)}.{cannot}"
 
     def crash(self, exc: BaseException) -> None:
         """The job died of something it did not catch. Say so where it will be seen."""
@@ -3558,8 +4108,7 @@ class AreaFetch:
             # for. It is worth saying out loud, though — the console switches on
             # these words, and one it does not know renders as nothing at all,
             # which is the silent-blank failure this whole subsystem is against.
-            log.warning("fetch source %s given an unknown status %r (not one of %s)",
-                        key, status, list(_SRC_STATES))
+            log.warning("fetch source %s given an unknown status %r (not one of %s)", key, status, list(_SRC_STATES))
         self.sources[key].update(fields)
 
     async def _emit(self) -> None:
@@ -3585,8 +4134,7 @@ class AreaFetch:
             # _unavailable_sources: no signal changes when you drive somewhere, a
             # library that is not installed does not.
             for key, cannot in self._unavailable_sources().items():
-                self._set(key, status="unavailable", why=cannot,
-                          detail="not possible on this machine")
+                self._set(key, status="unavailable", why=cannot, detail="not possible on this machine")
             ok, why = net if net is not None else await internet_available()
             self.net = {"ok": ok, "why": why}
             if not ok:
@@ -3597,8 +4145,7 @@ class AreaFetch:
                     # something that would not build even with one.
                     if src["status"] == "unavailable":
                         continue
-                    self._set(key, status="pending",
-                              why=f"not started — there is no internet: {why}")
+                    self._set(key, status="pending", why=f"not started — there is no internet: {why}")
                 return self._settled()
             if not self.cap["within"]:
                 self.state = "failed"
@@ -3720,9 +4267,14 @@ class AreaFetch:
             # ALREADY ON THE CARD. Skipped, not re-fetched: Overpass is a free
             # public service run on donations and this file does not change between
             # two dives on the same canal.
-            self._set(key, status="skipped", done=1, total=1,
-                      detail=f"already on the card ({feats} ways)",
-                      why="already downloaded — nothing was re-requested")
+            self._set(
+                key,
+                status="skipped",
+                done=1,
+                total=1,
+                detail=f"already on the card ({feats} ways)",
+                why="already downloaded — nothing was re-requested",
+            )
             await self._emit()
             return
         self._set(key, status="running", total=1, detail="asking Overpass for the channel")
@@ -3740,12 +4292,17 @@ class AreaFetch:
             # thing that must not happen is an empty centreline file being written
             # — that would claim "there is no canal here", which is the exact lie
             # the rest of this module is built to refuse.
-            self._set(key, status="failed",
-                      why=("Overpass returned no waterway for this box. Either nothing "
-                           "is mapped here or the query did not get through, and "
-                           "nothing on this vehicle can tell which — so no file was "
-                           "written, because an empty centreline would claim there is "
-                           "no canal here"))
+            self._set(
+                key,
+                status="failed",
+                why=(
+                    "Overpass returned no waterway for this box. Either nothing "
+                    "is mapped here or the query did not get through, and "
+                    "nothing on this vehicle can tell which — so no file was "
+                    "written, because an empty centreline would claim there is "
+                    "no canal here"
+                ),
+            )
             await self._emit()
             return
         # Written through areas.py's atomic writer — the same one the metadata
@@ -3754,8 +4311,7 @@ class AreaFetch:
         # layer that was perfectly good a second earlier.
         areamod._atomic_write_json(path, gj)
         n = len(gj.get("features") or [])
-        self._set(key, status="done", done=1, total=1,
-                  detail=f"{n} way(s) written", why="")
+        self._set(key, status="done", done=1, total=1, detail=f"{n} way(s) written", why="")
         await self._emit()
 
     # ---- source 2: this area's CLIPPED COPY of the CRT layers ------------
@@ -3777,19 +4333,32 @@ class AreaFetch:
         key = "charts"
         crt = _crt_mod()
         if crt is None:
-            self._set(key, status="failed",
-                      why="api/nav/crt.py is not in this build, so nothing here can "
-                          "download hazard data at all")
+            self._set(
+                key,
+                status="failed",
+                why="api/nav/crt.py is not in this build, so nothing here can " "download hazard data at all",
+            )
             await self._emit()
             return
         block = _area_crt_layers(self.area)
-        if (block["status"] == "present" and not block.get("failed")
-                and not block.get("unreadable") and not self.refresh):
-            self._set(key, status="skipped", done=1, total=1,
-                      detail=f"{len(block.get('layers') or [])} layer(s) already on the card",
-                      why=(f"every layer the last fetch produced is present and parses "
-                           f"(fetched {block.get('fetched')}) — nothing was re-requested. "
-                           f"Pass refresh to fetch them again"))
+        if (
+            block["status"] == "present"
+            and not block.get("failed")
+            and not block.get("unreadable")
+            and not self.refresh
+        ):
+            self._set(
+                key,
+                status="skipped",
+                done=1,
+                total=1,
+                detail=f"{len(block.get('layers') or [])} layer(s) already on the card",
+                why=(
+                    f"every layer the last fetch produced is present and parses "
+                    f"(fetched {block.get('fetched')}) — nothing was re-requested. "
+                    f"Pass refresh to fetch them again"
+                ),
+            )
             await self._emit()
             return
         self._set(key, status="running", detail="asking the Trust what it publishes")
@@ -3798,8 +4367,12 @@ class AreaFetch:
         async def say(msg: dict) -> None:
             st = msg.get("state")
             if st == "layer":
-                self._set(key, done=max(0, int(msg.get("n") or 1) - 1),
-                          total=msg.get("of"), detail=f"layer {msg.get('layer')}")
+                self._set(
+                    key,
+                    done=max(0, int(msg.get("n") or 1) - 1),
+                    total=msg.get("of"),
+                    detail=f"layer {msg.get('layer')}",
+                )
                 await self._emit()
             elif st == "wrote":
                 self._set(key, detail=f"{msg.get('layer')}: {msg.get('features')} feature(s)")
@@ -3822,22 +4395,40 @@ class AreaFetch:
         # cost the operator every hazard in this water. With the national card complete
         # it costs a smaller file to draw, and the sentence has to say which — an alarm
         # that no longer means what it used to is an alarm people learn to ignore.
-        fallback = (f" The whole national set IS on this handheld "
-                    f"({len(held.get('layers') or [])} layer(s), "
-                    f"{held.get('features')} feature(s)), so the console draws those "
-                    f"instead; this clip is a smaller file and not a different claim."
-                    if held.get("complete") else
-                    f" The national set is NOT complete either ({held.get('why') or ''}) "
-                    f"— so nothing is known about the hazards these would have shown.")
+        fallback = (
+            f" The whole national set IS on this handheld "
+            f"({len(held.get('layers') or [])} layer(s), "
+            f"{held.get('features')} feature(s)), so the console draws those "
+            f"instead; this clip is a smaller file and not a different claim."
+            if held.get("complete")
+            else f" The national set is NOT complete either ({held.get('why') or ''}) "
+            f"— so nothing is known about the hazards these would have shown."
+        )
         if after["status"] != "present" or bad:
-            self._set(key, status="failed", done=n, total=n + len(bad),
-                      detail=f"{n} layer(s) clipped to this area",
-                      why=((res.get("error") or after.get("why")
-                            or f"{len(bad)} layer(s) missing or unreadable: "
-                               f"{', '.join(bad[:6])}") + fallback))
+            self._set(
+                key,
+                status="failed",
+                done=n,
+                total=n + len(bad),
+                detail=f"{n} layer(s) clipped to this area",
+                why=(
+                    (
+                        res.get("error")
+                        or after.get("why")
+                        or f"{len(bad)} layer(s) missing or unreadable: " f"{', '.join(bad[:6])}"
+                    )
+                    + fallback
+                ),
+            )
         else:
-            self._set(key, status="done", done=n, total=n,
-                      detail=f"{n} layer(s), {res.get('features', '?')} feature(s)", why="")
+            self._set(
+                key,
+                status="done",
+                done=n,
+                total=n,
+                detail=f"{n} layer(s), {res.get('features', '?')} feature(s)",
+                why="",
+            )
         await self._emit()
 
     # ---- source 3: the LAUNCH-BANK OVERLAY, from a LIDAR ground model ------
@@ -3873,9 +4464,12 @@ class AreaFetch:
             # own — `python -m nav.cli bank-fetch` runs exactly this and nothing else —
             # and a version that only checked in its caller would sail past a missing
             # numpy and hand the box to a builder that cannot build it.
-            self._set(key, status="unavailable", detail="not possible on this machine",
-                      why=" — ".join(s for s in (before.get("why"),
-                                                 before.get("remedy")) if s))
+            self._set(
+                key,
+                status="unavailable",
+                detail="not possible on this machine",
+                why=" — ".join(s for s in (before.get("why"), before.get("remedy")) if s),
+            )
             await self._emit()
             return
         if before["status"] in ("present", "partial") and not self.refresh:
@@ -3886,10 +4480,16 @@ class AreaFetch:
             # _source_held gives — where the survey has holes there is nothing more to
             # fetch, and re-running would spend the whole cost to produce the same holes.
             # `refresh` is how you say you meant it.
-            self._set(key, status="skipped", detail=f"already on the card ({before['status']})",
-                      why=(f"{before.get('why') or 'already built'} — nothing was "
-                           f"downloaded and nothing was recomputed. Pass refresh to "
-                           f"build it again"))
+            self._set(
+                key,
+                status="skipped",
+                detail=f"already on the card ({before['status']})",
+                why=(
+                    f"{before.get('why') or 'already built'} — nothing was "
+                    f"downloaded and nothing was recomputed. Pass refresh to "
+                    f"build it again"
+                ),
+            )
             await self._emit()
             return
 
@@ -3898,16 +4498,21 @@ class AreaFetch:
         get = getattr(lidar, "download_dtm", None) if lidar is not None else None
         render = getattr(bank, "render_area", None) if bank is not None else None
         if not callable(get) or not callable(render):
-            self._set(key, status="unavailable", detail="not possible on this machine",
-                      why=("this build does not offer lidar.download_dtm(area, bbox, "
-                           "progress=, refresh=) and bank.render_area(area, progress=), "
-                           "so nothing here can build a launch-bank layer"))
+            self._set(
+                key,
+                status="unavailable",
+                detail="not possible on this machine",
+                why=(
+                    "this build does not offer lidar.download_dtm(area, bbox, "
+                    "progress=, refresh=) and bank.render_area(area, progress=), "
+                    "so nothing here can build a launch-bank layer"
+                ),
+            )
             await self._emit()
             return
 
         # ---- step 1: the terrain ------------------------------------------
-        self._set(key, status="running",
-                  detail="asking the Environment Agency for the terrain model")
+        self._set(key, status="running", detail="asking the Environment Agency for the terrain model")
         await self._emit()
 
         async def say(msg: dict) -> None:
@@ -3920,9 +4525,12 @@ class AreaFetch:
             bits = [str(msg.get("state") or "")]
             if msg.get("why"):
                 bits.append(str(msg["why"]))
-            self._set(key, done=got, total=want,
-                      detail=(msg.get("detail") or " ".join(b for b in bits if b)
-                              or "downloading terrain"))
+            self._set(
+                key,
+                done=got,
+                total=want,
+                detail=(msg.get("detail") or " ".join(b for b in bits if b) or "downloading terrain"),
+            )
             await self._emit()
 
         try:
@@ -3934,8 +4542,12 @@ class AreaFetch:
         got = got if isinstance(got, dict) else {}
         state, why = got.get("state"), got.get("why") or ""
         if state == "unavailable":
-            self._set(key, status="unavailable", detail="not possible on this machine",
-                      why=why or "the terrain half reported itself unavailable")
+            self._set(
+                key,
+                status="unavailable",
+                detail="not possible on this machine",
+                why=why or "the terrain half reported itself unavailable",
+            )
             await self._emit()
             return
         if state == "refused":
@@ -3951,12 +4563,18 @@ class AreaFetch:
             # Reported as a failure it would put a red mark on every fetch for a canal
             # outside the English LIDAR composite, for ever, and the operator would
             # learn to ignore the one row that also carries real failures.
-            self._set(key, status="skipped",
-                      detail="no terrain to fetch for this area",
-                      why=why or ("no LIDAR terrain covers this area, so no bank layer "
-                                  "can be built from it — the imagery here is drawn "
-                                  "unpainted, which means NOT SURVEYED and not 'no low "
-                                  "bank'"))
+            self._set(
+                key,
+                status="skipped",
+                detail="no terrain to fetch for this area",
+                why=why
+                or (
+                    "no LIDAR terrain covers this area, so no bank layer "
+                    "can be built from it — the imagery here is drawn "
+                    "unpainted, which means NOT SURVEYED and not 'no low "
+                    "bank'"
+                ),
+            )
             await self._emit()
             return
 
@@ -3975,17 +4593,21 @@ class AreaFetch:
             if isinstance(ev, dict):
                 seen.update(ev)
 
-        task = asyncio.ensure_future(
-            asyncio.to_thread(render, self.area, progress=tick))
+        task = asyncio.ensure_future(asyncio.to_thread(render, self.area, progress=tick))
         said = None
         try:
             while not task.done():
                 await asyncio.wait({task}, timeout=1.0)
                 if seen and seen != said:
                     said = dict(seen)
-                    self._set(key, done=said.get("tiles"),
-                              detail=(f"zoom {said.get('zoom')}: {said.get('tiles')} "
-                                      f"tile(s) painted, {said.get('blank')} empty"))
+                    self._set(
+                        key,
+                        done=said.get("tiles"),
+                        detail=(
+                            f"zoom {said.get('zoom')}: {said.get('tiles')} "
+                            f"tile(s) painted, {said.get('blank')} empty"
+                        ),
+                    )
                     await self._emit()
             task.result()
         except asyncio.CancelledError:
@@ -3995,10 +4617,15 @@ class AreaFetch:
             # than leaving this coroutine waiting on a loop that is being torn down.
             raise
         except Exception as exc:  # noqa: BLE001 — including BankUnavailable
-            self._set(key, status="failed",
-                      why=(f"the terrain downloaded and the classification failed "
-                           f"({type(exc).__name__}: {exc}). The grid is on the card, so "
-                           f"a re-run does not download it again"))
+            self._set(
+                key,
+                status="failed",
+                why=(
+                    f"the terrain downloaded and the classification failed "
+                    f"({type(exc).__name__}: {exc}). The grid is on the card, so "
+                    f"a re-run does not download it again"
+                ),
+            )
             await self._emit()
             return
 
@@ -4009,22 +4636,34 @@ class AreaFetch:
         tiles = after.get("tiles")
         n = tiles.get("tiles") if isinstance(tiles, dict) else tiles
         if after["status"] in ("present", "partial"):
-            self._set(key, status="done", done=n, total=n,
-                      detail=(f"{n} overlay tile(s)" if isinstance(n, int) else "built")
-                             + (f", {after.get('pounds')} water level(s)"
-                                if after.get("pounds") is not None else ""),
-                      # PARTIAL IS REPORTED AS DONE-WITH-A-SENTENCE, not as a failure.
-                      # See _source_held: at anything under 99.5% corridor coverage
-                      # bank.py calls a perfectly good build partial, and a source that
-                      # went red on the ordinary outcome would be a red nobody reads.
-                      why=("" if after["status"] == "present"
-                           else after.get("why") or "part of this corridor has no "
-                                                    "terrain behind it"))
+            self._set(
+                key,
+                status="done",
+                done=n,
+                total=n,
+                detail=(f"{n} overlay tile(s)" if isinstance(n, int) else "built")
+                + (f", {after.get('pounds')} water level(s)" if after.get("pounds") is not None else ""),
+                # PARTIAL IS REPORTED AS DONE-WITH-A-SENTENCE, not as a failure.
+                # See _source_held: at anything under 99.5% corridor coverage
+                # bank.py calls a perfectly good build partial, and a source that
+                # went red on the ordinary outcome would be a red nobody reads.
+                why=(
+                    ""
+                    if after["status"] == "present"
+                    else after.get("why") or "part of this corridor has no " "terrain behind it"
+                ),
+            )
         else:
-            self._set(key, status="failed", done=n,
-                      why=((after.get("why") or "no overlay tile was written")
-                           + " The imagery here draws unpainted, which means NOT "
-                             "SURVEYED and never 'no low bank'."))
+            self._set(
+                key,
+                status="failed",
+                done=n,
+                why=(
+                    (after.get("why") or "no overlay tile was written")
+                    + " The imagery here draws unpainted, which means NOT "
+                    "SURVEYED and never 'no low bank'."
+                ),
+            )
         await self._emit()
 
     # ---- source 4: the satellite imagery --------------------------------
@@ -4032,21 +4671,31 @@ class AreaFetch:
         key = "imagery"
         have, want, err = _tiles_present(self.area, self.bbox, self.zmin, self.zmax)
         if err is not None:
-            self._set(key, status="failed", done=0, total=want,
-                      why=(f"the tile archive is on the card and cannot be read ({err}) — "
-                           f"delete areas/{self.area}.mbtiles and fetch again, because "
-                           f"re-running over a broken archive will not repair it"))
+            self._set(
+                key,
+                status="failed",
+                done=0,
+                total=want,
+                why=(
+                    f"the tile archive is on the card and cannot be read ({err}) — "
+                    f"delete areas/{self.area}.mbtiles and fetch again, because "
+                    f"re-running over a broken archive will not repair it"
+                ),
+            )
             await self._emit()
             return
         if have >= want and not self.refresh:
-            self._set(key, status="skipped", done=have, total=want,
-                      detail=f"all {want} tiles already on the card",
-                      why="every tile in this pyramid is already downloaded — Esri was "
-                          "not asked for a single one of them")
+            self._set(
+                key,
+                status="skipped",
+                done=have,
+                total=want,
+                detail=f"all {want} tiles already on the card",
+                why="every tile in this pyramid is already downloaded — Esri was " "not asked for a single one of them",
+            )
             await self._emit()
             return
-        self._set(key, status="running", done=have, total=want,
-                  detail=f"{have} of {want} tiles on the card")
+        self._set(key, status="running", done=have, total=want, detail=f"{have} of {want} tiles on the card")
         await self._emit()
 
         # WHEN THE LINK DIES MID-PYRAMID, STOP. satellite._fetch_retry gives every
@@ -4075,8 +4724,7 @@ class AreaFetch:
             got = int(msg.get("ok") or 0)
             if got > seen["ok"]:
                 seen["ok"], seen["at"] = got, time.monotonic()
-            self._set(key, done=int(msg.get("done") or 0), total=msg.get("total"),
-                      detail=f"{got} tile(s) written")
+            self._set(key, done=int(msg.get("done") or 0), total=msg.get("total"), detail=f"{got} tile(s) written")
             await self._emit()
 
         # satellite.download_area walks the whole pyramid and writes with INSERT OR
@@ -4087,11 +4735,10 @@ class AreaFetch:
         # worked around, because this module sequences the downloaders and does not
         # reimplement them.
         # Taken BEFORE the download, because the download is what removes them.
-        keep = {k: v for k, v in (_area_meta(self.area) or {}).items()
-                if k in _PRESERVE_ACROSS_IMAGERY}
+        keep = {k: v for k, v in (_area_meta(self.area) or {}).items() if k in _PRESERVE_ACROSS_IMAGERY}
         task = asyncio.ensure_future(
-            satmod.download_area(self.area, self.bbox, self.zmin, self.zmax, say,
-                                 refresh=self.refresh))
+            satmod.download_area(self.area, self.bbox, self.zmin, self.zmax, say, refresh=self.refresh)
+        )
         stalled = False
         try:
             while not task.done():
@@ -4122,24 +4769,40 @@ class AreaFetch:
         self._restore(keep)
         if stalled:
             have, want, _err = _tiles_present(self.area, self.bbox, self.zmin, self.zmax)
-            self._set(key, status="failed", done=have, total=want,
-                      detail=f"{have} of {want} tiles on the card",
-                      why=(f"no tile has arrived for {stall:.0f}s, so the connection is "
-                           f"treated as gone and the download was stopped rather than "
-                           f"spending {want - have} more retries on it. The {have} tile(s) "
-                           f"that landed are on the card and a re-run continues from them"))
+            self._set(
+                key,
+                status="failed",
+                done=have,
+                total=want,
+                detail=f"{have} of {want} tiles on the card",
+                why=(
+                    f"no tile has arrived for {stall:.0f}s, so the connection is "
+                    f"treated as gone and the download was stopped rather than "
+                    f"spending {want - have} more retries on it. The {have} tile(s) "
+                    f"that landed are on the card and a re-run continues from them"
+                ),
+            )
             await self._emit()
             return
         have, want, err = _tiles_present(self.area, self.bbox, self.zmin, self.zmax)
         if err is not None or have < want:
-            self._set(key, status="failed", done=have, total=want,
-                      detail=f"{have} of {want} tiles on the card",
-                      why=(err or f"{want - have} tile(s) did not download. The map draws "
-                                  f"what is here and blanks the rest; re-run to fill the "
-                                  f"gaps, which will not re-request what landed"))
+            self._set(
+                key,
+                status="failed",
+                done=have,
+                total=want,
+                detail=f"{have} of {want} tiles on the card",
+                why=(
+                    err
+                    or f"{want - have} tile(s) did not download. The map draws "
+                    f"what is here and blanks the rest; re-run to fill the "
+                    f"gaps, which will not re-request what landed"
+                ),
+            )
         else:
-            self._set(key, status="done", done=have, total=want,
-                      detail=f"{want} tiles, {res.get('size', 0):,} bytes", why="")
+            self._set(
+                key, status="done", done=have, total=want, detail=f"{want} tiles, {res.get('size', 0):,} bytes", why=""
+            )
         await self._emit()
 
 
@@ -4150,8 +4813,11 @@ def build_router(svc: NavService) -> APIRouter:
     @r.post("/api/origin")
     async def set_origin(o: Origin, override: bool = False, fetch: bool = True):
         if o.accuracy > settings.max_origin_accuracy_m and not override:
-            raise HTTPException(422, f"origin accuracy {o.accuracy}m exceeds {settings.max_origin_accuracy_m}m "
-                                     f"— re-fix or pass ?override=true")
+            raise HTTPException(
+                422,
+                f"origin accuracy {o.accuracy}m exceeds {settings.max_origin_accuracy_m}m "
+                f"— re-fix or pass ?override=true",
+            )
         # heading0 is the sub's IMU yaw at this instant (§4.4) — authoritative over any
         # posted value, BUT ONLY WHEN A COMPASS ACTUALLY ANSWERED. SensorSample.
         # heading_deg went Optional this round and this was a bare round() on it:
@@ -4192,10 +4858,8 @@ def build_router(svc: NavService) -> APIRouter:
         # when something is missing AND there is internet. This endpoint is on the
         # path an operator uses at the water's edge with a controller in their hands,
         # so it may not wait for a socket, a DNS lookup or a thousand tiles.
-        sched = svc.autofetch(o) if fetch else {
-            "scheduled": False, "why": "not requested (?fetch=false)"}
-        return {"ok": True, "origin": o.model_dump(), "heading0_measured": measured is not None,
-                "fetch": sched}
+        sched = svc.autofetch(o) if fetch else {"scheduled": False, "why": "not requested (?fetch=false)"}
+        return {"ok": True, "origin": o.model_dump(), "heading0_measured": measured is not None, "fetch": sched}
 
     @r.get("/api/origin")
     async def get_origin():
@@ -4214,8 +4878,7 @@ def build_router(svc: NavService) -> APIRouter:
             # bare has_state:false reads as "between dives" — which is what it
             # usually is, and is exactly why a dead loop hid inside it for two
             # review rounds. health() names which of the four it actually is.
-            return JSONResponse({"has_state": False, "has_origin": bool(svc.origin),
-                                 "nav": svc.health()})
+            return JSONResponse({"has_state": False, "has_origin": bool(svc.origin), "nav": svc.health()})
         return {**ns.model_dump(), "nav": svc.health()}
 
     @r.get("/api/nav/health")
@@ -4258,7 +4921,7 @@ def build_router(svc: NavService) -> APIRouter:
     async def adjust_current(a: Adjustment):
         if not svc.dive:
             raise HTTPException(404, "no active dive")
-        svc.dive.set_adjustment(a)          # applied to output only; raw untouched (§4.5)
+        svc.dive.set_adjustment(a)  # applied to output only; raw untouched (§4.5)
         return {"ok": True, "adjustment": a.model_dump()}
 
     @r.get("/api/nav/dives")
@@ -4329,8 +4992,8 @@ def build_router(svc: NavService) -> APIRouter:
         """
         payload = payload or {}
         return await svc.ensure_national(
-            reason=payload.get("reason") or "asked for by the console",
-            refresh=bool(payload.get("refresh")))
+            reason=payload.get("reason") or "asked for by the console", refresh=bool(payload.get("refresh"))
+        )
 
     @r.get("/api/crt/{layer}")
     async def national_layer(layer: str, bbox: str | None = None):
@@ -4355,48 +5018,66 @@ def build_router(svc: NavService) -> APIRouter:
             raise HTTPException(400, "bad layer name")
         crt = _crt_mod()
         if crt is None:
-            return _absent("national", layer,
-                           why="api/nav/crt.py is not in this build",
-                           means="nothing here can have downloaded the Trust's layers",
-                           remedy=_NATIONAL_CMD)
+            return _absent(
+                "national",
+                layer,
+                why="api/nav/crt.py is not in this build",
+                means="nothing here can have downloaded the Trust's layers",
+                remedy=_NATIONAL_CMD,
+            )
         path = crt.national_dir() / f"{layer}.geojson"
         rec = crt.national_layer_record(layer) or {}
         seen = _verify_national(path, rec)
         if seen["status"] == "absent":
             card = crt.national_card()
-            skip = next((s for s in card.get("skipped") or []
-                         if s.get("layer_key") == layer), None)
-            part = next((p for p in card.get("partial") or []
-                         if p.get("layer_key") == layer), None)
+            skip = next((s for s in card.get("skipped") or [] if s.get("layer_key") == layer), None)
+            part = next((p for p in card.get("partial") or [] if p.get("layer_key") == layer), None)
             if part is not None:
                 return _absent(
-                    "national", layer,
-                    why=(f"this layer is part-downloaded — {part.get('features')} "
-                         f"feature(s) have arrived and it is not finished"),
-                    means=("no file is written until the whole layer is here, because a "
-                           "truncated layer draws exactly like an empty one. The pages "
-                           "that arrived are kept and the next run continues from them"),
-                    remedy=_NATIONAL_CMD)
+                    "national",
+                    layer,
+                    why=(
+                        f"this layer is part-downloaded — {part.get('features')} "
+                        f"feature(s) have arrived and it is not finished"
+                    ),
+                    means=(
+                        "no file is written until the whole layer is here, because a "
+                        "truncated layer draws exactly like an empty one. The pages "
+                        "that arrived are kept and the next run continues from them"
+                    ),
+                    remedy=_NATIONAL_CMD,
+                )
             if skip is not None:
                 deliberate = skip.get("skipped") in _DELIBERATE_SKIPS
                 return _absent(
-                    "national", layer,
+                    "national",
+                    layer,
                     why=f"the fetch skipped it ({skip.get('skipped')}): {skip.get('why')}",
-                    means=("left out on purpose, and nothing was lost" if deliberate else
-                           "the fetch could not complete this layer and wrote no file "
-                           "rather than a partial one. Nothing is known about this kind "
-                           "of feature anywhere"),
-                    remedy=_NATIONAL_CMD)
+                    means=(
+                        "left out on purpose, and nothing was lost"
+                        if deliberate
+                        else "the fetch could not complete this layer and wrote no file "
+                        "rather than a partial one. Nothing is known about this kind "
+                        "of feature anywhere"
+                    ),
+                    remedy=_NATIONAL_CMD,
+                )
             return _absent(
-                "national", layer,
-                why=("this handheld has no national layer by that name — "
-                     + ("the national fetch has never run" if not card.get("layers")
-                        else "the fetch ran and produced no such layer")),
+                "national",
+                layer,
+                why=(
+                    "this handheld has no national layer by that name — "
+                    + (
+                        "the national fetch has never run"
+                        if not card.get("layers")
+                        else "the fetch ran and produced no such layer"
+                    )
+                ),
                 means="nothing is known about features of this kind, anywhere",
-                remedy=_NATIONAL_CMD)
+                remedy=_NATIONAL_CMD,
+            )
         if seen["status"] != "present":
-            return _unreadable("national", layer, path,
-                               ValueError(seen["error"] or _UNREADABLE_MEANS))
+            return _unreadable("national", layer, path, ValueError(seen["error"] or _UNREADABLE_MEANS))
         if bbox:
             box = _window_box(bbox)
             if box is None:
@@ -4405,7 +5086,8 @@ def build_router(svc: NavService) -> APIRouter:
             if windowed is not None:
                 return windowed
         return FileResponse(
-            path, media_type="application/geo+json",
+            path,
+            media_type="application/geo+json",
             headers={
                 # The provenance a renderer needs before it draws, without a second
                 # request and without decoding 100 MB to find it. BARE TOKENS ONLY:
@@ -4417,7 +5099,8 @@ def build_router(svc: NavService) -> APIRouter:
                 "X-Neptune-Fetched": str(rec.get("fetched")),
                 "X-Neptune-Verified": seen["check"],
                 "Cache-Control": "no-cache",
-            })
+            },
+        )
 
     @r.post("/api/areas/fetch")
     async def fetch_start(payload: dict = Body(default={})):
@@ -4444,22 +5127,30 @@ def build_router(svc: NavService) -> APIRouter:
             # its sentence, quoting the number it is enforcing, rather than as a
             # silently smaller download.
             if lat is None or lon is None:
-                raise HTTPException(400, "give an existing area name, or lat+lon, or set "
-                                         "an origin first — an offline area needs to know "
-                                         "where it is")
+                raise HTTPException(
+                    400,
+                    "give an existing area name, or lat+lon, or set "
+                    "an origin first — an offline area needs to know "
+                    "where it is",
+                )
             try:
                 plan = areamod.create_area(
-                    float(lat), float(lon), radius_m=payload.get("radius_m"),
-                    bbox=payload.get("bbox"), name=name,
-                    detail=want_detail or "standard")
+                    float(lat),
+                    float(lon),
+                    radius_m=payload.get("radius_m"),
+                    bbox=payload.get("bbox"),
+                    name=name,
+                    detail=want_detail or "standard",
+                )
             except ValueError as exc:
                 raise HTTPException(400, str(exc))
             name = plan["name"]
             meta = _area_meta(name) or {}
         bbox = meta.get("bbox")
         if not bbox:
-            raise HTTPException(400, f"area {name!r} has no usable bbox, so there is no "
-                                     f"box to fetch — nothing here will guess one")
+            raise HTTPException(
+                400, f"area {name!r} has no usable bbox, so there is no " f"box to fetch — nothing here will guess one"
+            )
         if want_detail is None:
             # Nobody said how much detail they wanted, so keep the pyramid this area
             # already has. Mixing zoom ranges into one archive would leave the
@@ -4476,10 +5167,15 @@ def build_router(svc: NavService) -> APIRouter:
             raise HTTPException(400, cap["title"])
         if svc.active_area != name:
             svc.activate_area(name)
-        return await svc.start_fetch(name, bbox, zmin, zmax,
-                                     refresh=bool(payload.get("refresh")),
-                                     radius_m=(meta.get("origin") or {}).get("radius_m"),
-                                     reason=payload.get("reason") or "asked for by the console")
+        return await svc.start_fetch(
+            name,
+            bbox,
+            zmin,
+            zmax,
+            refresh=bool(payload.get("refresh")),
+            radius_m=(meta.get("origin") or {}).get("radius_m"),
+            reason=payload.get("reason") or "asked for by the console",
+        )
 
     @r.post("/api/areas/fetch/cancel")
     async def fetch_cancel():
@@ -4507,7 +5203,7 @@ def build_router(svc: NavService) -> APIRouter:
         bbox = payload["bbox"]
         zmin, zmax = _zooms(payload.get("detail", "standard"))
         name = payload.get("name")
-        if not name:                                    # §4 — auto-name (reverse geocode, else date)
+        if not name:  # §4 — auto-name (reverse geocode, else date)
             name = await satmod.reverse_geocode((bbox[1] + bbox[3]) / 2, (bbox[0] + bbox[2]) / 2)
         # ONE NAMING RULE FOR THE WHOLE SUBSYSTEM, and it is nav/areas.py's. This
         # used to have its own slug function and its own coordinate fallback, so a
@@ -4520,6 +5216,7 @@ def build_router(svc: NavService) -> APIRouter:
 
         async def progress(p):
             await svc._broadcast(json.dumps({"type": "area_progress", **p}))
+
         try:
             return await satmod.download_area(name, bbox, zmin, zmax, progress)
         except (ValueError, RuntimeError) as e:
@@ -4529,9 +5226,8 @@ def build_router(svc: NavService) -> APIRouter:
     async def area_tile(name: str, z: int, x: int, y: int):
         data = satmod.read_tile(name, z, x, y)
         if data is None:
-            raise HTTPException(404, "tile not in area")   # client overzooms from a parent (§3.4)
-        return Response(content=data, media_type="image/jpeg",
-                        headers={"Cache-Control": "public, max-age=604800"})
+            raise HTTPException(404, "tile not in area")  # client overzooms from a parent (§3.4)
+        return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=604800"})
 
     # ---- THE LAUNCH-BANK OVERLAY: no area anywhere in these three paths -------
     #
@@ -4579,44 +5275,56 @@ def build_router(svc: NavService) -> APIRouter:
         for c in cards:
             src = c.get("source") or {}
             tiles = c.get("tiles")
-            rows.append({
-                "area": c.get("area"),
-                "status": c.get("state", "absent"),
-                "bbox": c.get("bbox"),
-                "fetched": src.get("fetched") or c.get("built"),
-                "built": c.get("built"),
-                "vintage": src.get("survey_vintage"),
-                # A COUNT, because that is what the console's row shows. bank.py keeps
-                # the whole tile report under this name; the number inside it is the
-                # one thing a person can read.
-                "tiles": (tiles.get("tiles") if isinstance(tiles, dict) else tiles),
-                "pounds": c.get("pounds"),
-                "why": c.get("why"),
-                "title": c.get("title"),
-                "aria_label": c.get("aria_label"),
-            })
+            rows.append(
+                {
+                    "area": c.get("area"),
+                    "status": c.get("state", "absent"),
+                    "bbox": c.get("bbox"),
+                    "fetched": src.get("fetched") or c.get("built"),
+                    "built": c.get("built"),
+                    "vintage": src.get("survey_vintage"),
+                    # A COUNT, because that is what the console's row shows. bank.py keeps
+                    # the whole tile report under this name; the number inside it is the
+                    # one thing a person can read.
+                    "tiles": (tiles.get("tiles") if isinstance(tiles, dict) else tiles),
+                    "pounds": c.get("pounds"),
+                    "why": c.get("why"),
+                    "title": c.get("title"),
+                    "aria_label": c.get("aria_label"),
+                }
+            )
         held = [r for r in rows if r["status"] != "absent"]
-        zmin = min((c.get("tiles", {}).get("zmin") for c in cards
-                    if isinstance(c.get("tiles"), dict)
-                    and c["tiles"].get("zmin") is not None),
-                   default=getattr(bank, "BANK_ZMIN", None))
-        zmax = max((c.get("tiles", {}).get("zmax") for c in cards
-                    if isinstance(c.get("tiles"), dict)
-                    and c["tiles"].get("zmax") is not None),
-                   default=getattr(bank, "BANK_ZMAX", None))
-        vintage = next((r["vintage"] for r in held if r.get("vintage")),
-                       getattr(settings, "lidar_survey_vintage", ""))
+        zmin = min(
+            (
+                c.get("tiles", {}).get("zmin")
+                for c in cards
+                if isinstance(c.get("tiles"), dict) and c["tiles"].get("zmin") is not None
+            ),
+            default=getattr(bank, "BANK_ZMIN", None),
+        )
+        zmax = max(
+            (
+                c.get("tiles", {}).get("zmax")
+                for c in cards
+                if isinstance(c.get("tiles"), dict) and c["tiles"].get("zmax") is not None
+            ),
+            default=getattr(bank, "BANK_ZMAX", None),
+        )
+        vintage = next((r["vintage"] for r in held if r.get("vintage")), getattr(settings, "lidar_survey_vintage", ""))
         if bank is None:
-            why = (_BANK_IMPORT.get("bank") or "api/nav/bank.py could not be loaded")
+            why = _BANK_IMPORT.get("bank") or "api/nav/bank.py could not be loaded"
         elif not held:
             why = ((libs["why"] + " ") if not libs["ok"] else "") + (
                 "no launch-bank layer has been built on this handheld yet. The imagery "
                 "draws unpainted, and unpainted means NOT SURVEYED — it does not mean "
                 "there is no low bank here. Build one with: "
-                "python -m nav.cli bank-fetch <area>")
+                "python -m nav.cli bank-fetch <area>"
+            )
         else:
-            why = (f"{len(held)} area(s) painted from the {vintage} Environment Agency "
-                   f"LIDAR survey. Ground with no paint on it has not been looked at.")
+            why = (
+                f"{len(held)} area(s) painted from the {vintage} Environment Agency "
+                f"LIDAR survey. Ground with no paint on it has not been looked at."
+            )
         return {
             "layer": getattr(bank, "BANK_LAYER_KEY", "bank"),
             # 'absent' is the word the console switches on to mean "held nothing",
@@ -4624,7 +5332,8 @@ def build_router(svc: NavService) -> APIRouter:
             "status": "present" if held else "absent",
             "tiles": "/api/bank/tiles/{z}/{x}/{y}.png",
             "pounds": "/api/bank/pounds",
-            "minzoom": zmin, "maxzoom": zmax,
+            "minzoom": zmin,
+            "maxzoom": zmax,
             "threshold_m": getattr(settings, "lidar_launch_max_height_m", None),
             "vintage": vintage,
             "attribution": getattr(settings, "lidar_attribution", ""),
@@ -4632,8 +5341,7 @@ def build_router(svc: NavService) -> APIRouter:
             "areas": rows,
             "why": why,
             "title": (f"LAUNCH BANKS: {len(held)} area(s) on this handheld. {why}"),
-            "aria_label": (f"The launch bank layer holds {len(held)} area(s) on this "
-                           f"handheld. {why}"),
+            "aria_label": (f"The launch bank layer holds {len(held)} area(s) on this " f"handheld. {why}"),
         }
 
     @r.get("/api/bank/tiles/{z}/{x}/{y}.png")
@@ -4656,8 +5364,10 @@ def build_router(svc: NavService) -> APIRouter:
         fn = getattr(bank, "read_tile", None) if bank is not None else None
         if not callable(fn):
             raise HTTPException(
-                404, "this build cannot serve launch-bank tiles: api/nav/bank.py is not "
-                     "here. Ask GET /api/bank, which says so in a sentence.")
+                404,
+                "this build cannot serve launch-bank tiles: api/nav/bank.py is not "
+                "here. Ask GET /api/bank, which says so in a sentence.",
+            )
         for card in bank_cards():
             name = card.get("area")
             if not name:
@@ -4665,17 +5375,17 @@ def build_router(svc: NavService) -> APIRouter:
             try:
                 data = fn(name, z, x, y)
             except Exception as exc:  # noqa: BLE001 — a bad archive is a 404, never a 500
-                log.warning("nav/bank.py read_tile(%s,%s,%s,%s) raised: %s",
-                            name, z, x, y, exc)
+                log.warning("nav/bank.py read_tile(%s,%s,%s,%s) raised: %s", name, z, x, y, exc)
                 continue
             if data:
                 return Response(
-                    content=data, media_type="image/png",
+                    content=data,
+                    media_type="image/png",
                     # BARE ASCII TOKENS ONLY. Headers are latin-1, and the national
                     # layer endpoint above answered HTTP 500 once over an em-dash in
                     # one — an area name is already restricted to this alphabet.
-                    headers={"X-Neptune-Bank-Area": str(name),
-                             "Cache-Control": "public, max-age=604800"})
+                    headers={"X-Neptune-Bank-Area": str(name), "Cache-Control": "public, max-age=604800"},
+                )
         raise HTTPException(404, "no painted area on this handheld holds that tile")
 
     @r.get("/api/bank/pounds")
@@ -4738,14 +5448,18 @@ def build_router(svc: NavService) -> APIRouter:
             "features": feats,
             "vintage": getattr(settings, "lidar_survey_vintage", ""),
             "attribution": getattr(settings, "lidar_attribution", ""),
-            "title": ("Detected water levels, in metres above Ordnance Datum, one per "
-                      "sheet of flat water the LIDAR found along the corridor. Each is "
-                      "the height of the SURFACE and the height every bank beside it "
-                      "was measured against. Nothing here has measured how much water "
-                      "is under that surface."),
-            "aria_label": (f"{len(feats)} detected water level labels"
-                           + (" in the current view" if box is not None else "")
-                           + ". These are heights of the water surface, not depths."),
+            "title": (
+                "Detected water levels, in metres above Ordnance Datum, one per "
+                "sheet of flat water the LIDAR found along the corridor. Each is "
+                "the height of the SURFACE and the height every bank beside it "
+                "was measured against. Nothing here has measured how much water "
+                "is under that surface."
+            ),
+            "aria_label": (
+                f"{len(feats)} detected water level labels"
+                + (" in the current view" if box is not None else "")
+                + ". These are heights of the water surface, not depths."
+            ),
         }
 
     @r.get("/api/areas/{name}/thumb")
@@ -4774,13 +5488,17 @@ def build_router(svc: NavService) -> APIRouter:
         p = settings.areas_dir / f"{name}.geojson"
         if not p.exists():
             return _absent(
-                name, "centreline",
+                name,
+                "centreline",
                 why="no waterway centreline has been downloaded for this area",
-                means=("nothing here knows where the channel runs, so the estimator "
-                       "cannot snap to it and the map has no water drawn on it. That "
-                       "is missing data, not a stretch with no canal in it"),
+                means=(
+                    "nothing here knows where the channel runs, so the estimator "
+                    "cannot snap to it and the map has no water drawn on it. That "
+                    "is missing data, not a stretch with no canal in it"
+                ),
                 remedy="re-create the area (the download fetches the OSM centreline), "
-                       f"or {_FETCH_CMD.format(area=name)}")
+                f"or {_FETCH_CMD.format(area=name)}",
+            )
         try:
             gj = _read_json(p)
         except Exception as exc:  # noqa: BLE001
@@ -4828,56 +5546,82 @@ def build_router(svc: NavService) -> APIRouter:
         # it arrives unasked.
         rows = []
         for row in crt_block.get("layers") or []:
-            rows.append({**row, "present": row.get("status") == "present",
-                         "count": row.get("features")})
+            rows.append({**row, "present": row.get("status") == "present", "count": row.get("features")})
         for row in crt_block.get("skipped") or []:
-            rows.append({**row, "present": False, "count": None,
-                         "url": f"/api/areas/{name}/crt/{row['layer']}"})
+            rows.append({**row, "present": False, "count": None, "url": f"/api/areas/{name}/crt/{row['layer']}"})
 
         layer, err = nominal_layer(name)
         if err is not None:
-            nominal_block = {"status": "unreadable", "present": False, "why": err,
-                             "url": f"/api/areas/{name}/depth/nominal"}
+            nominal_block = {
+                "status": "unreadable",
+                "present": False,
+                "why": err,
+                "url": f"/api/areas/{name}/depth/nominal",
+            }
         elif layer is None:
-            nominal_block = {"status": "absent", "present": False,
-                             "url": f"/api/areas/{name}/depth/nominal",
-                             "why": "no waterway geometry is cached for this area",
-                             "means": ("there is nothing to hang published depth "
-                                       "guidance on — not that the water here is "
-                                       "unguided, that nobody has downloaded it"),
-                             "remedy": _FETCH_CMD.format(area=name)}
+            nominal_block = {
+                "status": "absent",
+                "present": False,
+                "url": f"/api/areas/{name}/depth/nominal",
+                "why": "no waterway geometry is cached for this area",
+                "means": (
+                    "there is nothing to hang published depth "
+                    "guidance on — not that the water here is "
+                    "unguided, that nobody has downloaded it"
+                ),
+                "remedy": _FETCH_CMD.format(area=name),
+            }
         else:
             nominal_block = {
-                "status": "present", "present": True,
+                "status": "present",
+                "present": True,
                 "url": f"/api/areas/{name}/depth/nominal",
-                "nominal": True, "measured": False, "is_survey": False,
+                "nominal": True,
+                "measured": False,
+                "is_survey": False,
                 "count": layer["sections"],
                 "sections": layer["sections"],
                 "sections_with_guidance": layer["sections_with_guidance"],
                 "sections_without_guidance": layer["sections_without_guidance"],
-                "built_from": layer["built_from"], "title": layer["title"],
+                "built_from": layer["built_from"],
+                "title": layer["title"],
             }
 
         snd = _soundings_mod()
         sp = snd.store_path_for(name) if snd else None
         surveyed_url = f"/api/areas/{name}/depth/surveyed"
         if snd is None:
-            sound_block = {"status": "absent", "present": False, "url": surveyed_url,
-                           "why": "api/nav/soundings.py is not in this build",
-                           "means": "nothing on this card can have recorded a sounding"}
+            sound_block = {
+                "status": "absent",
+                "present": False,
+                "url": surveyed_url,
+                "why": "api/nav/soundings.py is not in this build",
+                "means": "nothing on this card can have recorded a sounding",
+            }
         elif sp is not None and sp.exists():
-            sound_block = {"status": "present", "present": True, "url": surveyed_url,
-                           "file": str(sp), "bytes": sp.stat().st_size,
-                           "measured": True, "nominal": False, "is_survey": True,
-                           "quantity": getattr(snd, "QUANTITY", None),
-                           "means": getattr(snd, "MEANS", None),
-                           "unsurveyed": getattr(snd, "UNSURVEYED", None),
-                           "datum": getattr(snd, "DATUM", None)}
+            sound_block = {
+                "status": "present",
+                "present": True,
+                "url": surveyed_url,
+                "file": str(sp),
+                "bytes": sp.stat().st_size,
+                "measured": True,
+                "nominal": False,
+                "is_survey": True,
+                "quantity": getattr(snd, "QUANTITY", None),
+                "means": getattr(snd, "MEANS", None),
+                "unsurveyed": getattr(snd, "UNSURVEYED", None),
+                "datum": getattr(snd, "DATUM", None),
+            }
         else:
-            sound_block = {"status": "absent", "present": False, "url": surveyed_url,
-                           "why": "no dive has contributed a sounding to this area yet",
-                           "means": _unsurveyed_sentence(snd),
-                           "remedy": _SOUND_CMD.format(area=name)}
+            sound_block = {
+                "status": "absent",
+                "present": False,
+                "url": surveyed_url,
+                "why": "no dive has contributed a sounding to this area yet",
+                "means": _unsurveyed_sentence(snd),
+                "remedy": _SOUND_CMD.format(area=name),
+            }
 
         cl = settings.areas_dir / f"{name}.geojson"
         bank_block = _bank_block(name)
@@ -4887,28 +5631,32 @@ def build_router(svc: NavService) -> APIRouter:
         # a function that had opened none of them. Unreadable is counted separately
         # rather than folded in, because the two sentences send an operator to two
         # different places.
-        n_absent = ((1 if crt_block["status"] != "present" else 0)
-                    + len(crt_block.get("failed") or []))
+        n_absent = (1 if crt_block["status"] != "present" else 0) + len(crt_block.get("failed") or [])
         n_corrupt = len(crt_block.get("unreadable") or [])
-        bits = ([f"{n_absent} hazard layer(s) are MISSING"] if n_absent else []) + \
-               ([f"{n_corrupt} are on this card and UNREADABLE"] if n_corrupt else [])
+        bits = ([f"{n_absent} hazard layer(s) are MISSING"] if n_absent else []) + (
+            [f"{n_corrupt} are on this card and UNREADABLE"] if n_corrupt else []
+        )
         # WHICH CARD ANSWERED. "Every hazard layer is here" means something different
         # when the layers are national — it means they are here for everywhere, whether
         # or not this area was ever downloaded — and an operator reading a green line
         # about an area that does not exist yet is entitled to know which of the two
         # they are being told.
-        held = ("held NATIONALLY on this handheld, so they cover this area and every "
-                "other" if crt_block.get("scope") == "national" else
-                "clipped to this area by an earlier fetch")
-        summary = (" and ".join(bits) + " — absent is not empty, unreadable is not empty "
-                   "either, and nothing here claims this water is clear."
-                   if bits else
-                   f"Every hazard layer the Trust publishes is here and every one of "
-                   f"them was certified: {held}.")
-        aria_summary = (" and ".join(bits) + "; no claim is made about the hazards they "
-                        "would have shown."
-                        if bits else
-                        "All downloaded hazard layers are present and readable.")
+        held = (
+            "held NATIONALLY on this handheld, so they cover this area and every " "other"
+            if crt_block.get("scope") == "national"
+            else "clipped to this area by an earlier fetch"
+        )
+        summary = (
+            " and ".join(bits) + " — absent is not empty, unreadable is not empty "
+            "either, and nothing here claims this water is clear."
+            if bits
+            else f"Every hazard layer the Trust publishes is here and every one of " f"them was certified: {held}."
+        )
+        aria_summary = (
+            " and ".join(bits) + "; no claim is made about the hazards they " "would have shown."
+            if bits
+            else "All downloaded hazard layers are present and readable."
+        )
         return {
             "area": name,
             "status": crt_block["status"],
@@ -4935,11 +5683,12 @@ def build_router(svc: NavService) -> APIRouter:
             # come from — and it is here so that "what does this area hold" has one
             # answer with nothing left out of it. The block is _bank_block's, unedited,
             # with the same `present` boolean every other row in this document carries.
-            "bank": {**bank_block, "url": "/api/bank",
-                     "present": bank_block["status"] == "present"},
-            "centreline": {"status": "present" if cl.exists() else "absent",
-                           "present": cl.exists(),
-                           "url": f"/api/areas/{name}/centreline"},
+            "bank": {**bank_block, "url": "/api/bank", "present": bank_block["status"] == "present"},
+            "centreline": {
+                "status": "present" if cl.exists() else "absent",
+                "present": cl.exists(),
+                "url": f"/api/areas/{name}/centreline",
+            },
             "title": f"Overlay data on this card for {name}. {summary}",
             "aria_label": f"Overlay layers for area {name}. {aria_summary}",
         }
@@ -4953,10 +5702,13 @@ def build_router(svc: NavService) -> APIRouter:
         safe = crt.safe_area_name(name) if crt else None
         remedy = _FETCH_CMD.format(area=name)
         if crt is None or safe is None:
-            return _absent(name, layer,
-                           why="no CRT layer directory exists for this area",
-                           means="nothing has been downloaded about hazards here",
-                           remedy=remedy)
+            return _absent(
+                name,
+                layer,
+                why="no CRT layer directory exists for this area",
+                means="nothing has been downloaded about hazards here",
+                remedy=remedy,
+            )
         p = crt.area_dir(safe) / f"{layer}.geojson"
         if not p.exists():
             # NO CLIP FOR THIS AREA — WHICH IS NOT THE SAME AS NOT HAVING THE LAYER.
@@ -4979,21 +5731,29 @@ def build_router(svc: NavService) -> APIRouter:
                     continue
                 deliberate = rec.get("skipped") in _DELIBERATE_SKIPS
                 return _absent(
-                    name, layer,
+                    name,
+                    layer,
                     why=f"the fetch skipped it ({rec.get('skipped')}): {rec.get('why')}",
-                    means=("left out on purpose, and nothing was lost" if deliberate else
-                           "the fetch could not complete this layer and wrote no file "
-                           "rather than a partial one, because a truncated hazard "
-                           "layer is indistinguishable from an empty canal. Nothing "
-                           "is known about this kind of hazard here"),
-                    remedy=remedy)
+                    means=(
+                        "left out on purpose, and nothing was lost"
+                        if deliberate
+                        else "the fetch could not complete this layer and wrote no file "
+                        "rather than a partial one, because a truncated hazard "
+                        "layer is indistinguishable from an empty canal. Nothing "
+                        "is known about this kind of hazard here"
+                    ),
+                    remedy=remedy,
+                )
             return _absent(
-                name, layer,
-                why=("this area has no layer by that name — "
-                     + ("the fetch has never run here" if not index else
-                        "the fetch ran and produced no such layer")),
+                name,
+                layer,
+                why=(
+                    "this area has no layer by that name — "
+                    + ("the fetch has never run here" if not index else "the fetch ran and produced no such layer")
+                ),
                 means="nothing is known about hazards of this kind in this area",
-                remedy=remedy)
+                remedy=remedy,
+            )
         try:
             gj = _read_json(p)
         except Exception as exc:  # noqa: BLE001
@@ -5022,13 +5782,19 @@ def build_router(svc: NavService) -> APIRouter:
             except Exception:  # noqa: BLE001 — the layer still stands without it
                 gj["provenance"] = None
         n = len(gj.get("features") or [])
-        gj["title"] = (f"{layer} for {name}: {n} feature(s) downloaded from the Canal & "
-                       f"River Trust and clipped to this area."
-                       + (" An empty result — the fetch ran cleanly and there is nothing "
-                          "of this kind here, which is a survey result and not a gap."
-                          if n == 0 else ""))
-        gj["aria_label"] = (f"CRT layer {layer} for area {name}, {n} features. "
-                            f"Downloaded data, not a survey by this vehicle.")
+        gj["title"] = (
+            f"{layer} for {name}: {n} feature(s) downloaded from the Canal & "
+            f"River Trust and clipped to this area."
+            + (
+                " An empty result — the fetch ran cleanly and there is nothing "
+                "of this kind here, which is a survey result and not a gap."
+                if n == 0
+                else ""
+            )
+        )
+        gj["aria_label"] = (
+            f"CRT layer {layer} for area {name}, {n} features. " f"Downloaded data, not a survey by this vehicle."
+        )
         return gj
 
     @r.get("/api/areas/{name}/depth/nominal")
@@ -5038,16 +5804,19 @@ def build_router(svc: NavService) -> APIRouter:
             raise HTTPException(400, "bad area name")
         layer, err = nominal_layer(name)
         if err is not None:
-            return _unreadable(name, "depth/nominal",
-                               settings.areas_dir / f"{name}.geojson", ValueError(err))
+            return _unreadable(name, "depth/nominal", settings.areas_dir / f"{name}.geojson", ValueError(err))
         if layer is None:
             return _absent(
-                name, "depth/nominal",
+                name,
+                "depth/nominal",
                 why="no waterway geometry is cached for this area at all",
-                means=("there is nothing to hang published depth guidance on. This is "
-                       "not a stretch of canal with no published depth — it is a "
-                       "stretch nobody has downloaded"),
-                remedy=_FETCH_CMD.format(area=name))
+                means=(
+                    "there is nothing to hang published depth guidance on. This is "
+                    "not a stretch of canal with no published depth — it is a "
+                    "stretch nobody has downloaded"
+                ),
+                remedy=_FETCH_CMD.format(area=name),
+            )
         return layer
 
     @r.get("/api/areas/{name}/depth/surveyed")
@@ -5072,17 +5841,22 @@ def build_router(svc: NavService) -> APIRouter:
             raise HTTPException(400, "bad area name")
         snd = _soundings_mod()
         if snd is None:
-            return _absent(name, "depth/surveyed",
-                           why="api/nav/soundings.py is not in this build",
-                           means="nothing on this card can have recorded a sounding",
-                           remedy="")
+            return _absent(
+                name,
+                "depth/surveyed",
+                why="api/nav/soundings.py is not in this build",
+                means="nothing on this card can have recorded a sounding",
+                remedy="",
+            )
         p = snd.store_path_for(name)
         if not p.exists():
             return _absent(
-                name, "depth/surveyed",
+                name,
+                "depth/surveyed",
                 why="no dive has contributed a sounding to this area yet",
                 means=_unsurveyed_sentence(snd),
-                remedy=_SOUND_CMD.format(area=name))
+                remedy=_SOUND_CMD.format(area=name),
+            )
         try:
             store = _read_json(p)
         except Exception as exc:  # noqa: BLE001
@@ -5105,13 +5879,17 @@ def build_router(svc: NavService) -> APIRouter:
     @r.get("/api/geocode/search")
     async def geocode_search(q: str):
         raw = await satmod._fetch_retry(
-            f"{settings.nominatim_url}/search?" + _urlencode({"q": q, "format": "jsonv2", "limit": 5}), tries=1)
+            f"{settings.nominatim_url}/search?" + _urlencode({"q": q, "format": "jsonv2", "limit": 5}), tries=1
+        )
         if not raw:
             return {"results": []}
         try:
             items = json.loads(raw)
-            return {"results": [{"name": it.get("display_name"),
-                                 "lat": float(it["lat"]), "lon": float(it["lon"])} for it in items]}
+            return {
+                "results": [
+                    {"name": it.get("display_name"), "lat": float(it["lat"]), "lon": float(it["lon"])} for it in items
+                ]
+            }
         except Exception:  # noqa: BLE001
             return {"results": []}
 

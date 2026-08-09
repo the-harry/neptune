@@ -1,4 +1,5 @@
 """Flat-earth local <-> lat/lon (spec §5.2). Exact enough at pond/canal scale."""
+
 from __future__ import annotations
 
 import math

@@ -99,6 +99,7 @@ USAGE (bootstrap, online)
 Pure stdlib (urllib + json). Every network call goes through the module-level _http_get,
 which tests monkeypatch to run offline.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -159,8 +160,9 @@ _EXPECTED_FEATURES: dict[str, int] = {
 # The one obligation OGL v3 puts on us, and it has to travel WITH the data — a bare
 # FeatureCollection copied out of this directory has lost its attribution, so it goes in
 # the file as well as in the provenance.
-OGL_ATTRIBUTION = ("Contains Canal & River Trust data (c) Canal & River Trust, "
-                   "licensed under the Open Government Licence v3.0")
+OGL_ATTRIBUTION = (
+    "Contains Canal & River Trust data (c) Canal & River Trust, " "licensed under the Open Government Licence v3.0"
+)
 _BASE_ATTRIBUTION = "Contains Canal & River Trust data (c) Canal & River Trust"
 
 # Hard ceiling on resultRecordCount. The servers advertise maxRecordCount 2000 (1000 on
@@ -224,13 +226,13 @@ async def _get_json(url: str, tries: int = 3) -> dict | None:
             data = json.loads(raw)
             if isinstance(data, dict) and "error" in data:
                 raise ValueError(f"service error: {str(data['error'])[:200]}")
-            await asyncio.sleep(delay)          # polite, and only on the way out
+            await asyncio.sleep(delay)  # polite, and only on the way out
             return data
         except Exception as exc:  # noqa: BLE001
             if attempt == tries - 1:
                 log.warning("crt fetch failed (%s): %s", url.split("?")[0], exc)
                 return None
-            await asyncio.sleep(delay + 0.5 * (2 ** attempt))
+            await asyncio.sleep(delay + 0.5 * (2**attempt))
     return None
 
 
@@ -313,10 +315,16 @@ async def _hub_services() -> list[dict]:
         if not url or "/FeatureServer" not in url:
             continue
         lic = _strip_html(props.get("licenseInfo"))
-        out.append({"title": props.get("title") or _service_name(url),
-                    "name": _service_name(url), "url": url.rstrip("/"), "source": "hub",
-                    "licence": lic or None,
-                    "licence_source": f"{settings.crt_hub_search_url} (properties.licenseInfo)"})
+        out.append(
+            {
+                "title": props.get("title") or _service_name(url),
+                "name": _service_name(url),
+                "url": url.rstrip("/"),
+                "source": "hub",
+                "licence": lic or None,
+                "licence_source": f"{settings.crt_hub_search_url} (properties.licenseInfo)",
+            }
+        )
     return out
 
 
@@ -327,8 +335,7 @@ def _extra_services() -> list[dict]:
     out = []
     for name in settings.crt_extra_services:
         url = f"{settings.crt_org_service_root}/{urllib.parse.quote(name)}/FeatureServer"
-        out.append({"title": name, "name": name, "url": url, "source": "org",
-                    "licence": None, "licence_source": None})
+        out.append({"title": name, "name": name, "url": url, "source": "org", "licence": None, "licence_source": None})
     return out
 
 
@@ -363,7 +370,7 @@ async def inventory() -> list[dict]:
     seen: set[str] = set()
     services: list[dict] = []
     for svc in (await _hub_services()) + _extra_services():
-        key = svc["url"].lower()          # Dry_Docks_view vs Dry_Docks_View are one service
+        key = svc["url"].lower()  # Dry_Docks_view vs Dry_Docks_View are one service
         if key in seen:
             continue
         seen.add(key)
@@ -386,25 +393,26 @@ async def inventory() -> list[dict]:
             # None and which a less careful reader would turn into an empty hazard layer.
             lid = lyr.get("id")
             meta = await _get_json(f"{svc['url']}/{lid}?f=json") or {}
-            cnt = await _get_json(_q(f"{svc['url']}/{lid}/query",
-                                     where="1=1", returnCountOnly="true", f="json"))
+            cnt = await _get_json(_q(f"{svc['url']}/{lid}/query", where="1=1", returnCountOnly="true", f="json"))
             ekey = f"{svc['name']}/{lid}"
-            extent_sr = ((meta.get("extent") or {}).get("spatialReference") or {})
-            layers.append({
-                **svc,
-                "layer_id": lid,
-                "layer_name": meta.get("name") or lyr.get("name"),
-                "geometry_type": meta.get("geometryType") or lyr.get("geometryType"),
-                "object_id_field": meta.get("objectIdField") or "OBJECTID",
-                "max_record_count": meta.get("maxRecordCount") or _MAX_PAGE,
-                # Storage CRS is a mix of 3857 and 27700 across these services, which is
-                # exactly why every query below passes outSR=4326 rather than trusting the
-                # default: an unnoticed 27700 easting reads as a longitude of 435000.
-                "storage_srs": extent_sr.get("latestWkid") or extent_sr.get("wkid"),
-                "national_features": (cnt or {}).get("count"),
-                "national_expected": _EXPECTED_FEATURES.get(ekey),
-                "layer_key": _layer_key(svc["name"], lid, meta.get("name")),
-            })
+            extent_sr = (meta.get("extent") or {}).get("spatialReference") or {}
+            layers.append(
+                {
+                    **svc,
+                    "layer_id": lid,
+                    "layer_name": meta.get("name") or lyr.get("name"),
+                    "geometry_type": meta.get("geometryType") or lyr.get("geometryType"),
+                    "object_id_field": meta.get("objectIdField") or "OBJECTID",
+                    "max_record_count": meta.get("maxRecordCount") or _MAX_PAGE,
+                    # Storage CRS is a mix of 3857 and 27700 across these services, which is
+                    # exactly why every query below passes outSR=4326 rather than trusting the
+                    # default: an unnoticed 27700 easting reads as a longitude of 435000.
+                    "storage_srs": extent_sr.get("latestWkid") or extent_sr.get("wkid"),
+                    "national_features": (cnt or {}).get("count"),
+                    "national_expected": _EXPECTED_FEATURES.get(ekey),
+                    "layer_key": _layer_key(svc["name"], lid, meta.get("name")),
+                }
+            )
     return layers
 
 
@@ -413,7 +421,7 @@ def _layer_key(service: str, layer_id, layer_name: str | None) -> str:
     """Filesystem key for one layer. Built from the SERVICE name, not the layer's display
     name — 'Sluices' is the display name of five different services on this org."""
     stem = re.sub(r"^canal_and_river_trust_", "", service.strip().lower())
-    while True:                                   # Safety_Gates_View_Public sheds both
+    while True:  # Safety_Gates_View_Public sheds both
         shorter = re.sub(r"_(view|public)$", "", stem)
         if shorter == stem:
             break
@@ -490,6 +498,7 @@ def area_bbox(name: str) -> list[float] | None:
 def _coords(geom) -> list:
     """Every [lon, lat] in a geometry, at any nesting depth."""
     out: list[tuple[float, float]] = []
+
     def walk(c):
         if isinstance(c, (list, tuple)):
             if c and isinstance(c[0], (int, float)) and len(c) >= 2:
@@ -497,6 +506,7 @@ def _coords(geom) -> list:
             else:
                 for sub in c:
                     walk(sub)
+
     walk((geom or {}).get("coordinates"))
     return out
 
@@ -577,7 +587,7 @@ def _write_atomic(path: Path, text: str) -> None:
         # BaseException on purpose: KeyboardInterrupt is the case this exists for.
         try:
             tmp.unlink(missing_ok=True)
-        except OSError:                  # nothing to add to whatever is already raising
+        except OSError:  # nothing to add to whatever is already raising
             pass
         raise
 
@@ -605,8 +615,7 @@ def _carried_record(out_dir: Path, key: str, why: str) -> dict | None:
         # it". A carried record without one would arrive downstream as a zero, which is
         # the survey result "nothing of this kind here" — the one claim never to guess.
         return None
-    return {**rec, "layer_key": key, "file": f"{key}.geojson",
-            "carried_over": True, "refresh_failed": why}
+    return {**rec, "layer_key": key, "file": f"{key}.geojson", "carried_over": True, "refresh_failed": why}
 
 
 # ---- the download job ---------------------------------------------------------
@@ -614,10 +623,12 @@ async def _fetch_layer(lyr: dict, bbox: list[float]) -> tuple[list[dict] | None,
     """Page one layer inside bbox. Returns (features, stats); features is None if any page
     failed, because a partial layer on disk is indistinguishable from a safe one."""
     base = f"{lyr['url']}/{lyr['layer_id']}/query"
-    envelope = {"geometry": ",".join(str(v) for v in bbox),
-                "geometryType": "esriGeometryEnvelope",
-                "inSR": "4326",
-                "spatialRel": "esriSpatialRelIntersects"}
+    envelope = {
+        "geometry": ",".join(str(v) for v in bbox),
+        "geometryType": "esriGeometryEnvelope",
+        "inSR": "4326",
+        "spatialRel": "esriSpatialRelIntersects",
+    }
     stats: dict = {"pages": 0, "server_bbox_count": None, "clipped_out": 0}
 
     # What the server thinks is in this box, asked BEFORE paging. This is the only
@@ -630,10 +641,19 @@ async def _fetch_layer(lyr: dict, bbox: list[float]) -> tuple[list[dict] | None,
     feats: list[dict] = []
     offset = 0
     while True:
-        fc = await _get_json(_q(base, where="1=1", outFields="*", outSR="4326", f="geojson",
-                                orderByFields=lyr["object_id_field"],
-                                resultRecordCount=str(page), resultOffset=str(offset),
-                                **envelope))
+        fc = await _get_json(
+            _q(
+                base,
+                where="1=1",
+                outFields="*",
+                outSR="4326",
+                f="geojson",
+                orderByFields=lyr["object_id_field"],
+                resultRecordCount=str(page),
+                resultOffset=str(offset),
+                **envelope,
+            )
+        )
         if fc is None:
             stats["error"] = f"page at offset {offset} failed after retries"
             return None, stats
@@ -659,6 +679,7 @@ async def download_hazards(area: str, bbox: list[float] | None = None, progress=
     Returns a result dict and does NOT raise: this runs inside bootstrap, alongside a
     satellite download that may already have succeeded, and a raise here would throw away
     an area's imagery over a Trust server having a bad afternoon."""
+
     async def emit(msg: dict) -> None:
         log.info("crt %s", msg)
         if progress:
@@ -675,9 +696,12 @@ async def download_hazards(area: str, bbox: list[float] | None = None, progress=
     if bbox is None:
         bbox = area_bbox(name)
     if bbox is None:
-        return {"ok": False, "area": name,
-                "error": f"no bbox: pass one, or download the area first so "
-                         f"{settings.areas_dir / (name + '.json')} exists"}
+        return {
+            "ok": False,
+            "area": name,
+            "error": f"no bbox: pass one, or download the area first so "
+            f"{settings.areas_dir / (name + '.json')} exists",
+        }
     if not _valid_bbox(bbox):
         return {"ok": False, "area": name, "error": f"bbox {bbox!r} is not [W,S,E,N] in degrees"}
     bbox = [float(v) for v in bbox]
@@ -685,8 +709,11 @@ async def download_hazards(area: str, bbox: list[float] | None = None, progress=
     await emit({"area": name, "state": "discovering", "bbox": bbox})
     layers = await inventory()
     if not layers:
-        return {"ok": False, "area": name,
-                "error": "no services reachable — this is a BOOTSTRAP task and needs internet"}
+        return {
+            "ok": False,
+            "area": name,
+            "error": "no services reachable — this is a BOOTSTRAP task and needs internet",
+        }
 
     out_dir = area_dir(name)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -710,61 +737,91 @@ async def download_hazards(area: str, bbox: list[float] | None = None, progress=
             key = f"{key}-{len(used)}"
         used.add(key)
         klass = _classify_licence(lyr.get("licence"))
-        base = {"layer_key": key, "title": lyr.get("title"), "service": lyr["name"],
-                "service_url": lyr["url"], "layer_id": lyr.get("layer_id"),
-                "layer_name": lyr.get("layer_name"), "source": lyr.get("source"),
-                "licence": lyr.get("licence"), "licence_class": klass,
-                "licence_source": lyr.get("licence_source"),
-                "licence_note": lyr.get("licence_note"),
-                "redistributable": _redistributable(klass)}
+        base = {
+            "layer_key": key,
+            "title": lyr.get("title"),
+            "service": lyr["name"],
+            "service_url": lyr["url"],
+            "layer_id": lyr.get("layer_id"),
+            "layer_name": lyr.get("layer_name"),
+            "source": lyr.get("source"),
+            "licence": lyr.get("licence"),
+            "licence_class": klass,
+            "licence_source": lyr.get("licence_source"),
+            "licence_note": lyr.get("licence_note"),
+            "redistributable": _redistributable(klass),
+        }
         await emit({"area": name, "state": "layer", "n": i + 1, "of": len(layers), "layer": key})
 
         if lyr.get("error"):
             skipped.append({**base, "skipped": "unreadable", "why": lyr["error"]})
             continue
         if not lyr.get("geometry_type"):
-            skipped.append({**base, "skipped": "no-geometry",
-                            "why": "layer publishes no geometry — nothing to draw on a map"})
+            skipped.append(
+                {**base, "skipped": "no-geometry", "why": "layer publishes no geometry — nothing to draw on a map"}
+            )
             continue
         if klass == "restricted" and settings.crt_restricted == "skip":
-            skipped.append({**base, "skipped": "licence",
-                            "why": f"licence forbids reuse ({lyr.get('licence')!r}) and "
-                                   f"NAV_CRT_RESTRICTED=skip"})
+            skipped.append(
+                {
+                    **base,
+                    "skipped": "licence",
+                    "why": f"licence forbids reuse ({lyr.get('licence')!r}) and " f"NAV_CRT_RESTRICTED=skip",
+                }
+            )
             continue
         national = lyr.get("national_features")
         if national is not None and national < settings.crt_min_features:
-            skipped.append({**base, "skipped": "near-empty", "national_features": national,
-                            "why": f"{national} features nationwide (< {settings.crt_min_features}) "
-                                   f"— a toggle that can only ever be empty"})
+            skipped.append(
+                {
+                    **base,
+                    "skipped": "near-empty",
+                    "national_features": national,
+                    "why": f"{national} features nationwide (< {settings.crt_min_features}) "
+                    f"— a toggle that can only ever be empty",
+                }
+            )
             continue
 
         feats, stats = await _fetch_layer(lyr, bbox)
-        rec = {**base,
-               "fetched": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-               "area": name, "bbox": bbox, "clip_rule": "intersects",
-               "geometry_type": lyr.get("geometry_type"),
-               "object_id_field": lyr.get("object_id_field"),
-               "storage_srs": lyr.get("storage_srs"), "out_srs": 4326,
-               "national_features": national,
-               "national_expected": lyr.get("national_expected"),
-               "max_record_count": lyr.get("max_record_count"),
-               "attribution": _attribution_for(klass, lyr.get("licence")),
-               **stats}
+        rec = {
+            **base,
+            "fetched": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "area": name,
+            "bbox": bbox,
+            "clip_rule": "intersects",
+            "geometry_type": lyr.get("geometry_type"),
+            "object_id_field": lyr.get("object_id_field"),
+            "storage_srs": lyr.get("storage_srs"),
+            "out_srs": 4326,
+            "national_features": national,
+            "national_expected": lyr.get("national_expected"),
+            "max_record_count": lyr.get("max_record_count"),
+            "attribution": _attribution_for(klass, lyr.get("licence")),
+            **stats,
+        }
 
         exp = lyr.get("national_expected")
         if exp is not None and national is not None and national != exp:
             rec["national_drift"] = national - exp
-            warnings.append(f"{key}: {national} features nationwide, expected {exp} "
-                            f"(service changed, or a different service answered)")
+            warnings.append(
+                f"{key}: {national} features nationwide, expected {exp} "
+                f"(service changed, or a different service answered)"
+            )
         if national is None:
             rec["count_check"] = "unavailable"
             warnings.append(f"{key}: national count unavailable — truncation could not be checked")
 
         if feats is None:
-            skipped.append({**rec, "skipped": "fetch-failed",
-                            "why": stats.get("error", "fetch failed"),
-                            "note": "no file written on purpose — a partial layer reads as "
-                                    "'nothing here', which is the one lie that matters"})
+            skipped.append(
+                {
+                    **rec,
+                    "skipped": "fetch-failed",
+                    "why": stats.get("error", "fetch failed"),
+                    "note": "no file written on purpose — a partial layer reads as "
+                    "'nothing here', which is the one lie that matters",
+                }
+            )
             warnings.append(f"{key}: {stats.get('error', 'fetch failed')} — layer NOT written")
             continue
 
@@ -777,8 +834,9 @@ async def download_hazards(area: str, bbox: list[float] | None = None, progress=
             rec["count_check"] = "agrees"
         else:
             rec["count_check"] = "disagrees"
-            warnings.append(f"{key}: server counted {served} features in this bbox, paging "
-                            f"returned {got} — possible truncation")
+            warnings.append(
+                f"{key}: server counted {served} features in this bbox, paging " f"returned {got} — possible truncation"
+            )
 
         rec["features"] = len(feats)
         # RFC 7946 §5: a FeatureCollection's bbox is the bbox OF ITS FEATURES. Writing the
@@ -788,10 +846,12 @@ async def download_hazards(area: str, bbox: list[float] | None = None, progress=
         # member says what is actually in the file, and the area it was cut for is a
         # separate, honestly-named `clip`.
         span = _collection_bbox(feats)
-        fc = {"type": "FeatureCollection",
-              "attribution": rec["attribution"],
-              "clip": {"area": name, "bbox": bbox, "rule": "intersects"},
-              "features": feats}
+        fc = {
+            "type": "FeatureCollection",
+            "attribution": rec["attribution"],
+            "clip": {"area": name, "bbox": bbox, "rule": "intersects"},
+            "features": feats,
+        }
         if span:
             fc["bbox"] = span
         rec["feature_bbox"] = span
@@ -808,15 +868,18 @@ async def download_hazards(area: str, bbox: list[float] | None = None, progress=
         # terms were never read" are the licence version of the honesty doctrine, and
         # collapsing them into one polite hedge is how an unread licence gets published.
         if rec["redistributable"] is False:
-            warnings.append(f"{key}: licence REFUSES reuse ({lyr.get('licence')!r}) — "
-                            f"downloaded as this operator's own safety copy under "
-                            f"NAV_CRT_RESTRICTED=flag; DO NOT redistribute this file")
+            warnings.append(
+                f"{key}: licence REFUSES reuse ({lyr.get('licence')!r}) — "
+                f"downloaded as this operator's own safety copy under "
+                f"NAV_CRT_RESTRICTED=flag; DO NOT redistribute this file"
+            )
         elif rec["redistributable"] is None:
-            warnings.append(f"{key}: licence is {klass} ({lyr.get('licence')!r}) — real terms "
-                            f"exist and are NOT quoted in the item metadata, so this is "
-                            f"cannot-tell, not permission. Read them before redistributing")
-        await emit({"area": name, "state": "wrote", "layer": key, "features": len(feats),
-                    "of_national": national})
+            warnings.append(
+                f"{key}: licence is {klass} ({lyr.get('licence')!r}) — real terms "
+                f"exist and are NOT quoted in the item metadata, so this is "
+                f"cannot-tell, not permission. Read them before redistributing"
+            )
+        await emit({"area": name, "state": "wrote", "layer": key, "features": len(feats), "of_national": national})
 
     # ---- the sweep --------------------------------------------------------------
     # Anything this run did NOT write is a candidate, and no more than a candidate.
@@ -827,8 +890,7 @@ async def download_hazards(area: str, bbox: list[float] | None = None, progress=
     # see _SWEEP_FLOOR for the run that deleted a whole card and reported success. Only
     # the two extensions this module writes are ever touched.
     written_keys = {r["layer_key"] for r in fetched}
-    decided_keys = {s["layer_key"] for s in skipped
-                    if s.get("skipped") in _DELIBERATE_SKIPS}
+    decided_keys = {s["layer_key"] for s in skipped if s.get("skipped") in _DELIBERATE_SKIPS}
     # How much of THE CARD this run accounted for — intersected with what was there,
     # because a layer this run decided against that is not on the card is no evidence
     # that the card was re-surveyed, and permanently-skipped layers would otherwise
@@ -840,22 +902,23 @@ async def download_hazards(area: str, bbox: list[float] | None = None, progress=
     removed: list[str] = []
     carried_keys: set[str] = set()
     for old in sorted(out_dir.glob("*.geojson")) + sorted(out_dir.glob("*.prov.json")):
-        key = (old.name[: -len(".prov.json")] if old.name.endswith(".prov.json")
-               else old.name[: -len(".geojson")])
+        key = old.name[: -len(".prov.json")] if old.name.endswith(".prov.json") else old.name[: -len(".geojson")]
         if key in written_keys:
-            continue                                  # this run put it there
+            continue  # this run put it there
         # A file this run did not write is somebody's hazard data until there is a
         # POSITIVE reason it should not be: either this run's configuration left that
         # layer out on purpose, or discovery — which the floor above says actually
         # ran — no longer lists the layer at all. "The fetch failed" is not such a
         # reason. `used` is every layer key this run's discovery offered.
-        why_gone = ("left out of this run on purpose" if key in decided_keys else
-                    "no longer offered by the Trust's services" if key not in used else "")
+        why_gone = (
+            "left out of this run on purpose"
+            if key in decided_keys
+            else "no longer offered by the Trust's services" if key not in used else ""
+        )
         if is_refresh and why_gone:
             old.unlink()
             removed.append(old.name)
-            warnings.append(f"{old.name}: {why_gone} — deleted rather than served as "
-                            f"current")
+            warnings.append(f"{old.name}: {why_gone} — deleted rather than served as " f"current")
             continue
         if old.name.endswith(".geojson"):
             carried_keys.add(key)
@@ -868,44 +931,58 @@ async def download_hazards(area: str, bbox: list[float] | None = None, progress=
     unaccounted: list[str] = []
     skip_by_key = {s.get("layer_key"): s for s in skipped}
     for key in sorted(carried_keys):
-        why = ((skip_by_key.get(key) or {}).get("why")
-               or "this run did not reach this layer at all")
+        why = (skip_by_key.get(key) or {}).get("why") or "this run did not reach this layer at all"
         rec = _carried_record(out_dir, key, why)
         if rec is None:
             unaccounted.append(f"{key}.geojson")
-            warnings.append(f"{key}.geojson: on the card with no readable provenance "
-                            f"beside it — KEPT (nothing here deletes hazard data) but not "
-                            f"listed as a layer, because nothing can say what is in it or "
-                            f"when it was fetched")
+            warnings.append(
+                f"{key}.geojson: on the card with no readable provenance "
+                f"beside it — KEPT (nothing here deletes hazard data) but not "
+                f"listed as a layer, because nothing can say what is in it or "
+                f"when it was fetched"
+            )
             continue
         carried.append(rec)
-        warnings.append(f"{key}: NOT refreshed by this run ({why}) — the file fetched "
-                        f"{rec.get('fetched')} is still on the card and is what the "
-                        f"console will draw. Older data, honestly dated, beats none")
+        warnings.append(
+            f"{key}: NOT refreshed by this run ({why}) — the file fetched "
+            f"{rec.get('fetched')} is still on the card and is what the "
+            f"console will draw. Older data, honestly dated, beats none"
+        )
     # Said in ONE place. service.py reads `skipped` as "this layer is not on the card at
     # all"; a layer whose file survived is present, and reporting it in both lists would
     # have the console call the same layer present and missing in one breath.
     carried_names = {r["layer_key"] for r in carried}
     skipped = [s for s in skipped if s.get("layer_key") not in carried_names]
 
-    index = {"area": name, "bbox": bbox, "started": started,
-             "finished": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-             "removed_stale": removed,
-             # What this run did to the card, as opposed to what it downloaded. A reader
-             # comparing `written` with `on_card_at_start` can see a partial refresh
-             # without having to count two lists.
-             "refresh": {"on_card_at_start": len(on_card_keys),
-                         "written": len(written_keys), "card_accounted": covered,
-                         "sweep_floor_layers": floor, "swept": is_refresh,
-                         "carried_over": sorted(carried_names),
-                         "unaccounted_files": unaccounted},
-             "generator": "api/nav/crt.py",
-             "hub": settings.crt_hub_search_url, "org": settings.crt_org_service_root,
-             "clip_rule": "intersects (features kept whole; nothing is cut at the bbox edge)",
-             "attribution": OGL_ATTRIBUTION,
-             # The card, not the run: this run's layers plus the ones it could not
-             # refresh and therefore left alone, each with its own fetch date.
-             "layers": fetched + carried, "skipped": skipped, "warnings": warnings}
+    index = {
+        "area": name,
+        "bbox": bbox,
+        "started": started,
+        "finished": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "removed_stale": removed,
+        # What this run did to the card, as opposed to what it downloaded. A reader
+        # comparing `written` with `on_card_at_start` can see a partial refresh
+        # without having to count two lists.
+        "refresh": {
+            "on_card_at_start": len(on_card_keys),
+            "written": len(written_keys),
+            "card_accounted": covered,
+            "sweep_floor_layers": floor,
+            "swept": is_refresh,
+            "carried_over": sorted(carried_names),
+            "unaccounted_files": unaccounted,
+        },
+        "generator": "api/nav/crt.py",
+        "hub": settings.crt_hub_search_url,
+        "org": settings.crt_org_service_root,
+        "clip_rule": "intersects (features kept whole; nothing is cut at the bbox edge)",
+        "attribution": OGL_ATTRIBUTION,
+        # The card, not the run: this run's layers plus the ones it could not
+        # refresh and therefore left alone, each with its own fetch date.
+        "layers": fetched + carried,
+        "skipped": skipped,
+        "warnings": warnings,
+    }
     _write_atomic(provenance_path(name), json.dumps(index, indent=1))
 
     # ---- was this a success? ----------------------------------------------------
@@ -916,32 +993,56 @@ async def download_hazards(area: str, bbox: list[float] | None = None, progress=
     # ok:false — because the moment to learn it is while there is still internet.
     reasons: list[str] = []
     if not fetched and on_card_keys:
-        reasons.append(f"NOTHING DOWNLOADED: 0 of {len(layers)} layers were written. The "
-                       f"{len(on_card_keys)} layer file(s) already on this card were left "
-                       f"exactly as they were and nothing was deleted — what the console "
-                       f"draws is the earlier fetch, not this run. Run this again where "
-                       f"there is internet")
+        reasons.append(
+            f"NOTHING DOWNLOADED: 0 of {len(layers)} layers were written. The "
+            f"{len(on_card_keys)} layer file(s) already on this card were left "
+            f"exactly as they were and nothing was deleted — what the console "
+            f"draws is the earlier fetch, not this run. Run this again where "
+            f"there is internet"
+        )
     elif not fetched:
-        reasons.append(f"NOTHING DOWNLOADED: 0 of {len(layers)} layers were written and "
-                       f"this card holds no hazard data at all. This is a BOOTSTRAP task "
-                       f"and it needs the internet")
+        reasons.append(
+            f"NOTHING DOWNLOADED: 0 of {len(layers)} layers were written and "
+            f"this card holds no hazard data at all. This is a BOOTSTRAP task "
+            f"and it needs the internet"
+        )
     if carried:
-        reasons.append(f"{len(carried)} layer(s) could not be refreshed and are being "
-                       f"served from an earlier fetch: {', '.join(sorted(carried_names))}")
+        reasons.append(
+            f"{len(carried)} layer(s) could not be refreshed and are being "
+            f"served from an earlier fetch: {', '.join(sorted(carried_names))}"
+        )
     if unaccounted:
-        reasons.append(f"{len(unaccounted)} file(s) on this card have no readable "
-                       f"provenance and nothing claims to know what is in them: "
-                       f"{', '.join(unaccounted)}")
+        reasons.append(
+            f"{len(unaccounted)} file(s) on this card have no readable "
+            f"provenance and nothing claims to know what is in them: "
+            f"{', '.join(unaccounted)}"
+        )
     ok = not reasons
 
-    await emit({"area": name, "state": "done", "layers": len(fetched),
-                "carried": len(carried), "removed": len(removed),
-                "skipped": len(skipped), "warnings": len(warnings), "ok": ok})
-    res = {"ok": ok, "area": name, "dir": str(out_dir), "layers": len(fetched),
-           "features": sum(r["features"] for r in fetched),
-           "carried_over": len(carried), "on_card": len(fetched) + len(carried),
-           "removed_stale": len(removed),
-           "skipped": len(skipped), "warnings": warnings}
+    await emit(
+        {
+            "area": name,
+            "state": "done",
+            "layers": len(fetched),
+            "carried": len(carried),
+            "removed": len(removed),
+            "skipped": len(skipped),
+            "warnings": len(warnings),
+            "ok": ok,
+        }
+    )
+    res = {
+        "ok": ok,
+        "area": name,
+        "dir": str(out_dir),
+        "layers": len(fetched),
+        "features": sum(r["features"] for r in fetched),
+        "carried_over": len(carried),
+        "on_card": len(fetched) + len(carried),
+        "removed_stale": len(removed),
+        "skipped": len(skipped),
+        "warnings": warnings,
+    }
     if reasons:
         res["error"] = "; ".join(reasons)
     return res
@@ -982,8 +1083,8 @@ async def download_hazards(area: str, bbox: list[float] | None = None, progress=
 # died at 95% would make the whole national idea unusable in the only place it gets
 # used.
 
-_RESUME_DATA = ".resume.jsonl"       # one Feature per line, append-only, in OBJECTID order
-_RESUME_META = ".resume.json"        # how far that got, rewritten atomically per page
+_RESUME_DATA = ".resume.jsonl"  # one Feature per line, append-only, in OBJECTID order
+_RESUME_META = ".resume.json"  # how far that got, rewritten atomically per page
 
 # Bytes per feature by geometry type, used ONLY to size the first page of a layer.
 # Measured on the real fetched card (data/crt/gas-street) and quoted in the brief that
@@ -1006,8 +1107,7 @@ _BYTES_PER_FEATURE_UNKNOWN = 3000
 _MIN_PAGE = 25
 
 
-def _page_for(geometry_type: str | None, max_record: int | None,
-              bytes_per_feature: float | None = None) -> int:
+def _page_for(geometry_type: str | None, max_record: int | None, bytes_per_feature: float | None = None) -> int:
     """How many features to ask for in one request, from a BYTE budget.
 
     resultRecordCount is a count and the thing that actually hurts is a response size:
@@ -1015,8 +1115,7 @@ def _page_for(geometry_type: str | None, max_record: int | None,
     a FEATURE offset, so shrinking the page changes only the number of requests — never
     what lands, and never a resume point.
     """
-    per = bytes_per_feature or _BYTES_PER_FEATURE.get(geometry_type or "",
-                                                      _BYTES_PER_FEATURE_UNKNOWN)
+    per = bytes_per_feature or _BYTES_PER_FEATURE.get(geometry_type or "", _BYTES_PER_FEATURE_UNKNOWN)
     budget = max(1.0, float(settings.crt_page_bytes))
     want = int(budget / max(1.0, float(per)))
     ceiling = min(int(max_record or _MAX_PAGE), _MAX_PAGE)
@@ -1069,8 +1168,7 @@ def _load_resume(out_dir: Path, key: str, ident: str) -> dict:
     again, which is the only safe answer and is said out loud in the record.
     """
     data, meta_p = _resume_paths(out_dir, key)
-    fresh = {"offset": 0, "pages": 0, "bbox": None, "ident": ident,
-             "started": _iso(), "restarted": None}
+    fresh = {"offset": 0, "pages": 0, "bbox": None, "ident": ident, "started": _iso(), "restarted": None}
     try:
         meta = json.loads(meta_p.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 — no partial, or an unreadable one; both start over
@@ -1080,9 +1178,11 @@ def _load_resume(out_dir: Path, key: str, ident: str) -> dict:
         data.unlink(missing_ok=True)
         meta_p.unlink(missing_ok=True)
         if had:
-            fresh["restarted"] = ("the service, the layer id or the national feature "
-                                  "count changed since the partial was written, so its "
-                                  "paging offsets address different features")
+            fresh["restarted"] = (
+                "the service, the layer id or the national feature "
+                "count changed since the partial was written, so its "
+                "paging offsets address different features"
+            )
         return fresh
     on_disk = _complete_lines(data)
     if on_disk != meta.get("offset"):
@@ -1109,12 +1209,10 @@ def _grow(bbox: list[float] | None, feats: list[dict]) -> list[float] | None:
         return bbox
     if bbox is None:
         return span
-    return [min(bbox[0], span[0]), min(bbox[1], span[1]),
-            max(bbox[2], span[2]), max(bbox[3], span[3])]
+    return [min(bbox[0], span[0]), min(bbox[1], span[1]), max(bbox[2], span[2]), max(bbox[3], span[3])]
 
 
-def _write_collection_stream(path: Path, lines: Path, head: dict,
-                             index_path: Path | None = None) -> int:
+def _write_collection_stream(path: Path, lines: Path, head: dict, index_path: Path | None = None) -> int:
     """A FeatureCollection assembled from the resume file, without holding it in memory.
 
     Same guarantee as _write_atomic and for the same reason — a reader sees the whole
@@ -1152,7 +1250,7 @@ def _write_collection_stream(path: Path, lines: Path, head: dict,
                         first = False
                         entries.append([start, len(raw)] + _feature_box(raw))
             except FileNotFoundError:
-                pass                      # a layer with no features still gets a file
+                pass  # a layer with no features still gets a file
             out.write(b"]}")
         os.replace(tmp, path)
     except BaseException:
@@ -1163,10 +1261,18 @@ def _write_collection_stream(path: Path, lines: Path, head: dict,
             pass
         raise
     if index_path is not None:
-        _write_atomic(index_path, json.dumps(
-            {"scope": "national", "file": path.name, "features": len(entries),
-             "schema": "[byte offset, byte length, W, S, E, N] per feature, in file order",
-             "entries": entries}))
+        _write_atomic(
+            index_path,
+            json.dumps(
+                {
+                    "scope": "national",
+                    "file": path.name,
+                    "features": len(entries),
+                    "schema": "[byte offset, byte length, W, S, E, N] per feature, in file order",
+                    "entries": entries,
+                }
+            ),
+        )
     return path.stat().st_size
 
 
@@ -1198,16 +1304,14 @@ def _feature_box(raw: bytes) -> list[float]:
     if not span:
         return []
     w, s, e, n = span
-    return [math.floor(w * 1e4) / 1e4, math.floor(s * 1e4) / 1e4,
-            math.ceil(e * 1e4) / 1e4, math.ceil(n * 1e4) / 1e4]
+    return [math.floor(w * 1e4) / 1e4, math.floor(s * 1e4) / 1e4, math.ceil(e * 1e4) / 1e4, math.ceil(n * 1e4) / 1e4]
 
 
 def national_index_path(key: str) -> Path:
     return national_dir() / f"{key}{_INDEX_SUFFIX}"
 
 
-async def _fetch_layer_national(lyr: dict, out_dir: Path, key: str,
-                                emit) -> tuple[bool, dict]:
+async def _fetch_layer_national(lyr: dict, out_dir: Path, key: str, emit) -> tuple[bool, dict]:
     """Page one layer WHOLE, nationally, continuing from wherever the last run stopped.
 
     Returns (finished, stats). `finished` False means no .geojson was written and the
@@ -1223,15 +1327,28 @@ async def _fetch_layer_national(lyr: dict, out_dir: Path, key: str,
     offset = int(st["offset"])
     bbox = st.get("bbox")
     page = _page_for(lyr.get("geometry_type"), lyr.get("max_record_count"))
-    stats: dict = {"pages": 0, "resumed_from": offset, "page_size": page,
-                   "server_count": server, "restarted": st.get("restarted")}
+    stats: dict = {
+        "pages": 0,
+        "resumed_from": offset,
+        "page_size": page,
+        "server_count": server,
+        "restarted": st.get("restarted"),
+    }
     if offset:
         await emit({"state": "resumed", "layer": key, "features": offset, "of": server})
 
     bytes_seen, feats_seen = 0, 0
     while True:
-        url = _q(base, where="1=1", outFields="*", outSR="4326", f="geojson",
-                 orderByFields=oid, resultRecordCount=str(page), resultOffset=str(offset))
+        url = _q(
+            base,
+            where="1=1",
+            outFields="*",
+            outSR="4326",
+            f="geojson",
+            orderByFields=oid,
+            resultRecordCount=str(page),
+            resultOffset=str(offset),
+        )
         fc = await _get_json(url)
         if fc is None:
             stats["error"] = f"page at offset {offset} failed after retries"
@@ -1251,14 +1368,22 @@ async def _fetch_layer_national(lyr: dict, out_dir: Path, key: str,
             feats_seen += len(got)
             bytes_seen += sum(len(json.dumps(f, separators=(",", ":"))) + 1 for f in got)
         stats["pages"] += 1
-        _write_atomic(meta_p, json.dumps({"offset": offset, "pages": stats["pages"],
-                                          "bbox": bbox, "ident": ident,
-                                          "started": st.get("started"),
-                                          "touched": _iso()}))
-        await emit({"state": "paging", "layer": key, "features": offset, "of": server,
-                    "pages": stats["pages"]})
+        _write_atomic(
+            meta_p,
+            json.dumps(
+                {
+                    "offset": offset,
+                    "pages": stats["pages"],
+                    "bbox": bbox,
+                    "ident": ident,
+                    "started": st.get("started"),
+                    "touched": _iso(),
+                }
+            ),
+        )
+        await emit({"state": "paging", "layer": key, "features": offset, "of": server, "pages": stats["pages"]})
         if len(got) < page:
-            break                          # a short page is the end, and nothing else is
+            break  # a short page is the end, and nothing else is
         if stats["pages"] >= _MAX_PAGES:
             stats["error"] = f"stopped at {_MAX_PAGES} pages — resultOffset is not advancing"
             stats["kept_partial"] = offset
@@ -1268,8 +1393,9 @@ async def _fetch_layer_national(lyr: dict, out_dir: Path, key: str,
         # which is how the planning-buffer polygons end up at ~96 a page and the point
         # layers stay at the service's own ceiling.
         if feats_seen:
-            page = _page_for(lyr.get("geometry_type"), lyr.get("max_record_count"),
-                             bytes_per_feature=bytes_seen / feats_seen)
+            page = _page_for(
+                lyr.get("geometry_type"), lyr.get("max_record_count"), bytes_per_feature=bytes_seen / feats_seen
+            )
     stats["features"] = offset
     stats["feature_bbox"] = bbox
     stats["bytes_per_feature"] = round(bytes_seen / feats_seen, 1) if feats_seen else None
@@ -1329,8 +1455,10 @@ def _currency(rec: dict | None, path: Path, server_count: int | None) -> dict:
     """
     out = {"current": False, "why": "", "count_check": None, "age_days": None}
     if rec is None:
-        out["why"] = ("nothing beside this layer file vouches for it — no record means "
-                      "nothing can date it, count it or say it is whole")
+        out["why"] = (
+            "nothing beside this layer file vouches for it — no record means "
+            "nothing can date it, count it or say it is whole"
+        )
         return out
     try:
         size = path.stat().st_size
@@ -1338,39 +1466,46 @@ def _currency(rec: dict | None, path: Path, server_count: int | None) -> dict:
         out["why"] = "the layer file is not on this card"
         return out
     if rec.get("complete") is not True:
-        out["why"] = ("the record does not state that the whole layer landed, so what "
-                      "is on the card is a piece of one until proved otherwise")
+        out["why"] = (
+            "the record does not state that the whole layer landed, so what "
+            "is on the card is a piece of one until proved otherwise"
+        )
         return out
     have = rec.get("features")
     if rec.get("bytes") is not None and size != rec.get("bytes"):
-        out["why"] = (f"the file is {size} bytes and the fetch recorded writing "
-                      f"{rec.get('bytes')} — it has been edited or truncated since, so "
-                      f"nothing it says about itself can be trusted")
+        out["why"] = (
+            f"the file is {size} bytes and the fetch recorded writing "
+            f"{rec.get('bytes')} — it has been edited or truncated since, so "
+            f"nothing it says about itself can be trusted"
+        )
         return out
     age = _age_days(rec.get("fetched"))
     out["age_days"] = None if age is None else round(age, 1)
     if server_count is None:
         out["count_check"] = "unavailable"
-        out["why"] = ("the service did not answer a count, so whether this file is still "
-                      "complete cannot be told from here")
+        out["why"] = (
+            "the service did not answer a count, so whether this file is still " "complete cannot be told from here"
+        )
         return out
     if have != server_count:
         out["count_check"] = "disagrees"
-        out["why"] = (f"this file holds {have} feature(s) and the service now publishes "
-                      f"{server_count} nationally")
+        out["why"] = f"this file holds {have} feature(s) and the service now publishes " f"{server_count} nationally"
         return out
     out["count_check"] = "agrees"
     if age is None:
         out["why"] = "the record carries no fetch date, so its age cannot be judged"
         return out
     if age > float(settings.crt_national_max_age_days):
-        out["why"] = (f"the count still agrees, and this was fetched {age:.0f} days ago "
-                      f"(over the {settings.crt_national_max_age_days:.0f}-day window) — "
-                      f"a count can agree while the geometry under it has been re-surveyed")
+        out["why"] = (
+            f"the count still agrees, and this was fetched {age:.0f} days ago "
+            f"(over the {settings.crt_national_max_age_days:.0f}-day window) — "
+            f"a count can agree while the geometry under it has been re-surveyed"
+        )
         return out
     out["current"] = True
-    out["why"] = (f"{have} feature(s), which is what the service publishes nationally "
-                  f"today, fetched {age:.0f} day(s) ago")
+    out["why"] = (
+        f"{have} feature(s), which is what the service publishes nationally " f"today, fetched {age:.0f} day(s) ago"
+    )
     return out
 
 
@@ -1412,15 +1547,25 @@ def national_card() -> dict:
         # against the live service can only be judged with internet; on the card, the
         # question is whether the file still is what the fetch wrote.
         cur = _currency(rec, path, (rec or {}).get("national_features"))
-        ok = bool(rec) and size is not None and rec.get("bytes") in (None, size) \
-            and rec.get("complete") is True
+        ok = bool(rec) and size is not None and rec.get("bytes") in (None, size) and rec.get("complete") is True
         complete = complete and ok
-        rows.append({**(rec or {"layer_key": key,
-                                "why": "no record beside this file — nothing can say "
-                                       "what is in it or when it was fetched"}),
-                     "layer_key": key,
-                     "on_card": size is not None, "bytes_on_disk": size,
-                     "intact": ok, "current": cur["current"], "currency": cur})
+        rows.append(
+            {
+                **(
+                    rec
+                    or {
+                        "layer_key": key,
+                        "why": "no record beside this file — nothing can say " "what is in it or when it was fetched",
+                    }
+                ),
+                "layer_key": key,
+                "on_card": size is not None,
+                "bytes_on_disk": size,
+                "intact": ok,
+                "current": cur["current"],
+                "currency": cur,
+            }
+        )
     partial = []
     whole = {r["layer_key"] for r in rows if r["intact"]}
     if d.is_dir():
@@ -1433,9 +1578,15 @@ def national_card() -> dict:
                 # unfinished for ever after. The next fetch clears the litter.
                 continue
             meta = _read_json_quiet(meta_p) or {}
-            partial.append({"layer_key": key, "features": meta.get("offset"),
-                            "pages": meta.get("pages"), "started": meta.get("started"),
-                            "touched": meta.get("touched")})
+            partial.append(
+                {
+                    "layer_key": key,
+                    "features": meta.get("offset"),
+                    "pages": meta.get("pages"),
+                    "started": meta.get("started"),
+                    "touched": meta.get("touched"),
+                }
+            )
     return {
         "scope": "national",
         "dir": str(d),
@@ -1451,8 +1602,7 @@ def national_card() -> dict:
         "warnings": (idx or {}).get("warnings") or [],
         "partial": partial,
         "expected_layers": (idx or {}).get("expected_layers"),
-        "complete": bool(rows) and complete and not partial
-                    and bool((idx or {}).get("complete")),
+        "complete": bool(rows) and complete and not partial and bool((idx or {}).get("complete")),
         "features": sum(r.get("features") or 0 for r in rows),
         "bytes": sum(r.get("bytes_on_disk") or 0 for r in rows),
     }
@@ -1471,20 +1621,25 @@ def national_is_stale() -> tuple[bool, str]:
     """
     card = national_card()
     if not card["layers"]:
-        return True, ("the Canal & River Trust's national layers have never been "
-                      "downloaded on this handheld")
+        return True, ("the Canal & River Trust's national layers have never been " "downloaded on this handheld")
     if card["partial"]:
         keys = ", ".join(p["layer_key"] for p in card["partial"][:4])
-        return True, (f"{len(card['partial'])} layer(s) are half-downloaded and will "
-                      f"continue from where they stopped ({keys})")
+        return True, (
+            f"{len(card['partial'])} layer(s) are half-downloaded and will "
+            f"continue from where they stopped ({keys})"
+        )
     broken = [r["layer_key"] for r in card["layers"] if not r["intact"]]
     if broken:
-        return True, (f"{len(broken)} layer file(s) are missing, unaccounted for, or no "
-                      f"longer what the fetch recorded writing "
-                      f"({', '.join(broken[:4])})")
+        return True, (
+            f"{len(broken)} layer file(s) are missing, unaccounted for, or no "
+            f"longer what the fetch recorded writing "
+            f"({', '.join(broken[:4])})"
+        )
     if not (card.get("state") == "done" and card.get("complete")):
-        return True, ("the last national fetch did not finish — what landed is on the "
-                      "card and the rest continues from where it stopped")
+        return True, (
+            "the last national fetch did not finish — what landed is on the "
+            "card and the rest continues from where it stopped"
+        )
     # AGE IS REPORTED, NOT ACTED ON. A complete card is never re-fetched on its own,
     # however old it is. The Trust's network does not move: locks and weirs are where
     # they were, and a canal that changed enough to matter changed slowly enough to
@@ -1499,12 +1654,16 @@ def national_is_stale() -> tuple[bool, str]:
     oldest = max(ages) if ages else None
     old_note = ""
     if oldest is not None and oldest > float(settings.crt_national_max_age_days):
-        old_note = (f". The oldest layer was fetched {oldest:.0f} days ago, past the "
-                    f"{settings.crt_national_max_age_days:.0f}-day window — press REFRESH "
-                    f"when you have a connection you are happy to spend, not at the water")
-    return False, (f"all {len(card['layers'])} national layer(s) are on this handheld, "
-                   f"{card['features']} feature(s), "
-                   f"{card['bytes'] / 1e6:.0f} MB — nothing needs the internet" + old_note)
+        old_note = (
+            f". The oldest layer was fetched {oldest:.0f} days ago, past the "
+            f"{settings.crt_national_max_age_days:.0f}-day window — press REFRESH "
+            f"when you have a connection you are happy to spend, not at the water"
+        )
+    return False, (
+        f"all {len(card['layers'])} national layer(s) are on this handheld, "
+        f"{card['features']} feature(s), "
+        f"{card['bytes'] / 1e6:.0f} MB — nothing needs the internet" + old_note
+    )
 
 
 # A second driver must not start a second national fetch. A plain flag rather than an
@@ -1538,9 +1697,7 @@ def _lock_holder() -> dict | None:
 
 
 def _take_lock() -> None:
-    _write_atomic(national_dir() / _LOCK,
-                  json.dumps({"pid": os.getpid(), "started": _iso(),
-                              "heartbeat": _iso()}))
+    _write_atomic(national_dir() / _LOCK, json.dumps({"pid": os.getpid(), "started": _iso(), "heartbeat": _iso()}))
 
 
 def national_running() -> bool:
@@ -1569,13 +1726,18 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     holder = _lock_holder()
     if _national_running or holder is not None:
-        return {"ok": False, "scope": "national", "busy": True,
-                "error": (f"a national fetch is already running"
-                          + (f" (process {holder.get('pid')}, started "
-                             f"{holder.get('started')})" if holder else "")
-                          + " — these are rate-limited public services, two jobs would "
-                            "halve the rate each, and both would be appending pages to "
-                            "the same half-downloaded layer")}
+        return {
+            "ok": False,
+            "scope": "national",
+            "busy": True,
+            "error": (
+                f"a national fetch is already running"
+                + (f" (process {holder.get('pid')}, started " f"{holder.get('started')})" if holder else "")
+                + " — these are rate-limited public services, two jobs would "
+                "halve the rate each, and both would be appending pages to "
+                "the same half-downloaded layer"
+            ),
+        }
     _national_running = True
     _take_lock()
     started = _iso()
@@ -1584,10 +1746,16 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
         layers = await inventory()
         if not layers:
             await emit({"state": "done", "ok": False, "layers": 0})
-            return {"ok": False, "scope": "national", "dir": str(out_dir),
-                    "error": ("no Trust service was reachable — this is a BOOTSTRAP task "
-                              "and it needs the internet. Nothing on this card was "
-                              "touched, and what is on it is still on it")}
+            return {
+                "ok": False,
+                "scope": "national",
+                "dir": str(out_dir),
+                "error": (
+                    "no Trust service was reachable — this is a BOOTSTRAP task "
+                    "and it needs the internet. Nothing on this card was "
+                    "touched, and what is on it is still on it"
+                ),
+            }
         await emit({"state": "catalogue", "layers": len(layers)})
 
         # WHAT WAS ON THE CARD BEFORE THIS RUN. The sweep at the bottom is judged
@@ -1602,39 +1770,46 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
         warnings: list[str] = []
         used: set[str] = set()
 
-        def index_now(state: str, finished: str | None = None,
-                      complete: bool = False) -> dict:
+        def index_now(state: str, finished: str | None = None, complete: bool = False) -> dict:
             return {
-                "scope": "national", "state": state, "complete": complete,
-                "started": started, "finished": finished, "heartbeat": _iso(),
+                "scope": "national",
+                "state": state,
+                "complete": complete,
+                "started": started,
+                "finished": finished,
+                "heartbeat": _iso(),
                 "pid": os.getpid(),
                 "generator": "api/nav/crt.py",
-                "hub": settings.crt_hub_search_url, "org": settings.crt_org_service_root,
-                "clip_rule": ("none — every layer is the whole national layer; an area "
-                              "clips a COPY for drawing and is never a precondition for "
-                              "having the data"),
-                "current_rule": (f"a layer is current when the file holds exactly as many "
-                                 f"features as the service publishes nationally today AND "
-                                 f"it was fetched within "
-                                 f"{settings.crt_national_max_age_days:.0f} days. Both are "
-                                 f"recorded per layer under `currency`"),
+                "hub": settings.crt_hub_search_url,
+                "org": settings.crt_org_service_root,
+                "clip_rule": (
+                    "none — every layer is the whole national layer; an area "
+                    "clips a COPY for drawing and is never a precondition for "
+                    "having the data"
+                ),
+                "current_rule": (
+                    f"a layer is current when the file holds exactly as many "
+                    f"features as the service publishes nationally today AND "
+                    f"it was fetched within "
+                    f"{settings.crt_national_max_age_days:.0f} days. Both are "
+                    f"recorded per layer under `currency`"
+                ),
                 "attribution": OGL_ATTRIBUTION,
                 "layers": fetched + kept + carried,
-                "skipped": skipped, "warnings": warnings,
+                "skipped": skipped,
+                "warnings": warnings,
                 "expected_layers": len(layers),
             }
 
-        def checkpoint(state: str = "running", finished: str | None = None,
-                       complete: bool = False) -> None:
+        def checkpoint(state: str = "running", finished: str | None = None, complete: bool = False) -> None:
             # THE INDEX IS REWRITTEN AFTER EVERY LAYER, not once at the end. A fetch
             # killed at the bank — Ctrl-C, a flat battery, a lid closed — otherwise
             # leaves 140 MB of perfectly good layers on the card with nothing on the
             # card saying they are there, and the console reports NOT DOWNLOADED over
             # data it is sitting on. It is a small file and this is cheap.
             try:
-                _write_atomic(national_provenance_path(),
-                              json.dumps(index_now(state, finished, complete), indent=1))
-                _take_lock()          # the heartbeat: this fetch is still alive
+                _write_atomic(national_provenance_path(), json.dumps(index_now(state, finished, complete), indent=1))
+                _take_lock()  # the heartbeat: this fetch is still alive
             except OSError as exc:
                 log.warning("could not write the national index: %s", exc)
 
@@ -1645,16 +1820,31 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
             used.add(key)
             klass = _classify_licence(lyr.get("licence"))
             national = lyr.get("national_features")
-            base = {"layer_key": key, "title": lyr.get("title"), "service": lyr["name"],
-                    "service_url": lyr["url"], "layer_id": lyr.get("layer_id"),
-                    "layer_name": lyr.get("layer_name"), "source": lyr.get("source"),
-                    "licence": lyr.get("licence"), "licence_class": klass,
-                    "licence_source": lyr.get("licence_source"),
-                    "licence_note": lyr.get("licence_note"),
-                    "redistributable": _redistributable(klass),
-                    "scope": "national"}
-            await emit({"state": "layer", "n": i + 1, "of": len(layers), "layer": key,
-                        "title": lyr.get("title"), "expect": national})
+            base = {
+                "layer_key": key,
+                "title": lyr.get("title"),
+                "service": lyr["name"],
+                "service_url": lyr["url"],
+                "layer_id": lyr.get("layer_id"),
+                "layer_name": lyr.get("layer_name"),
+                "source": lyr.get("source"),
+                "licence": lyr.get("licence"),
+                "licence_class": klass,
+                "licence_source": lyr.get("licence_source"),
+                "licence_note": lyr.get("licence_note"),
+                "redistributable": _redistributable(klass),
+                "scope": "national",
+            }
+            await emit(
+                {
+                    "state": "layer",
+                    "n": i + 1,
+                    "of": len(layers),
+                    "layer": key,
+                    "title": lyr.get("title"),
+                    "expect": national,
+                }
+            )
 
             if lyr.get("error"):
                 skipped.append({**base, "skipped": "unreadable", "why": lyr["error"]})
@@ -1662,14 +1852,19 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
                 checkpoint()
                 continue
             if not lyr.get("geometry_type"):
-                skipped.append({**base, "skipped": "no-geometry",
-                                "why": "layer publishes no geometry — nothing to draw"})
+                skipped.append(
+                    {**base, "skipped": "no-geometry", "why": "layer publishes no geometry — nothing to draw"}
+                )
                 checkpoint()
                 continue
             if klass == "restricted" and settings.crt_restricted == "skip":
-                skipped.append({**base, "skipped": "licence",
-                                "why": f"licence forbids reuse ({lyr.get('licence')!r}) "
-                                       f"and NAV_CRT_RESTRICTED=skip"})
+                skipped.append(
+                    {
+                        **base,
+                        "skipped": "licence",
+                        "why": f"licence forbids reuse ({lyr.get('licence')!r}) " f"and NAV_CRT_RESTRICTED=skip",
+                    }
+                )
                 checkpoint()
                 continue
             # NOTE WHAT IS *NOT* HERE. The area path skips a layer whose national count
@@ -1686,56 +1881,79 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
                 # NOT RE-FETCHED AND NOT RE-WRITTEN. The file and the record beside it
                 # are left exactly as they are: rewriting a layer nobody downloaded is
                 # how a good file becomes a truncated one for free.
-                rec = {**prior, **base, "currency": cur,
-                       "national_features": national, "refreshed": False}
+                rec = {**prior, **base, "currency": cur, "national_features": national, "refreshed": False}
                 kept.append(rec)
-                await emit({"state": "current", "layer": key,
-                            "features": rec.get("features"),
-                            "fetched": rec.get("fetched"), "why": cur["why"]})
+                await emit(
+                    {
+                        "state": "current",
+                        "layer": key,
+                        "features": rec.get("features"),
+                        "fetched": rec.get("fetched"),
+                        "why": cur["why"],
+                    }
+                )
                 checkpoint()
                 continue
 
             t0 = time.monotonic()
             ok, stats = await _fetch_layer_national(lyr, out_dir, key, emit)
-            rec = {**base,
-                   "fetched": _iso(),
-                   "geometry_type": lyr.get("geometry_type"),
-                   "object_id_field": lyr.get("object_id_field"),
-                   "storage_srs": lyr.get("storage_srs"), "out_srs": 4326,
-                   "national_features": national,
-                   "national_expected": lyr.get("national_expected"),
-                   "max_record_count": lyr.get("max_record_count"),
-                   "attribution": _attribution_for(klass, lyr.get("licence")),
-                   "refresh_reason": cur["why"],
-                   **stats}
+            rec = {
+                **base,
+                "fetched": _iso(),
+                "geometry_type": lyr.get("geometry_type"),
+                "object_id_field": lyr.get("object_id_field"),
+                "storage_srs": lyr.get("storage_srs"),
+                "out_srs": 4326,
+                "national_features": national,
+                "national_expected": lyr.get("national_expected"),
+                "max_record_count": lyr.get("max_record_count"),
+                "attribution": _attribution_for(klass, lyr.get("licence")),
+                "refresh_reason": cur["why"],
+                **stats,
+            }
 
             exp = lyr.get("national_expected")
             if exp is not None and national is not None and national != exp:
                 rec["national_drift"] = national - exp
-                warnings.append(f"{key}: {national} features nationwide, expected {exp} "
-                                f"(service changed, or a different service answered)")
+                warnings.append(
+                    f"{key}: {national} features nationwide, expected {exp} "
+                    f"(service changed, or a different service answered)"
+                )
             if national is None:
-                warnings.append(f"{key}: national count unavailable — truncation could "
-                                f"not be checked")
+                warnings.append(f"{key}: national count unavailable — truncation could " f"not be checked")
 
             if not ok:
                 # NO FILE, AND THE PAGES ARE KEPT. The area path throws a partial away
                 # because there is nothing to come back to; here the .resume pair is the
                 # thing the next run continues from, and it is named so that nothing
                 # globbing *.geojson can serve it as a layer.
-                skipped.append({**rec, "skipped": "fetch-failed",
-                                "why": stats.get("error", "fetch failed"),
-                                "note": (f"no layer file was written — a partial layer "
-                                         f"reads as 'nothing here'. The "
-                                         f"{stats.get('kept_partial', 0)} feature(s) that "
-                                         f"did arrive are kept in {key}{_RESUME_DATA} and "
-                                         f"the next run continues from there")})
-                warnings.append(f"{key}: {stats.get('error', 'fetch failed')} — layer NOT "
-                                f"written, {stats.get('kept_partial', 0)} feature(s) held "
-                                f"for the next run")
-                await emit({"state": "failed", "layer": key,
-                            "why": stats.get("error", "fetch failed"),
-                            "kept": stats.get("kept_partial", 0)})
+                skipped.append(
+                    {
+                        **rec,
+                        "skipped": "fetch-failed",
+                        "why": stats.get("error", "fetch failed"),
+                        "note": (
+                            f"no layer file was written — a partial layer "
+                            f"reads as 'nothing here'. The "
+                            f"{stats.get('kept_partial', 0)} feature(s) that "
+                            f"did arrive are kept in {key}{_RESUME_DATA} and "
+                            f"the next run continues from there"
+                        ),
+                    }
+                )
+                warnings.append(
+                    f"{key}: {stats.get('error', 'fetch failed')} — layer NOT "
+                    f"written, {stats.get('kept_partial', 0)} feature(s) held "
+                    f"for the next run"
+                )
+                await emit(
+                    {
+                        "state": "failed",
+                        "layer": key,
+                        "why": stats.get("error", "fetch failed"),
+                        "kept": stats.get("kept_partial", 0),
+                    }
+                )
                 checkpoint()
                 continue
 
@@ -1746,9 +1964,11 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
                 rec["count_check"] = "agrees"
             else:
                 rec["count_check"] = "disagrees"
-                warnings.append(f"{key}: the service counted {national} features "
-                                f"nationally and paging returned {got} — possible "
-                                f"truncation, or the layer changed under the fetch")
+                warnings.append(
+                    f"{key}: the service counted {national} features "
+                    f"nationally and paging returned {got} — possible "
+                    f"truncation, or the layer changed under the fetch"
+                )
 
             span = stats.get("feature_bbox")
             # WHAT GOES IN THE FILE, AND WHY MORE THAN THE FEATURES DOES. This file is
@@ -1759,12 +1979,14 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
             # wherever it is copied; `status` and `layer` are what the console reads to
             # tell real data from an ABSENT document; `clip` is explicitly null, which is
             # this file saying it is not a piece of something bigger.
-            head = {"type": "FeatureCollection",
-                    "attribution": rec["attribution"],
-                    "scope": "national",
-                    "status": "present",
-                    "layer": key,
-                    "clip": None}
+            head = {
+                "type": "FeatureCollection",
+                "attribution": rec["attribution"],
+                "scope": "national",
+                "status": "present",
+                "layer": key,
+                "clip": None,
+            }
             if span:
                 head["bbox"] = span
             path = out_dir / f"{key}.geojson"
@@ -1774,8 +1996,9 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
             # whose paging and the server's own count disagreed, is fetched again
             # rather than served as the whole layer for the rest of its life.
             rec["complete"] = rec["count_check"] != "disagrees"
-            rec["bytes"] = _write_collection_stream(path, out_dir / f"{key}{_RESUME_DATA}",
-                                                    head, national_index_path(key))
+            rec["bytes"] = _write_collection_stream(
+                path, out_dir / f"{key}{_RESUME_DATA}", head, national_index_path(key)
+            )
             rec["window_index"] = national_index_path(key).name
             rec["file"] = path.name
             rec["seconds"] = round(time.monotonic() - t0, 1)
@@ -1788,16 +2011,27 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
                 p.unlink(missing_ok=True)
             fetched.append(rec)
             if rec["redistributable"] is False:
-                warnings.append(f"{key}: licence REFUSES reuse ({lyr.get('licence')!r}) — "
-                                f"downloaded as this operator's own safety copy under "
-                                f"NAV_CRT_RESTRICTED=flag; DO NOT redistribute this file")
+                warnings.append(
+                    f"{key}: licence REFUSES reuse ({lyr.get('licence')!r}) — "
+                    f"downloaded as this operator's own safety copy under "
+                    f"NAV_CRT_RESTRICTED=flag; DO NOT redistribute this file"
+                )
             elif rec["redistributable"] is None:
-                warnings.append(f"{key}: licence is {klass} ({lyr.get('licence')!r}) — "
-                                f"real terms exist and are NOT quoted in the item "
-                                f"metadata, so this is cannot-tell, not permission")
-            await emit({"state": "wrote", "layer": key, "features": got,
-                        "bytes": rec["bytes"], "seconds": rec["seconds"],
-                        "of_national": national})
+                warnings.append(
+                    f"{key}: licence is {klass} ({lyr.get('licence')!r}) — "
+                    f"real terms exist and are NOT quoted in the item "
+                    f"metadata, so this is cannot-tell, not permission"
+                )
+            await emit(
+                {
+                    "state": "wrote",
+                    "layer": key,
+                    "features": got,
+                    "bytes": rec["bytes"],
+                    "seconds": rec["seconds"],
+                    "of_national": national,
+                }
+            )
             checkpoint()
 
         # ---- the sweep, under the same rule as the area path --------------------
@@ -1806,23 +2040,22 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
         # layer" and "we could not ask". See _SWEEP_FLOOR: a run that deleted a whole
         # card and reported success is what that constant is written against.
         skip_by_key = {s.get("layer_key"): s for s in skipped}
-        decided = {s["layer_key"] for s in skipped
-                   if s.get("skipped") in _DELIBERATE_SKIPS}
-        accounted = ({r["layer_key"] for r in fetched} | {r["layer_key"] for r in kept}
-                     | decided)
+        decided = {s["layer_key"] for s in skipped if s.get("skipped") in _DELIBERATE_SKIPS}
+        accounted = {r["layer_key"] for r in fetched} | {r["layer_key"] for r in kept} | decided
         covered = len(accounted & on_card_keys)
         floor = math.ceil(_SWEEP_FLOOR * len(on_card_keys))
         is_refresh = bool(fetched or kept) and covered >= floor
         removed: list[str] = []
         removed_keys: set[str] = set()
         for old in sorted(out_dir.glob("*.geojson")) + sorted(out_dir.glob("*.prov.json")):
-            k = (old.name[: -len(".prov.json")] if old.name.endswith(".prov.json")
-                 else old.name[: -len(".geojson")])
+            k = old.name[: -len(".prov.json")] if old.name.endswith(".prov.json") else old.name[: -len(".geojson")]
             if k in accounted:
                 continue
-            why_gone = ("left out of this run on purpose" if k in decided
-                        else "no longer offered by the Trust's services" if k not in used
-                        else "")
+            why_gone = (
+                "left out of this run on purpose"
+                if k in decided
+                else "no longer offered by the Trust's services" if k not in used else ""
+            )
             if is_refresh and why_gone:
                 old.unlink()
                 # The window index belongs to the file, so it goes with it. Left behind
@@ -1830,8 +2063,7 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
                 national_index_path(k).unlink(missing_ok=True)
                 removed.append(old.name)
                 removed_keys.add(k)
-                warnings.append(f"{old.name}: {why_gone} — deleted rather than served as "
-                                f"current")
+                warnings.append(f"{old.name}: {why_gone} — deleted rather than served as " f"current")
         # Resume litter for a layer that is now complete, or that no service offers any
         # more. Never touched for a layer whose fetch merely failed — that is the whole
         # point of it.
@@ -1865,20 +2097,22 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
             if k in accounted or k in removed_keys:
                 continue
             rec = _layer_record(out_dir, k)
-            why = ((skip_by_key.get(k) or {}).get("why")
-                   or "this run did not reach this layer at all")
+            why = (skip_by_key.get(k) or {}).get("why") or "this run did not reach this layer at all"
             if rec is None or rec.get("features") is None:
                 unaccounted.append(path.name)
-                warnings.append(f"{path.name}: on the card with no readable record "
-                                f"beside it — KEPT (nothing here deletes downloaded "
-                                f"data) but not listed as a layer, because nothing can "
-                                f"say what is in it or when it was fetched")
+                warnings.append(
+                    f"{path.name}: on the card with no readable record "
+                    f"beside it — KEPT (nothing here deletes downloaded "
+                    f"data) but not listed as a layer, because nothing can "
+                    f"say what is in it or when it was fetched"
+                )
                 continue
-            carried.append({**rec, "layer_key": k, "carried_over": True,
-                            "refresh_failed": why})
-            warnings.append(f"{k}: NOT refreshed by this run ({why}) — the file fetched "
-                            f"{rec.get('fetched')} is still on the card and is what the "
-                            f"console will draw. Older data, honestly dated, beats none")
+            carried.append({**rec, "layer_key": k, "carried_over": True, "refresh_failed": why})
+            warnings.append(
+                f"{k}: NOT refreshed by this run ({why}) — the file fetched "
+                f"{rec.get('fetched')} is still on the card and is what the "
+                f"console will draw. Older data, honestly dated, beats none"
+            )
         # Said in ONE place: a layer whose file survived is PRESENT, and reporting it as
         # both carried and skipped would have the console call it present and missing in
         # one breath.
@@ -1895,19 +2129,24 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
         finished = _iso()
         reasons: list[str] = []
         if failed:
-            reasons.append(f"{len(failed)} layer(s) did not complete: "
-                           + "; ".join(f"{s['layer_key']} ({s.get('why')})"
-                                       for s in failed[:6])
-                           + ". What did land is on the card and the part-downloaded "
-                             "layers continue where they stopped")
+            reasons.append(
+                f"{len(failed)} layer(s) did not complete: "
+                + "; ".join(f"{s['layer_key']} ({s.get('why')})" for s in failed[:6])
+                + ". What did land is on the card and the part-downloaded "
+                "layers continue where they stopped"
+            )
         if carried:
-            reasons.append(f"{len(carried)} layer(s) could not be refreshed and are "
-                           f"being served from an earlier fetch: "
-                           f"{', '.join(sorted(carried_keys))}")
+            reasons.append(
+                f"{len(carried)} layer(s) could not be refreshed and are "
+                f"being served from an earlier fetch: "
+                f"{', '.join(sorted(carried_keys))}"
+            )
         if unaccounted:
-            reasons.append(f"{len(unaccounted)} file(s) on this card have no readable "
-                           f"record and nothing claims to know what is in them: "
-                           f"{', '.join(unaccounted)}")
+            reasons.append(
+                f"{len(unaccounted)} file(s) on this card have no readable "
+                f"record and nothing claims to know what is in them: "
+                f"{', '.join(unaccounted)}"
+            )
         ok = not reasons
         # COMPLETE means every layer the Trust offered this run is on the card WHOLE —
         # not "the command finished", and not "some of it is here". An interrupted run
@@ -1917,19 +2156,34 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
         checkpoint("done" if ok else "failed", finished, complete)
 
         card = national_card()
-        res = {"ok": ok, "scope": "national", "dir": str(out_dir),
-               "layers": len(fetched) + len(kept) + len(carried),
-               "written": len(fetched), "already_current": len(kept),
-               "carried_over": len(carried),
-               "features": sum(r.get("features") or 0 for r in fetched + kept + carried),
-               "bytes": card["bytes"], "removed_stale": len(removed),
-               "skipped": len(skipped), "warnings": warnings,
-               "complete": card["complete"]}
+        res = {
+            "ok": ok,
+            "scope": "national",
+            "dir": str(out_dir),
+            "layers": len(fetched) + len(kept) + len(carried),
+            "written": len(fetched),
+            "already_current": len(kept),
+            "carried_over": len(carried),
+            "features": sum(r.get("features") or 0 for r in fetched + kept + carried),
+            "bytes": card["bytes"],
+            "removed_stale": len(removed),
+            "skipped": len(skipped),
+            "warnings": warnings,
+            "complete": card["complete"],
+        }
         if reasons:
             res["error"] = "; ".join(reasons)
-        await emit({"state": "done", "ok": ok, "layers": res["layers"],
-                    "written": res["written"], "current": res["already_current"],
-                    "features": res["features"], "bytes": res["bytes"]})
+        await emit(
+            {
+                "state": "done",
+                "ok": ok,
+                "layers": res["layers"],
+                "written": res["written"],
+                "current": res["already_current"],
+                "features": res["features"],
+                "bytes": res["bytes"],
+            }
+        )
         return res
     except asyncio.CancelledError:
         # STOPPED. Nothing is awaited on the way out — the loop is tearing this task
@@ -1974,9 +2228,11 @@ async def _main(argv: list[str]) -> int:
             exp = lyr.get("national_expected")
             nat = lyr.get("national_features")
             drift = "" if exp is None or nat is None or nat == exp else f"  DRIFT expected {exp}"
-            print(f"  {lyr['layer_key']:38} L{lyr['layer_id']} n={nat!s:6} "
-                  f"srs={lyr.get('storage_srs')!s:6} {_classify_licence(lyr.get('licence'))}"
-                  f"{drift}")
+            print(
+                f"  {lyr['layer_key']:38} L{lyr['layer_id']} n={nat!s:6} "
+                f"srs={lyr.get('storage_srs')!s:6} {_classify_licence(lyr.get('licence'))}"
+                f"{drift}"
+            )
         return 0
     if "--status" in argv:
         # DISK ONLY. This is the question an operator asks with no signal, so it may
@@ -1985,26 +2241,28 @@ async def _main(argv: list[str]) -> int:
         stale, why = national_is_stale()
         print(f"national : {card['dir']}")
         for r in card["layers"]:
-            print(f"  {r.get('layer_key'):38} {r.get('features')!s:>7} feat "
-                  f"{(r.get('bytes_on_disk') or 0):>12,} B  "
-                  f"{'intact' if r.get('intact') else 'MISSING/CHANGED':16} "
-                  f"{r.get('fetched')}")
+            print(
+                f"  {r.get('layer_key'):38} {r.get('features')!s:>7} feat "
+                f"{(r.get('bytes_on_disk') or 0):>12,} B  "
+                f"{'intact' if r.get('intact') else 'MISSING/CHANGED':16} "
+                f"{r.get('fetched')}"
+            )
         for p in card["partial"]:
-            print(f"  {p['layer_key']:38} {p.get('features')!s:>7} feat  PART-DOWNLOADED, "
-                  f"continues from there")
-        print(f"total    : {len(card['layers'])} layer(s), {card['features']} feature(s), "
-              f"{card['bytes']:,} bytes")
+            print(f"  {p['layer_key']:38} {p.get('features')!s:>7} feat  PART-DOWNLOADED, " f"continues from there")
+        print(f"total    : {len(card['layers'])} layer(s), {card['features']} feature(s), " f"{card['bytes']:,} bytes")
         print(f"verdict  : {'FETCH NEEDED — ' if stale else 'complete — '}{why}")
         return 0 if not stale else 1
     if "--national" in argv:
+
         async def say_national(msg: dict) -> None:
             print("  " + " ".join(f"{k}={v}" for k, v in msg.items()), flush=True)
-        res = await download_national(progress=say_national,
-                                      refresh="--refresh" in argv)
+
+        res = await download_national(progress=say_national, refresh="--refresh" in argv)
         print(json.dumps({k: v for k, v in res.items() if k != "warnings"}, indent=1))
         for w in res.get("warnings") or []:
             print(f"  warn : {w}")
         return 0 if res.get("ok") else 1
+
     def _is_flag(tok: str) -> bool:
         # "-1.925" is a longitude, not an option. Every bbox west of Greenwich starts with
         # a minus sign, so a plain startswith("-") test silently drops the whole bbox and

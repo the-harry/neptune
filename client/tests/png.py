@@ -5,6 +5,7 @@ Only what Chrome actually emits from Page.captureScreenshot is supported:
 rather than guessing — a screenshot comparison that silently misreads its input
 is worse than no comparison.
 """
+
 from __future__ import annotations
 
 import struct
@@ -18,10 +19,10 @@ def decode(data: bytes):
     pos, idat, w, h, ch = 8, bytearray(), 0, 0, 0
     bitdepth = colortype = interlace = None
     while pos < len(data):
-        (length,) = struct.unpack(">I", data[pos:pos + 4])
-        ctype = data[pos + 4:pos + 8]
-        body = data[pos + 8:pos + 8 + length]
-        pos += 12 + length                     # 4 len + 4 type + body + 4 crc
+        (length,) = struct.unpack(">I", data[pos : pos + 4])
+        ctype = data[pos + 4 : pos + 8]
+        body = data[pos + 8 : pos + 8 + length]
+        pos += 12 + length  # 4 len + 4 type + body + 4 crc
         if ctype == b"IHDR":
             w, h, bitdepth, colortype, _comp, _filt, interlace = struct.unpack(">IIBBBBB", body)
         elif ctype == b"IDAT":
@@ -37,19 +38,21 @@ def decode(data: bytes):
     prev = bytearray(stride)
     p = 0
     for y in range(h):
-        f = raw[p]; p += 1
-        line = bytearray(raw[p:p + stride]); p += stride
-        if f == 1:                                     # Sub
+        f = raw[p]
+        p += 1
+        line = bytearray(raw[p : p + stride])
+        p += stride
+        if f == 1:  # Sub
             for i in range(ch, stride):
                 line[i] = (line[i] + line[i - ch]) & 0xFF
-        elif f == 2:                                   # Up
+        elif f == 2:  # Up
             for i in range(stride):
                 line[i] = (line[i] + prev[i]) & 0xFF
-        elif f == 3:                                   # Average
+        elif f == 3:  # Average
             for i in range(stride):
                 a = line[i - ch] if i >= ch else 0
                 line[i] = (line[i] + ((a + prev[i]) >> 1)) & 0xFF
-        elif f == 4:                                   # Paeth
+        elif f == 4:  # Paeth
             for i in range(stride):
                 a = line[i - ch] if i >= ch else 0
                 b = prev[i]
@@ -59,7 +62,7 @@ def decode(data: bytes):
                 line[i] = (line[i] + pr) & 0xFF
         elif f != 0:
             raise ValueError(f"bad PNG filter {f}")
-        out[y * stride:(y + 1) * stride] = line
+        out[y * stride : (y + 1) * stride] = line
         prev = line
     return w, h, ch, bytes(out)
 
@@ -84,8 +87,6 @@ def diff(a: bytes, b: bytes, tol: int = 12):
     bad = 0
     for i in range(n):
         ai, bi = i * ac, i * bc
-        if (abs(ap[ai] - bp[bi]) > tol or
-                abs(ap[ai + 1] - bp[bi + 1]) > tol or
-                abs(ap[ai + 2] - bp[bi + 2]) > tol):
+        if abs(ap[ai] - bp[bi]) > tol or abs(ap[ai + 1] - bp[bi + 1]) > tol or abs(ap[ai + 2] - bp[bi + 2]) > tol:
             bad += 1
     return bad / n, f"{bad} of {n} pixels"

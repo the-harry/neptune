@@ -6,6 +6,7 @@ Inbound (client -> server) is a discriminated union on `type`; parse with
 frame can never crash the socket. Outbound (server -> client) models are dumped
 to dicts by the app.
 """
+
 from __future__ import annotations
 
 import logging
@@ -17,16 +18,17 @@ log = logging.getLogger("neptune.proto")
 
 # ---- inbound: client -> server -------------------------------------------
 
+
 class ControlMsg(BaseModel):
     type: Literal["control"]
-    throttle: float = 0.0   # -1..1 (clamped on apply)
-    steer: float = 0.0      # -1..1
+    throttle: float = 0.0  # -1..1 (clamped on apply)
+    steer: float = 0.0  # -1..1
 
 
 class CameraMsg(BaseModel):
     type: Literal["camera"]
-    pan: float = 0.0        # -1..1
-    tilt: float = 0.0       # -1..1
+    pan: float = 0.0  # -1..1
+    tilt: float = 0.0  # -1..1
 
 
 class BallastMsg(BaseModel):
@@ -40,12 +42,12 @@ class CommandMsg(BaseModel):
     # arm|disarm|stop|surface|ballast_home carry no value; magnet/light_* carry
     # bool; *_level carry float; dropweight carries "release".
     value: Optional[Union[bool, float, str]] = None
-    c_id: Optional[str] = None      # correlation id (§3) — carried through every stage, echoed in the ack
+    c_id: Optional[str] = None  # correlation id (§3) — carried through every stage, echoed in the ack
 
 
 class PingMsg(BaseModel):
     type: Literal["ping"]
-    t1: Optional[float] = None      # client monotonic ms at send (§2 SNTP) — echoed back in the pong
+    t1: Optional[float] = None  # client monotonic ms at send (§2 SNTP) — echoed back in the pong
 
 
 Inbound = Annotated[
@@ -55,17 +57,27 @@ Inbound = Annotated[
 _inbound_adapter: TypeAdapter = TypeAdapter(Inbound)
 
 # Command names the server understands (anything else is logged + ignored).
-COMMAND_NAMES = frozenset({
-    "arm", "disarm", "stop", "surface", "magnet", "ballast_home",
-    "light_green", "light_white", "light_green_level", "light_white_level",
-    "dropweight",
-    # RE-ARM THE LEAK DETECTOR. A command and not an endpoint, so it goes through
-    # the same recv/validate/apply/ack lifecycle everything else does and lands in
-    # the blackbox with a c_id — dismissing the vehicle's strongest claim is
-    # exactly the kind of thing that has to be findable in the log afterwards.
-    # The hardware layer refuses it outright while a probe is wet.
-    "leak_reset",
-})
+COMMAND_NAMES = frozenset(
+    {
+        "arm",
+        "disarm",
+        "stop",
+        "surface",
+        "magnet",
+        "ballast_home",
+        "light_green",
+        "light_white",
+        "light_green_level",
+        "light_white_level",
+        "dropweight",
+        # RE-ARM THE LEAK DETECTOR. A command and not an endpoint, so it goes through
+        # the same recv/validate/apply/ack lifecycle everything else does and lands in
+        # the blackbox with a c_id — dismissing the vehicle's strongest claim is
+        # exactly the kind of thing that has to be findable in the log afterwards.
+        # The hardware layer refuses it outright while a probe is wet.
+        "leak_reset",
+    }
+)
 
 
 def parse_inbound(raw: str | bytes):
@@ -82,10 +94,11 @@ def parse_inbound(raw: str | bytes):
 
 # ---- outbound: server -> client ------------------------------------------
 
+
 class Telemetry(BaseModel):
     type: Literal["telemetry"] = "telemetry"
-    seq: Optional[int] = None       # monotonically increasing frame number (§4 — client gap detection)
-    t: Optional[float] = None       # Pi monotonic ms at send (§2/§4 — staleness/max_age)
+    seq: Optional[int] = None  # monotonically increasing frame number (§4 — client gap detection)
+    t: Optional[float] = None  # Pi monotonic ms at send (§2/§4 — staleness/max_age)
     armed: bool
     left: float
     right: float
@@ -264,10 +277,10 @@ class Telemetry(BaseModel):
     # pitch and roll are independently nullable because read_pitch_roll returns a
     # pair and the base class says either element may be absent on its own; in
     # practice they arrive and leave together with the chip.
-    gyro_z_dps: Optional[float] = None      # yaw rate, deg/s, + = clockwise (compass convention)
-    accel_fwd_ms2: Optional[float] = None   # forward linear acceleration, m/s², + = ahead
-    pitch_deg: Optional[float] = None       # + = nose up
-    roll_deg: Optional[float] = None        # + = starboard down
+    gyro_z_dps: Optional[float] = None  # yaw rate, deg/s, + = clockwise (compass convention)
+    accel_fwd_ms2: Optional[float] = None  # forward linear acceleration, m/s², + = ahead
+    pitch_deg: Optional[float] = None  # + = nose up
+    roll_deg: Optional[float] = None  # + = starboard down
     # Pack current from the INA219 — free from the same chip as the voltage, and
     # the number the power budget is written against. None = no current sense.
     #
@@ -338,13 +351,14 @@ class Alarm(BaseModel):
 
 class Pong(BaseModel):
     type: Literal["pong"] = "pong"
-    t1: Optional[float] = None      # echoed client send time
-    t2: Optional[float] = None      # Pi monotonic ms at receive  (§2 SNTP)
-    t3: Optional[float] = None      # Pi monotonic ms at send
+    t1: Optional[float] = None  # echoed client send time
+    t2: Optional[float] = None  # Pi monotonic ms at receive  (§2 SNTP)
+    t3: Optional[float] = None  # Pi monotonic ms at send
 
 
 class Ack(BaseModel):
     """Command acknowledgement (§3) — closes the correlation loop back to the client."""
+
     type: Literal["ack"] = "ack"
     c_id: Optional[str] = None
     name: str

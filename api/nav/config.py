@@ -1,29 +1,38 @@
 """Navigation config. Env-overridable. Isolated-segment friendly (no hostnames)."""
+
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parent.parent.parent   # …/sub
+_ROOT = Path(__file__).resolve().parent.parent.parent  # …/sub
 
 
 def _f(env, d):
-    try: return float(os.environ[env])
-    except (KeyError, ValueError): return d
+    try:
+        return float(os.environ[env])
+    except (KeyError, ValueError):
+        return d
+
 
 def _i(env, d):
-    try: return int(os.environ[env])
-    except (KeyError, ValueError): return d
+    try:
+        return int(os.environ[env])
+    except (KeyError, ValueError):
+        return d
+
 
 def _s(env, d):
     return os.environ.get(env, d)
+
 
 def _b(env, d):
     v = os.environ.get(env)
     if v is None:
         return d
     return v.strip().lower() in ("1", "true", "yes", "on")
+
 
 def _csv(env, d):
     """Comma-separated env override → tuple. Empty string means an EMPTY list, not the
@@ -42,7 +51,7 @@ EARTH_R = 6378137.0
 @dataclass(frozen=True)
 class NavSettings:
     # --- loop rates ---
-    dr_hz: float = field(default_factory=lambda: _f("NAV_DR_HZ", 10.0))       # dead-reckoning (§5.2)
+    dr_hz: float = field(default_factory=lambda: _f("NAV_DR_HZ", 10.0))  # dead-reckoning (§5.2)
     broadcast_hz: float = field(default_factory=lambda: _f("NAV_BCAST_HZ", 10.0))  # WS push / map redraw cap (§7.5)
 
     # --- origin gating (§4.2) ---
@@ -118,14 +127,18 @@ class NavSettings:
 
     # --- satellite basemap downloader (§3/§4) — raster tiles → MBTiles ---
     # {z}/{y}/{x} for Esri World Imagery (y BEFORE x). Provider-configurable (§3.1).
-    sat_tile_url: str = field(default_factory=lambda: _s(
-        "NAV_SAT_URL",
-        "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"))
+    sat_tile_url: str = field(
+        default_factory=lambda: _s(
+            "NAV_SAT_URL",
+            "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        )
+    )
     sat_attribution: str = field(default_factory=lambda: _s("NAV_SAT_ATTR", "Imagery © Esri"))
-    sat_user_agent: str = field(default_factory=lambda: _s(
-        "NAV_SAT_UA", "NeptuneROV/1.0 (canal survey; offline tile cache)"))
+    sat_user_agent: str = field(
+        default_factory=lambda: _s("NAV_SAT_UA", "NeptuneROV/1.0 (canal survey; offline tile cache)")
+    )
     sat_min_zoom: int = field(default_factory=lambda: _i("NAV_SAT_ZMIN", 16))
-    sat_max_zoom: int = field(default_factory=lambda: _i("NAV_SAT_ZMAX", 18))     # 'High' detail adds z19 (§4)
+    sat_max_zoom: int = field(default_factory=lambda: _i("NAV_SAT_ZMAX", 18))  # 'High' detail adds z19 (§4)
     sat_rate_per_s: float = field(default_factory=lambda: _f("NAV_SAT_RATE", 6.0))  # polite throttle (§3.2)
     sat_tile_cap: int = field(default_factory=lambda: _i("NAV_SAT_TILE_CAP", 8000))
     sat_avg_kb: float = field(default_factory=lambda: _f("NAV_SAT_AVG_KB", 20.0))  # for size estimates (§3.3)
@@ -193,34 +206,44 @@ class NavSettings:
     #
     # The ArcGIS Hub search endpoint. Enumerates the ~20 datasets CRT publishes as open
     # data; each item's properties.url is a FeatureServer root.
-    crt_hub_search_url: str = field(default_factory=lambda: _s(
-        "NAV_CRT_HUB",
-        "https://data-canalrivertrust.opendata.arcgis.com/api/search/v1/collections/dataset/items?limit=100"))
+    crt_hub_search_url: str = field(
+        default_factory=lambda: _s(
+            "NAV_CRT_HUB",
+            "https://data-canalrivertrust.opendata.arcgis.com/api/search/v1/collections/dataset/items?limit=100",
+        )
+    )
     # The org's own service root. The Hub is a WINDOW onto 204 services and the best hazard
     # layers are not in that window — sluices, safety gates, stop-plank grooves and outfalls
     # are all reachable here and none of them is on the Hub.
-    crt_org_service_root: str = field(default_factory=lambda: _s(
-        "NAV_CRT_ORG", "https://services.arcgis.com/DknzyjEEie5tEW0u/arcgis/rest/services"))
+    crt_org_service_root: str = field(
+        default_factory=lambda: _s("NAV_CRT_ORG", "https://services.arcgis.com/DknzyjEEie5tEW0u/arcgis/rest/services")
+    )
     # Item metadata (licence text) for a service, looked up by its serviceItemId. A
     # FeatureServer root carries copyrightText — an ATTRIBUTION — and no licence at all, so
     # the terms have to be read from the item or they are being assumed.
-    crt_item_lookup_url: str = field(default_factory=lambda: _s(
-        "NAV_CRT_ITEMS", "https://www.arcgis.com/sharing/rest/content/items"))
+    crt_item_lookup_url: str = field(
+        default_factory=lambda: _s("NAV_CRT_ITEMS", "https://www.arcgis.com/sharing/rest/content/items")
+    )
     # Hardcoded because they are NOT discoverable from the Hub, verified 2026-08-07 against
     # the live org (national feature counts in nav/crt.py's _EXPECTED_FEATURES). Names are
     # deliberately the Hub-curated *_View / *_View_Public family: the org also carries older
     # near-duplicates — five separate Sluices services answering 886, 892, 893 and 937 —
     # and picking one by its name being shorter is how a survey gets 44 sluices it will
     # never be told about.
-    crt_extra_services: tuple = field(default_factory=lambda: _csv("NAV_CRT_EXTRA", (
-        "Canal_And_River_Trust_Sluices_View",
-        "Safety_Gates_View_Public",
-        "Stop_Plank_Grooves_View_Public",
-        "Outfall_Discharge_Points_View_Public",
-        "Towpath_Access_Points_2022",
-        "Canal_And_River_Trust_Moorings_All_View",
-        "Canal_And_River_Trust_Feeders_View",
-    )))
+    crt_extra_services: tuple = field(
+        default_factory=lambda: _csv(
+            "NAV_CRT_EXTRA",
+            (
+                "Canal_And_River_Trust_Sluices_View",
+                "Safety_Gates_View_Public",
+                "Stop_Plank_Grooves_View_Public",
+                "Outfall_Discharge_Points_View_Public",
+                "Towpath_Access_Points_2022",
+                "Canal_And_River_Trust_Moorings_All_View",
+                "Canal_And_River_Trust_Feeders_View",
+            ),
+        )
+    )
     # Requests per second, sequential. Same reasoning as sat_rate_per_s: a full run is a few
     # hundred requests against somebody's free ArcGIS quota, and being blocked mid-bootstrap
     # leaves half an area on disk.
@@ -262,8 +285,7 @@ class NavSettings:
     # Both must hold, or the layer is re-fetched — from where it got to, never from
     # scratch. Neither can be tested with no internet, and with no internet nothing is
     # re-fetched anyway: what is on the card is served, dated, exactly as it is.
-    crt_national_max_age_days: float = field(
-        default_factory=lambda: _f("NAV_CRT_NATIONAL_MAX_AGE_DAYS", 90.0))
+    crt_national_max_age_days: float = field(default_factory=lambda: _f("NAV_CRT_NATIONAL_MAX_AGE_DAYS", 90.0))
     # Fetch the national set in the background when the map backend starts, if it is
     # missing or incomplete. Off (0) for a bench that must touch no network at all;
     # the fetch is still one CLI command away, and the console can still ask for it.
@@ -304,8 +326,9 @@ class NavSettings:
     # own safety copy, not a republication — and marks them redistributable=false in every
     # provenance record. Set "skip" to leave the tree clean enough to publish.
     crt_restricted: str = field(default_factory=lambda: _s("NAV_CRT_RESTRICTED", "flag"))
-    crt_user_agent: str = field(default_factory=lambda: _s(
-        "NAV_CRT_UA", "NeptuneROV/1.0 (canal survey; offline hazard cache)"))
+    crt_user_agent: str = field(
+        default_factory=lambda: _s("NAV_CRT_UA", "NeptuneROV/1.0 (canal survey; offline hazard cache)")
+    )
 
     # --- LIDAR launch-bank layer (nav/lidar.py) — BOOTSTRAP-ONLY DOWNLOAD -------
     #
@@ -325,20 +348,25 @@ class NavSettings:
     #
     # The WCS endpoint. Verified live 2026-08-08 against a Regent's Canal box at
     # Camden: 2,523,587 bytes, a 358x453 float32 grid, 21.54-35.03 m OD, 4.94% nodata.
-    lidar_wcs_url: str = field(default_factory=lambda: _s(
-        "NAV_LIDAR_WCS",
-        "https://environment.data.gov.uk/spatialdata/"
-        "lidar-composite-digital-terrain-model-dtm-1m-2022/wcs"))
-    lidar_coverage_id: str = field(default_factory=lambda: _s(
-        "NAV_LIDAR_COVERAGE",
-        "13787b9a-26a4-4775-8523-806d13af58fc__Lidar_Composite_Elevation_DTM_1m"))
+    lidar_wcs_url: str = field(
+        default_factory=lambda: _s(
+            "NAV_LIDAR_WCS",
+            "https://environment.data.gov.uk/spatialdata/" "lidar-composite-digital-terrain-model-dtm-1m-2022/wcs",
+        )
+    )
+    lidar_coverage_id: str = field(
+        default_factory=lambda: _s(
+            "NAV_LIDAR_COVERAGE", "13787b9a-26a4-4775-8523-806d13af58fc__Lidar_Composite_Elevation_DTM_1m"
+        )
+    )
     # SUBSETTING CRS IS NOT DECORATION. DescribeCoverage says this coverage is natively
     # EPSG:27700 with axis labels "E N", so `subset=Long(...)` names an axis it does not
     # have — and the service does not say so. It answers HTTP 500 "Internal server
     # error", which reads as the service being down. With this parameter the identical
     # request returns 200 and a GeoTIFF. Measured, both ways, on the same minute.
-    lidar_subset_crs: str = field(default_factory=lambda: _s(
-        "NAV_LIDAR_SUBSET_CRS", "http://www.opengis.net/def/crs/EPSG/0/4326"))
+    lidar_subset_crs: str = field(
+        default_factory=lambda: _s("NAV_LIDAR_SUBSET_CRS", "http://www.opengis.net/def/crs/EPSG/0/4326")
+    )
     # UNCOMPRESSED ON PURPOSE, and this one cost a measurement to learn. The service
     # honours &compression=DEFLATE and it is a 7.5x saving on the wire (2,523,587 bytes
     # -> 337,867 for the same Camden box, and faster). It is not used because PILLOW
@@ -347,12 +375,16 @@ class NavSettings:
     # a pixel whose true value is 31.73 m OD into 2.08e-32. A wrong elevation is worse
     # than a missing one, because nothing downstream can tell that it is wrong.
     lidar_format: str = field(default_factory=lambda: _s("NAV_LIDAR_FORMAT", "image/tiff"))
-    lidar_user_agent: str = field(default_factory=lambda: _s(
-        "NAV_LIDAR_UA", "NeptuneROV/1.0 (canal survey; offline lidar cache)"))
-    lidar_attribution: str = field(default_factory=lambda: _s(
-        "NAV_LIDAR_ATTR",
-        "Contains public sector information licensed under the Open Government Licence "
-        "v3.0 — Environment Agency LIDAR Composite DTM 1 m, 2022"))
+    lidar_user_agent: str = field(
+        default_factory=lambda: _s("NAV_LIDAR_UA", "NeptuneROV/1.0 (canal survey; offline lidar cache)")
+    )
+    lidar_attribution: str = field(
+        default_factory=lambda: _s(
+            "NAV_LIDAR_ATTR",
+            "Contains public sector information licensed under the Open Government Licence "
+            "v3.0 — Environment Agency LIDAR Composite DTM 1 m, 2022",
+        )
+    )
     # The survey the data is from, carried into every provenance record. BANKS CHANGE:
     # a wall built in 2024 is not in a 2022 survey, and an operator who is not told the
     # vintage cannot weigh that. Written down rather than derived because the service
@@ -400,8 +432,7 @@ class NavSettings:
     lidar_fetch_margin_m: float = field(default_factory=lambda: _f("NAV_LIDAR_MARGIN_M", 150.0))
     # The layer key inside data/crt/national/. Already on the card, nationally, 3,173
     # features — `python -m nav.cli crt-fetch` put it there and this never re-fetches it.
-    lidar_centreline_layer: str = field(default_factory=lambda: _s(
-        "NAV_LIDAR_CENTRELINE", "canals-by-km-length-1"))
+    lidar_centreline_layer: str = field(default_factory=lambda: _s("NAV_LIDAR_CENTRELINE", "canals-by-km-length-1"))
     # Suffix on the DIRECTORY beside the imagery: data/areas/<name>.lidar/. It has to be
     # a directory, not files called <name>.dtm.json and friends, because
     # areas.list_areas() globs areas/*.json and would read one as an area called

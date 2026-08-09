@@ -6,6 +6,7 @@ Two ways to run:
                  and drives start()/stop() from its own lifespan, so both control
                  planes share one :8000 origin (spec §7 topology).
 """
+
 from __future__ import annotations
 
 import contextlib

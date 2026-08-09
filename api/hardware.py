@@ -44,6 +44,7 @@ decode, ballast step accounting) lives at MODULE scope rather than inside
 RealHardware, because RealHardware cannot be constructed on a laptop — logic
 locked inside it is logic no bench test can ever run. Both backends share it.
 """
+
 from __future__ import annotations
 
 import logging
@@ -54,6 +55,7 @@ from abc import ABC, abstractmethod
 from collections import deque
 
 from config import settings
+
 # Sensor CALIBRATION constants (metres per pulse, mounting offset, windows) are
 # navigation's, not the vehicle's — they are what the dive log and the estimator
 # are calibrated against, so they live in one place and this file reads them.
@@ -224,8 +226,14 @@ class PaddleWheel:
 # absent (→ 0) because two edges arrived between reads and the direction is then
 # genuinely unknowable — inventing ±2 there would fabricate tether length.
 _QUAD_STEP = {
-    0b0010: +1, 0b1011: +1, 0b1101: +1, 0b0100: +1,   # A leads B → paying out
-    0b0001: -1, 0b0111: -1, 0b1110: -1, 0b1000: -1,   # B leads A → rewinding
+    0b0010: +1,
+    0b1011: +1,
+    0b1101: +1,
+    0b0100: +1,  # A leads B → paying out
+    0b0001: -1,
+    0b0111: -1,
+    0b1110: -1,
+    0b1000: -1,  # B leads A → rewinding
 }
 
 
@@ -248,7 +256,7 @@ class QuadratureDecoder:
 
     def __init__(self) -> None:
         self.ticks = 0
-        self.missed = 0          # both bits changed between reads: an edge got past us
+        self.missed = 0  # both bits changed between reads: an edge got past us
         self._prev: int | None = None
 
     def update(self, a: bool, b: bool) -> int:
@@ -348,7 +356,10 @@ class BallastAxis:
                 "ballast: FULL limit closed at %d steps but the configured span is %d "
                 "(%.1f%% out) — steps were skipped, or NEPTUNE_BALLAST_SPAN_STEPS is "
                 "stale. The level is not trustworthy until ballast_home() runs again.",
-                actual, expected, 100.0 * abs(actual - expected) / self.span)
+                actual,
+                expected,
+                100.0 * abs(actual - expected) / self.span,
+            )
         return skipped
 
 
@@ -368,9 +379,9 @@ def thruster_duty(v: float, deadband: float) -> tuple[int, int, float]:
     return (0, 1, -v)
 
 
-def leak_probe_fault_from(warn_wet: bool, flood_wet: bool,
-                          warn_wet_at_boot: bool = False,
-                          flood_wet_at_boot: bool = False) -> str | None:
+def leak_probe_fault_from(
+    warn_wet: bool, flood_wet: bool, warn_wet_at_boot: bool = False, flood_wet_at_boot: bool = False
+) -> str | None:
     """Which leak probe is lying: "warn" | "flood" | "warn+flood" | None.
 
     A dead probe reads dry forever, and that is the ONE failure the two-probe
@@ -409,8 +420,7 @@ def leak_probe_fault_from(warn_wet: bool, flood_wet: bool,
 LEAK_UNKNOWN = "UNKNOWN"
 
 
-def leak_state_from(warn_wet: bool, flood_wet: bool, sampling: bool = True,
-                    probe_fault: str | None = None) -> str:
+def leak_state_from(warn_wet: bool, flood_wet: bool, sampling: bool = True, probe_fault: str | None = None) -> str:
     """The leak stage: "FLOOD" | "WARN" | "UNKNOWN" | "NORMAL".
 
     THE FAILURE THIS EXISTS FOR. Leak detection was the only reading on the
@@ -490,6 +500,7 @@ class HardwareBase(ABC):
     def get_magnet(self) -> bool: ...
     @abstractmethod
     def get_light(self, which: Which) -> tuple[bool, float]: ...
+
     # 0..1 of the calibrated stroke — or None, meaning NEVER HOMED and the
     # position is genuinely unknown. The syringe is driven open-loop by a stepper
     # with no position sensor, so from power-on until ballast_home() has zeroed
@@ -498,6 +509,7 @@ class HardwareBase(ABC):
     # thing the vehicle cannot see, and the operator would dive on it.
     @abstractmethod
     def get_ballast_level(self) -> float | None: ...
+
     # THE THREE READINGS BELOW MAY BE None, AND None IS THE MOST URGENT ANSWER
     # ANY OF THEM CAN GIVE: the device behind it is not answering RIGHT NOW —
     # never wired, or wired and stopped. It is NOT "this frame is a bit old".
@@ -506,9 +518,10 @@ class HardwareBase(ABC):
     # while the sub descends to 8 is not a stale reading, it is a false one, and
     # it is false in the direction that drowns a vehicle in a canal lock.
     @abstractmethod
-    def read_pressure(self) -> float | None: ...   # PSI, or None = no depth sensor answering
+    def read_pressure(self) -> float | None: ...  # PSI, or None = no depth sensor answering
     @abstractmethod
-    def read_heading(self) -> float | None: ...    # degrees 0..360, or None = no compass answering
+    def read_heading(self) -> float | None: ...  # degrees 0..360, or None = no compass answering
+
     # "NORMAL" | "WARN" | "FLOOD" | "UNKNOWN" (== LEAK_UNKNOWN). The fourth one is
     # the cannot-tell and it is NOT decoration: "NORMAL" asserts that both probes
     # were read and both were dry, which is the strongest reassurance this vehicle
@@ -518,7 +531,8 @@ class HardwareBase(ABC):
     @abstractmethod
     def read_leak(self) -> str: ...
     @abstractmethod
-    def read_voltage(self) -> float | None: ...    # volts, or None = no pack monitor answering
+    def read_voltage(self) -> float | None: ...  # volts, or None = no pack monitor answering
+
     # 0..4 bars, -1 = tether down AND the cannot-tell: an int field on the wire has
     # no null to spend, and -1 is the only value here that is not a claim the link
     # is working. A backend whose link sampler has stopped reports -1 rather than
@@ -563,8 +577,7 @@ class HardwareBase(ABC):
         because a backend with no latches has nothing to re-arm, and saying so is
         a real answer.
         """
-        return {"ok": False, "cleared": [],
-                "why": "this hardware backend has no leak latches to clear"}
+        return {"ok": False, "cleared": [], "why": "this hardware backend has no leak latches to clear"}
 
     def read_gyro_z_dps(self) -> float | None:
         # IMU yaw rate, deg/s, + = clockwise (compass convention). None = no gyro
@@ -740,7 +753,7 @@ class MockHardware(HardwareBase):
     SUBSYSTEMS = ("leak-probes", "sensor-thread")
 
     def __init__(self) -> None:
-        self._clock = 0.0             # simulated seconds since construction
+        self._clock = 0.0  # simulated seconds since construction
         self._armed = False
         self._left = 0.0
         self._right = 0.0
@@ -756,7 +769,7 @@ class MockHardware(HardwareBase):
         self._heading = 284.0
         self._gyro_z = 0.0
         self._accel_fwd = 0.0
-        self._speed = 0.0             # signed water-relative speed, m/s
+        self._speed = 0.0  # signed water-relative speed, m/s
         self._mag_cal = 3
         self._payout_m = 0.0
         # --- ballast: what the vehicle BELIEVES vs what is actually true ------
@@ -775,9 +788,7 @@ class MockHardware(HardwareBase):
         self._probe_flood_boot = False
         self._leak_rearms = 0
         # --- paddlewheel ------------------------------------------------------
-        self._paddle = PaddleWheel(nav_settings.m_per_pulse,
-                                   nav_settings.paddle_window_s,
-                                   nav_settings.paddle_stale_s)
+        self._paddle = PaddleWheel(nav_settings.m_per_pulse, nav_settings.paddle_window_s, nav_settings.paddle_stale_s)
         self._paddle_frac = 0.0
         self._paddle_jammed = False
         # --- chips that have been killed by the test hook ---------------------
@@ -840,8 +851,7 @@ class MockHardware(HardwareBase):
 
     def release_dropweight(self) -> None:
         self._dropped = True
-        log.warning("MOCK: drop-weight released (irreversible) — v2 hardware, "
-                    "nothing is fitted on the real vehicle")
+        log.warning("MOCK: drop-weight released (irreversible) — v2 hardware, " "nothing is fitted on the real vehicle")
 
     # readbacks
     def get_magnet(self) -> bool:
@@ -935,15 +945,15 @@ class MockHardware(HardwareBase):
         # verdict itself is the shared one, so this is the code the vehicle runs —
         # including the rule that a probe already known faulty does not get to
         # certify the hull dry.
-        return leak_state_from(self._probe_warn_wet, self._probe_flood_wet,
-                               sampling, self.leak_probe_fault())
+        return leak_state_from(self._probe_warn_wet, self._probe_flood_wet, sampling, self.leak_probe_fault())
 
     def leak_probe_fault(self) -> str | None:
         # Same rule the Pi runs — the mock feeds raw probe states through the
         # shared detector instead of reimplementing the verdict, so a test that
         # exercises this here is testing the code the vehicle uses.
-        return leak_probe_fault_from(self._probe_warn_wet, self._probe_flood_wet,
-                                     self._probe_warn_boot, self._probe_flood_boot)
+        return leak_probe_fault_from(
+            self._probe_warn_wet, self._probe_flood_wet, self._probe_warn_boot, self._probe_flood_boot
+        )
 
     def reset_leak_latches(self) -> dict:
         # SAME REFUSAL AS THE VEHICLE, and it has to be here rather than only on
@@ -951,24 +961,41 @@ class MockHardware(HardwareBase):
         # guard that only exists on hardware no laptop can construct is a guard
         # no test will ever run. The mock has raw probe bits where the Pi has
         # debouncers, so "wet right now" is read off those.
-        wet_now = [n for n, w in (("warn", self._probe_warn_wet),
-                                  ("flood", self._probe_flood_wet)) if w]
+        wet_now = [n for n, w in (("warn", self._probe_warn_wet), ("flood", self._probe_flood_wet)) if w]
         if wet_now:
             log.warning("leak re-arm REFUSED (mock): %s probe(s) wet", "+".join(wet_now))
-            return {"ok": False, "cleared": [], "wet_now": wet_now,
-                    "why": (f"the {' and '.join(wet_now)} probe is WET RIGHT NOW. This clears "
-                            f"the memory of water, never water that is present")}
-        cleared = [n for n, b in (("warn-wet-at-boot", self._probe_warn_boot),
-                                  ("flood-wet-at-boot", self._probe_flood_boot)) if b]
+            return {
+                "ok": False,
+                "cleared": [],
+                "wet_now": wet_now,
+                "why": (
+                    f"the {' and '.join(wet_now)} probe is WET RIGHT NOW. This clears "
+                    f"the memory of water, never water that is present"
+                ),
+            }
+        cleared = [
+            n
+            for n, b in (("warn-wet-at-boot", self._probe_warn_boot), ("flood-wet-at-boot", self._probe_flood_boot))
+            if b
+        ]
         self._probe_warn_boot = False
         self._probe_flood_boot = False
         self._leak_rearms += 1
-        log.warning("leak detector RE-ARMED by operator (mock; cleared: %s; re-arm #%d)",
-                    ", ".join(cleared) or "nothing was latched", self._leak_rearms)
-        return {"ok": True, "cleared": cleared, "rearms": self._leak_rearms,
-                "why": ("both probes read dry and the detector is re-armed"
-                        if cleared else
-                        "nothing was latched; both probes read dry and remain armed")}
+        log.warning(
+            "leak detector RE-ARMED by operator (mock; cleared: %s; re-arm #%d)",
+            ", ".join(cleared) or "nothing was latched",
+            self._leak_rearms,
+        )
+        return {
+            "ok": True,
+            "cleared": cleared,
+            "rearms": self._leak_rearms,
+            "why": (
+                "both probes read dry and the detector is re-armed"
+                if cleared
+                else "nothing was latched; both probes read dry and remain armed"
+            ),
+        }
 
     def read_voltage(self) -> float | None:
         if "ina219" in self._dead:
@@ -986,8 +1013,7 @@ class MockHardware(HardwareBase):
         # spot is about 0.8 A off a 2S pack and the ring about 0.5 A. Rough, but
         # honest in SHAPE — the thrusters dominate everything else, which is the
         # entire reason the power budget wanted this number displayed.
-        lights = sum(lvl * (0.8 if which == "white" else 0.5)
-                     for which, (on, lvl) in self._lights.items() if on)
+        lights = sum(lvl * (0.8 if which == "white" else 0.5) for which, (on, lvl) in self._lights.items() if on)
         return round(0.35 + 2.5 * (abs(self._left) + abs(self._right)) / 2.0 + lights, 2)
 
     def link_quality(self) -> int:
@@ -1013,7 +1039,7 @@ class MockHardware(HardwareBase):
         # Turn rate and heading come from ONE expression. The gyro must agree
         # with the heading it is supposed to explain, or the complementary filter
         # is being tested against a contradiction that no real vehicle produces.
-        turn_rate = (self._left - self._right) * 20.0     # deg/s, + = clockwise
+        turn_rate = (self._left - self._right) * 20.0  # deg/s, + = clockwise
         self._heading = (self._heading + turn_rate * dt) % 360.0
         self._gyro_z = turn_rate
         speed = (self._left + self._right) / 2.0 * self.FULL_SPEED_MS
@@ -1032,8 +1058,7 @@ class MockHardware(HardwareBase):
         # 3.0 V/cell. From 8.3 V the amber band arrives in about an hour of
         # loitering, which is roughly what the real pack does.
         load = (abs(self._left) + abs(self._right)) / 2.0
-        self._voltage = max(settings.battery_floor_v,
-                            self._voltage - (0.0004 + 0.0015 * load) * dt)
+        self._voltage = max(settings.battery_floor_v, self._voltage - (0.0004 + 0.0015 * load) * dt)
 
     def _step_ballast(self, dt: float) -> None:
         """Walk the stepper at the configured rate, switches and all."""
@@ -1049,8 +1074,7 @@ class MockHardware(HardwareBase):
             # The switches are physical, so they see the TRUE position. The
             # counter only finds out about them through try_step, exactly as the
             # Pi's stepper thread does.
-            if not self._axis.try_step(direction, self._true_steps <= 0,
-                                       self._true_steps >= span):
+            if not self._axis.try_step(direction, self._true_steps <= 0, self._true_steps >= span):
                 break
             self._true_steps += direction
         if self._true_steps <= 0:
@@ -1062,7 +1086,7 @@ class MockHardware(HardwareBase):
         """Emit hall pulses at the rate the current speed would produce."""
         v = abs(self._speed)
         if self._paddle_jammed or v < self.STALL_SPEED_MS:
-            return                      # stalled: no pulses, and after 2 s, stale
+            return  # stalled: no pulses, and after 2 s, stale
         self._paddle_frac += v * dt / max(1e-6, nav_settings.m_per_pulse)
         while self._paddle_frac >= 1.0:
             self._paddle_frac -= 1.0
@@ -1135,8 +1159,11 @@ class MockHardware(HardwareBase):
         """
         if stalled:
             self._stalled.add("leak-probes")
-            log.warning("MOCK: leak probe sampling stalled — the hull state goes to "
-                        "%s, because NORMAL is a claim nobody is checking", LEAK_UNKNOWN)
+            log.warning(
+                "MOCK: leak probe sampling stalled — the hull state goes to "
+                "%s, because NORMAL is a claim nobody is checking",
+                LEAK_UNKNOWN,
+            )
         else:
             self._stalled.discard("leak-probes")
 
@@ -1158,8 +1185,10 @@ class MockHardware(HardwareBase):
         """
         if stalled:
             self._stalled.add("sensor-thread")
-            log.warning("MOCK: sensor loop stopped — water speed goes not-fresh, the "
-                        "link reads -1, and the leak probes stop being sampled with it")
+            log.warning(
+                "MOCK: sensor loop stopped — water speed goes not-fresh, the "
+                "link reads -1, and the leak probes stop being sampled with it"
+            )
         else:
             self._stalled.discard("sensor-thread")
 
@@ -1216,11 +1245,15 @@ class MockHardware(HardwareBase):
                 f"{', '.join(self.DEVICES)} — the same names RealHardware faults "
                 f"under and sensor_faults() reports. For a sampler that stopped "
                 f"rather than a chip that died, see _stall_leak_sampling() and "
-                f"_stall_sensor_thread().")
+                f"_stall_sensor_thread()."
+            )
         self._dead.add(device)
-        log.warning("MOCK: %s killed — it now answers cannot-tell, and the sim "
-                    "underneath keeps running so the truth can drift away from "
-                    "the last value the vehicle read", device)
+        log.warning(
+            "MOCK: %s killed — it now answers cannot-tell, and the sim "
+            "underneath keeps running so the truth can drift away from "
+            "the last value the vehicle read",
+            device,
+        )
 
     def _revive_sensor(self, device: str) -> None:
         """The chip answers again — a reseated connector, a bus that recovered.
@@ -1233,8 +1266,8 @@ class MockHardware(HardwareBase):
         """
         if device not in self.DEVICES:
             raise ValueError(
-                f"_revive_sensor({device!r}): unknown device. Killable chips are "
-                f"{', '.join(self.DEVICES)}.")
+                f"_revive_sensor({device!r}): unknown device. Killable chips are " f"{', '.join(self.DEVICES)}."
+            )
         self._dead.discard(device)
         log.info("MOCK: %s answering again", device)
 
@@ -1288,24 +1321,24 @@ class RealHardware(HardwareBase):
     # take channel 0 and channel 1. The lights run software PWM at ~200 Hz, which
     # no LED and no eye can tell apart. GPIO18 and GPIO19 are left UNUSED so that
     # nothing can quietly claim half a channel later.
-    PIN_THRUST_L_EN = 12    # H-bridge A EN  — port motor speed   (hardware PWM ch0)
-    PIN_THRUST_L_IN1 = 5    # H-bridge A IN1 — port motor, ahead
-    PIN_THRUST_L_IN2 = 6    # H-bridge A IN2 — port motor, astern
-    PIN_THRUST_R_EN = 13    # H-bridge B EN  — starboard motor speed (hardware PWM ch1)
-    PIN_THRUST_R_IN1 = 16   # H-bridge B IN1 — starboard motor, ahead
-    PIN_THRUST_R_IN2 = 26   # H-bridge B IN2 — starboard motor, astern
-    PIN_LIGHT_WHITE = 20    # MOSFET gate — both 3 W bow spots, switched as ONE channel
-    PIN_LIGHT_GREEN = 21    # MOSFET gate — 5 V green LED ring around the hull
-    PIN_BALLAST_STEP = 23   # A4988 STEP — one pulse, one step
-    PIN_BALLAST_DIR = 24    # A4988 DIR  — high = fill (plunger toward the FULL stop)
-    PIN_BALLAST_EN = 25     # A4988 /EN  — ACTIVE LOW: low enables the driver
-    PIN_LIMIT_EMPTY = 22    # limit switch at the EMPTY end of the syringe stroke
-    PIN_LIMIT_FULL = 27     # limit switch at the FULL end
-    PIN_LEAK_WARN = 17      # leak probe at the lowest point of the hull
-    PIN_LEAK_FLOOD = 4      # leak probe ~2 cm above the WARN probe
-    PIN_PADDLE = 10         # paddlewheel hall sensor (A3144), one pulse per magnet
-    PIN_SPOOL_A = 9         # tether spool encoder channel A
-    PIN_SPOOL_B = 11        # tether spool encoder channel B
+    PIN_THRUST_L_EN = 12  # H-bridge A EN  — port motor speed   (hardware PWM ch0)
+    PIN_THRUST_L_IN1 = 5  # H-bridge A IN1 — port motor, ahead
+    PIN_THRUST_L_IN2 = 6  # H-bridge A IN2 — port motor, astern
+    PIN_THRUST_R_EN = 13  # H-bridge B EN  — starboard motor speed (hardware PWM ch1)
+    PIN_THRUST_R_IN1 = 16  # H-bridge B IN1 — starboard motor, ahead
+    PIN_THRUST_R_IN2 = 26  # H-bridge B IN2 — starboard motor, astern
+    PIN_LIGHT_WHITE = 20  # MOSFET gate — both 3 W bow spots, switched as ONE channel
+    PIN_LIGHT_GREEN = 21  # MOSFET gate — 5 V green LED ring around the hull
+    PIN_BALLAST_STEP = 23  # A4988 STEP — one pulse, one step
+    PIN_BALLAST_DIR = 24  # A4988 DIR  — high = fill (plunger toward the FULL stop)
+    PIN_BALLAST_EN = 25  # A4988 /EN  — ACTIVE LOW: low enables the driver
+    PIN_LIMIT_EMPTY = 22  # limit switch at the EMPTY end of the syringe stroke
+    PIN_LIMIT_FULL = 27  # limit switch at the FULL end
+    PIN_LEAK_WARN = 17  # leak probe at the lowest point of the hull
+    PIN_LEAK_FLOOD = 4  # leak probe ~2 cm above the WARN probe
+    PIN_PADDLE = 10  # paddlewheel hall sensor (A3144), one pulse per magnet
+    PIN_SPOOL_A = 9  # tether spool encoder channel A
+    PIN_SPOOL_B = 11  # tether spool encoder channel B
     #
     # BOTH limit switches are wired NORMALLY-CLOSED TO GROUND against the
     # internal pull-ups. Un-triggered the switch holds the pin LOW; pressing the
@@ -1325,9 +1358,9 @@ class RealHardware(HardwareBase):
     # I2C1 is GPIO2 (SDA) / GPIO3 (SCL) — one bus, three chips, no address
     # conflicts:
     I2C_BUS = 1
-    ADDR_BNO085 = 0x4A      # IMU: fused yaw, gyro, linear accel, mag cal status
-    ADDR_MS5837 = 0x76      # MS5837-30BA depth/pressure
-    ADDR_INA219 = 0x40      # pack voltage + current, high-side shunt
+    ADDR_BNO085 = 0x4A  # IMU: fused yaw, gyro, linear accel, mag cal status
+    ADDR_MS5837 = 0x76  # MS5837-30BA depth/pressure
+    ADDR_INA219 = 0x40  # pack voltage + current, high-side shunt
 
     # The INA219 breakout ships with a 0.1 Ω shunt. If a different shunt is
     # fitted, the current reading scales by exactly the wrong factor and nothing
@@ -1368,8 +1401,7 @@ class RealHardware(HardwareBase):
         from gpiozero import DigitalInputDevice, DigitalOutputDevice, PWMOutputDevice
 
         self._armed = False
-        self._lights: dict[str, tuple[bool, float]] = {"green": (False, 0.0),
-                                                       "white": (False, 0.0)}
+        self._lights: dict[str, tuple[bool, float]] = {"green": (False, 0.0), "white": (False, 0.0)}
         self._magnet = False
         self._faults: set[str] = set()
         self._fault_logged: dict[str, float] = {}
@@ -1415,12 +1447,10 @@ class RealHardware(HardwareBase):
         self._r_en = self._r_in1 = self._r_in2 = None
 
         def _build_thrusters() -> None:
-            self._l_en = PWMOutputDevice(self.PIN_THRUST_L_EN,
-                                         frequency=settings.thruster_pwm_hz)
+            self._l_en = PWMOutputDevice(self.PIN_THRUST_L_EN, frequency=settings.thruster_pwm_hz)
             self._l_in1 = DigitalOutputDevice(self.PIN_THRUST_L_IN1, initial_value=False)
             self._l_in2 = DigitalOutputDevice(self.PIN_THRUST_L_IN2, initial_value=False)
-            self._r_en = PWMOutputDevice(self.PIN_THRUST_R_EN,
-                                         frequency=settings.thruster_pwm_hz)
+            self._r_en = PWMOutputDevice(self.PIN_THRUST_R_EN, frequency=settings.thruster_pwm_hz)
             self._r_in1 = DigitalOutputDevice(self.PIN_THRUST_R_IN1, initial_value=False)
             self._r_in2 = DigitalOutputDevice(self.PIN_THRUST_R_IN2, initial_value=False)
             # Set BEFORE the zeroing call below, because set_thrusters() now checks
@@ -1429,8 +1459,7 @@ class RealHardware(HardwareBase):
             self._have["thrusters"] = True
             self.set_thrusters(0.0, 0.0)
 
-        _group("thrusters", _build_thrusters,
-               "the sub CANNOT BE ARMED and will not answer the sticks")
+        _group("thrusters", _build_thrusters, "the sub CANNOT BE ARMED and will not answer the sticks")
 
         # Software PWM (see the channel-sharing note above). gpiozero's default
         # pin factory drives PWMOutputDevice in software on every pin anyway;
@@ -1441,10 +1470,8 @@ class RealHardware(HardwareBase):
 
         def _build_lights() -> None:
             self._light_dev = {
-                "white": PWMOutputDevice(self.PIN_LIGHT_WHITE,
-                                         frequency=settings.light_pwm_hz),
-                "green": PWMOutputDevice(self.PIN_LIGHT_GREEN,
-                                         frequency=settings.light_pwm_hz),
+                "white": PWMOutputDevice(self.PIN_LIGHT_WHITE, frequency=settings.light_pwm_hz),
+                "green": PWMOutputDevice(self.PIN_LIGHT_GREEN, frequency=settings.light_pwm_hz),
             }
 
         _group("lights", _build_lights, "both lamp channels are dead on this vehicle")
@@ -1464,13 +1491,11 @@ class RealHardware(HardwareBase):
             # active_high=False makes .on() drive the pin LOW, so `.on()` reads as
             # "driver enabled" instead of the double negative the A4988 datasheet
             # leaves you with.
-            self._en_pin = DigitalOutputDevice(self.PIN_BALLAST_EN, active_high=False,
-                                               initial_value=False)
+            self._en_pin = DigitalOutputDevice(self.PIN_BALLAST_EN, active_high=False, initial_value=False)
             self._limit_empty = DigitalInputDevice(self.PIN_LIMIT_EMPTY, pull_up=True)
             self._limit_full = DigitalInputDevice(self.PIN_LIMIT_FULL, pull_up=True)
 
-        _group("ballast", _build_ballast,
-               "the syringe cannot be driven and depth must be flown on thrust alone")
+        _group("ballast", _build_ballast, "the syringe cannot be driven and depth must be flown on thrust alone")
 
         # --- leak probes ------------------------------------------------------
         # The debouncers exist either way: read_leak() consults them, and a
@@ -1496,20 +1521,20 @@ class RealHardware(HardwareBase):
             self._warn_wet_at_boot = self._is_wet(self._leak_warn_in)
             self._flood_wet_at_boot = self._is_wet(self._leak_flood_in)
             if self._warn_wet_at_boot or self._flood_wet_at_boot:
-                log.error("leak probe(s) already WET at power-on (warn=%s flood=%s) — shorted "
-                          "probe, or the hull is flooded before launch. Do not dive on this.",
-                          self._warn_wet_at_boot, self._flood_wet_at_boot)
+                log.error(
+                    "leak probe(s) already WET at power-on (warn=%s flood=%s) — shorted "
+                    "probe, or the hull is flooded before launch. Do not dive on this.",
+                    self._warn_wet_at_boot,
+                    self._flood_wet_at_boot,
+                )
 
-        _group("leak", _build_leak,
-               "hull integrity is UNKNOWN — not dry, unwatched. Do not dive on this")
+        _group("leak", _build_leak, "hull integrity is UNKNOWN — not dry, unwatched. Do not dive on this")
 
         # --- pulse inputs: interrupts, never polling --------------------------
         # gpiozero calls these back on its own edge threads. A polling loop would
         # either sit on the event loop (blocking the whole server) or miss pulses
         # between polls, and a missed pulse is a sub that reads slower than it is.
-        self._paddle = PaddleWheel(nav_settings.m_per_pulse,
-                                   nav_settings.paddle_window_s,
-                                   nav_settings.paddle_stale_s)
+        self._paddle = PaddleWheel(nav_settings.m_per_pulse, nav_settings.paddle_window_s, nav_settings.paddle_stale_s)
         self._spool = QuadratureDecoder()
         self._paddle_in = None
         self._spool_a = self._spool_b = None
@@ -1528,8 +1553,7 @@ class RealHardware(HardwareBase):
                 dev.when_activated = self._on_spool_edge
                 dev.when_deactivated = self._on_spool_edge
 
-        _group("pulses", _build_pulses,
-               "water speed and tether payout both go to cannot-tell")
+        _group("pulses", _build_pulses, "water speed and tether payout both go to cannot-tell")
 
         # --- sensor cache (written only by _sensor_loop) ----------------------
         # EVERY ONE OF THESE IS A REMEMBERED VALUE, and a remembered value is only
@@ -1608,20 +1632,18 @@ class RealHardware(HardwareBase):
         self._open_power()
 
         from sysinfo import TETHER_IFACE
+
         self._carrier_path = f"/sys/class/net/{TETHER_IFACE}/carrier"
 
-        self._sensor_thread = threading.Thread(target=self._sensor_loop,
-                                               name="neptune-sensors", daemon=True)
-        self._stepper_thread = threading.Thread(target=self._stepper_loop,
-                                                name="neptune-ballast", daemon=True)
+        self._sensor_thread = threading.Thread(target=self._sensor_loop, name="neptune-sensors", daemon=True)
+        self._stepper_thread = threading.Thread(target=self._stepper_loop, name="neptune-ballast", daemon=True)
         self._sensor_thread.start()
         self._stepper_thread.start()
         # sensor_faults(), not _faults: every chip is faulted at this instant
         # because none of them has answered yet — the sensor thread has only just
         # started. That is the honest line to print, and it is the same list the
         # console will be shown, so a boot log and a screen can be compared.
-        log.info("RealHardware active (GPIO + I2C); not answering yet: %s",
-                 ",".join(self.sensor_faults()) or "none")
+        log.info("RealHardware active (GPIO + I2C); not answering yet: %s", ",".join(self.sensor_faults()) or "none")
 
     @staticmethod
     def _gpio_available() -> bool:
@@ -1671,9 +1693,12 @@ class RealHardware(HardwareBase):
         # "armed" would be true and the thrust command would be accepted and
         # dropped. Refuse, say so, and stay disarmed.
         if on and not self._have.get("thrusters"):
-            self._fault("thrusters", "REFUSING TO ARM: the H-bridges did not come up, so "
-                                     "the sticks would move nothing. Fix the thruster "
-                                     "wiring before arming this vehicle")
+            self._fault(
+                "thrusters",
+                "REFUSING TO ARM: the H-bridges did not come up, so "
+                "the sticks would move nothing. Fix the thruster "
+                "wiring before arming this vehicle",
+            )
             self._armed = False
             return
         self._armed = bool(on)
@@ -1732,8 +1757,7 @@ class RealHardware(HardwareBase):
         # get_magnet() must keep answering False, because a magnet indicator lit
         # over a magnet that does not exist is a claim about the world, and an
         # operator would try to pick something up with it.
-        log.warning("set_magnet(%s) ignored — the electromagnet is v2 hardware, "
-                    "nothing is fitted", on)
+        log.warning("set_magnet(%s) ignored — the electromagnet is v2 hardware, " "nothing is fitted", on)
 
     # THE COMMANDED STATE IS RECORDED EVEN WITH NO LAMP ON THE PIN, and the pin is
     # only written if there is one. get_light() answers from _lights, so with the
@@ -1761,12 +1785,14 @@ class RealHardware(HardwareBase):
         # vehicle, so this cannot do anything, and the dangerous failure is an
         # operator who believes it did. v1 recovery is: empty the ballast and
         # pull the sub in on the tether. That is the procedure; this is not.
-        log.warning("DROP-WEIGHT RELEASE COMMANDED BUT NOT FITTED IN V1 — nothing "
-                    "was released. Recovery: empty the ballast and pull the tether in.")
+        log.warning(
+            "DROP-WEIGHT RELEASE COMMANDED BUT NOT FITTED IN V1 — nothing "
+            "was released. Recovery: empty the ballast and pull the tether in."
+        )
 
     # ---- readbacks (all cache reads: no bus, no blocking) -----------------
     def get_magnet(self) -> bool:
-        return self._magnet          # always False on v1; see set_magnet
+        return self._magnet  # always False on v1; see set_magnet
 
     def get_light(self, which: Which) -> tuple[bool, float]:
         return self._lights[which]
@@ -1866,10 +1892,12 @@ class RealHardware(HardwareBase):
         # afterwards does not un-establish it. Only the reassurance needs
         # liveness — and a probe this vehicle has already named as broken cannot
         # supply it either. See leak_state_from() for the full argument.
-        return leak_state_from(self._warn_debounce.latched,
-                               self._flood_debounce.latched,
-                               self._answering("leak-probes"),
-                               self.leak_probe_fault())
+        return leak_state_from(
+            self._warn_debounce.latched,
+            self._flood_debounce.latched,
+            self._answering("leak-probes"),
+            self.leak_probe_fault(),
+        )
 
     def reset_leak_latches(self) -> dict:
         """Clear the latches and the wet-at-boot verdict. REFUSED WHILE WET.
@@ -1888,23 +1916,35 @@ class RealHardware(HardwareBase):
         this method exists to remove.
         """
         if not self._have.get("leak"):
-            return {"ok": False, "cleared": [],
-                    "why": ("there are no leak probes on this vehicle to re-arm — the "
-                            "leak group did not come up at boot")}
+            return {
+                "ok": False,
+                "cleared": [],
+                "why": (
+                    "there are no leak probes on this vehicle to re-arm — the " "leak group did not come up at boot"
+                ),
+            }
         try:
-            wet_now = [n for n, dev in (("warn", self._leak_warn_in),
-                                        ("flood", self._leak_flood_in))
-                       if self._is_wet(dev)]
+            wet_now = [
+                n for n, dev in (("warn", self._leak_warn_in), ("flood", self._leak_flood_in)) if self._is_wet(dev)
+            ]
         except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "cleared": [],
-                    "why": f"the probes would not read ({exc}), so nothing can be vouched for"}
+            return {
+                "ok": False,
+                "cleared": [],
+                "why": f"the probes would not read ({exc}), so nothing can be vouched for",
+            }
         if wet_now:
-            log.warning("leak re-arm REFUSED: %s probe(s) are wet right now",
-                        "+".join(wet_now))
-            return {"ok": False, "cleared": [], "wet_now": wet_now,
-                    "why": (f"the {' and '.join(wet_now)} probe is WET RIGHT NOW. This clears "
-                            f"the memory of water, never water that is present — dry the hull "
-                            f"and find out where it came from first")}
+            log.warning("leak re-arm REFUSED: %s probe(s) are wet right now", "+".join(wet_now))
+            return {
+                "ok": False,
+                "cleared": [],
+                "wet_now": wet_now,
+                "why": (
+                    f"the {' and '.join(wet_now)} probe is WET RIGHT NOW. This clears "
+                    f"the memory of water, never water that is present — dry the hull "
+                    f"and find out where it came from first"
+                ),
+            }
         cleared = []
         if self._warn_debounce.latched:
             cleared.append("warn-latch")
@@ -1921,13 +1961,21 @@ class RealHardware(HardwareBase):
         self._leak_rearms += 1
         # WARNING, not INFO. Someone dismissed the strongest claim this vehicle
         # makes, and the boat's own log is where that has to be findable later.
-        log.warning("leak detector RE-ARMED by operator (cleared: %s; re-arm #%d). Both "
-                    "probes read dry at this moment.",
-                    ", ".join(cleared) or "nothing was latched", self._leak_rearms)
-        return {"ok": True, "cleared": cleared, "rearms": self._leak_rearms,
-                "why": ("both probes read dry and the detector is re-armed"
-                        if cleared else
-                        "nothing was latched; both probes read dry and remain armed")}
+        log.warning(
+            "leak detector RE-ARMED by operator (cleared: %s; re-arm #%d). Both " "probes read dry at this moment.",
+            ", ".join(cleared) or "nothing was latched",
+            self._leak_rearms,
+        )
+        return {
+            "ok": True,
+            "cleared": cleared,
+            "rearms": self._leak_rearms,
+            "why": (
+                "both probes read dry and the detector is re-armed"
+                if cleared
+                else "nothing was latched; both probes read dry and remain armed"
+            ),
+        }
 
     def leak_probe_fault(self) -> str | None:
         # The DEBOUNCED latches, not the live pins — the same evidence read_leak()
@@ -1945,8 +1993,8 @@ class RealHardware(HardwareBase):
         # leak alarm itself needs. Latching is one-way, so once real water has
         # reached the lower probe first this correctly stops accusing anything.
         return leak_probe_fault_from(
-            self._warn_debounce.latched, self._flood_debounce.latched,
-            self._warn_wet_at_boot, self._flood_wet_at_boot)
+            self._warn_debounce.latched, self._flood_debounce.latched, self._warn_wet_at_boot, self._flood_wet_at_boot
+        )
 
     def read_voltage(self) -> float | None:
         # None when the INA219 is not answering. It used to return _c_voltage
@@ -2046,16 +2094,17 @@ class RealHardware(HardwareBase):
         # get_ballast_level() answers from the axis, which stays where it was
         # rather than reporting a plunger travelling on command.
         if not self._have.get("ballast"):
-            log.warning("ballast axis not wired — the stepper thread is idle. The syringe "
-                        "cannot be driven and its reported level will not move.")
+            log.warning(
+                "ballast axis not wired — the stepper thread is idle. The syringe "
+                "cannot be driven and its reported level will not move."
+            )
             self._stop.wait()
             return
         period = 1.0 / max(1.0, settings.ballast_step_rate)
         while not self._stop.is_set():
-            direction = -1 if self._homing else {"fill": +1, "empty": -1}.get(
-                self._ballast_cmd, 0)
+            direction = -1 if self._homing else {"fill": +1, "empty": -1}.get(self._ballast_cmd, 0)
             if direction == 0:
-                self._stop.wait(0.02)          # nothing to do; do not spin the CPU
+                self._stop.wait(0.02)  # nothing to do; do not spin the CPU
                 continue
             # The limit switches are read HERE, once per step, in the same thread
             # that owns the counter. That is why the hard rule holds mid-command:
@@ -2071,9 +2120,12 @@ class RealHardware(HardwareBase):
                 # to treat either switch as a position fix: homing on a phantom
                 # switch would zero the counter wherever the plunger happens to
                 # be, which is worse than not homing at all.
-                self._fault("ballast-limits", "BOTH ballast limit switches read triggered "
-                            "— they cannot both be true. Check the switch wiring; the axis "
-                            "is held and will not home until this clears.")
+                self._fault(
+                    "ballast-limits",
+                    "BOTH ballast limit switches read triggered "
+                    "— they cannot both be true. Check the switch wiring; the axis "
+                    "is held and will not home until this clears.",
+                )
                 self._end_move()
                 continue
             self._clear_fault("ballast-limits")
@@ -2085,7 +2137,7 @@ class RealHardware(HardwareBase):
                 self._axis.mark_full_limit()
                 self._end_move()
                 continue
-            self._en_pin.on()                  # /EN low = driver enabled
+            self._en_pin.on()  # /EN low = driver enabled
             self._dir_pin.value = 1 if direction > 0 else 0
             if self._axis.try_step(direction, at_empty, at_full):
                 self._step_pin.on()
@@ -2142,15 +2194,19 @@ class RealHardware(HardwareBase):
             # --- GPIO, on no bus at all, and therefore isolated from the bus ---
             try:
                 if tick % 5 == 0:
-                    self._leak_tick(now)               # 10 Hz, per the debounce spec
+                    self._leak_tick(now)  # 10 Hz, per the debounce spec
             except Exception as exc:  # noqa: BLE001
                 # A probe pin that will not read is a fault of ITS OWN — named, and
                 # after fail_streak in a row read_leak() says UNKNOWN instead of
                 # claiming a dry hull it has no evidence for.
-                self._device_failed("leak-probes", "leak probe sampling failed (%s) — the "
-                                                   "hull state goes to cannot-tell rather "
-                                                   "than holding NORMAL, which is a claim "
-                                                   "nobody is checking", exc)
+                self._device_failed(
+                    "leak-probes",
+                    "leak probe sampling failed (%s) — the "
+                    "hull state goes to cannot-tell rather "
+                    "than holding NORMAL, which is a claim "
+                    "nobody is checking",
+                    exc,
+                )
             try:
                 # The paddlewheel is counted on gpiozero's edge threads and merely
                 # totted up here. Its own try, above the bus work: an I2C fault has
@@ -2164,10 +2220,10 @@ class RealHardware(HardwareBase):
                 log.warning("paddlewheel window failed: %s", exc)
             # --- I2C: one bad tick must not end the thread ---
             try:
-                self._imu_tick(now)                    # 50 Hz
-                self._pressure_tick(now)               # state machine → ~10 Hz
+                self._imu_tick(now)  # 50 Hz
+                self._pressure_tick(now)  # state machine → ~10 Hz
                 if tick % 25 == 0:
-                    self._power_tick(now)              # 2 Hz
+                    self._power_tick(now)  # 2 Hz
                     self._link_tick()
             except Exception as exc:  # noqa: BLE001
                 log.warning("sensor tick failed: %s", exc)
@@ -2253,8 +2309,8 @@ class RealHardware(HardwareBase):
             # survive, and the symptom would be plausible wrong numbers.
             i2c = busio.I2C(board.SCL, board.SDA)
             imu = BNO08X_I2C(i2c, address=self.ADDR_BNO085)
-            imu.enable_feature(BNO_REPORT_ROTATION_VECTOR)      # mag-fused quaternion
-            imu.enable_feature(BNO_REPORT_GYROSCOPE)            # immune to thruster fields
+            imu.enable_feature(BNO_REPORT_ROTATION_VECTOR)  # mag-fused quaternion
+            imu.enable_feature(BNO_REPORT_GYROSCOPE)  # immune to thruster fields
             imu.enable_feature(BNO_REPORT_LINEAR_ACCELERATION)  # gravity already removed
             self._imu = imu
             log.info("BNO085 online at 0x%02X", self.ADDR_BNO085)
@@ -2263,10 +2319,14 @@ class RealHardware(HardwareBase):
             # DeviceHealth already treats as faulted, so sensor_faults() names it
             # and heading / gyro / accel / mag_cal / attitude all read
             # cannot-tell. This only has to say so out loud.
-            self._device_failed("bno085", "BNO085 not responding (%s) — heading, gyro and "
-                                          "attitude all read cannot-tell, and mag_cal ships "
-                                          "as null (no compass), not as 0 (compass fitted "
-                                          "and uncalibrated)", exc)
+            self._device_failed(
+                "bno085",
+                "BNO085 not responding (%s) — heading, gyro and "
+                "attitude all read cannot-tell, and mag_cal ships "
+                "as null (no compass), not as 0 (compass fitted "
+                "and uncalibrated)",
+                exc,
+            )
 
     def _imu_tick(self, now: float) -> None:
         if self._imu is None:
@@ -2281,8 +2341,9 @@ class RealHardware(HardwareBase):
             # never do again: the cache below keeps its values, but _health now
             # decides whether anyone is allowed to read them, and after five
             # consecutive raises (0.1 s at 50 Hz) nobody is.
-            self._device_failed("bno085", "BNO085 read failed (%s) — the last heading is "
-                                          "held in the cache but no longer served", exc)
+            self._device_failed(
+                "bno085", "BNO085 read failed (%s) — the last heading is " "held in the cache but no longer served", exc
+            )
             return
         self._device_ok("bno085", now)
 
@@ -2292,8 +2353,7 @@ class RealHardware(HardwareBase):
         # Getting only the offset right (yaw + 90) yields a heading that is
         # correct at north and mirrored everywhere else — the sub turns right, the
         # map turns left, and the track folds back on itself.
-        yaw_enu = math.degrees(math.atan2(2.0 * (qr * qk + qi * qj),
-                                          1.0 - 2.0 * (qj * qj + qk * qk)))
+        yaw_enu = math.degrees(math.atan2(2.0 * (qr * qk + qi * qj), 1.0 - 2.0 * (qj * qj + qk * qk)))
         heading = (90.0 - yaw_enu) % 360.0
         # The mounting offset is applied AFTER the frame flip because it describes
         # how the board is rotated inside the hull, measured in compass degrees.
@@ -2322,29 +2382,32 @@ class RealHardware(HardwareBase):
         # by tipping the sub on the bench before believing the number.
         sin_p = max(-1.0, min(1.0, 2.0 * (qr * qj - qk * qi)))
         pitch = -math.degrees(math.asin(sin_p))
-        roll = math.degrees(math.atan2(2.0 * (qr * qi + qj * qk),
-                                       1.0 - 2.0 * (qi * qi + qj * qj)))
+        roll = math.degrees(math.atan2(2.0 * (qr * qi + qj * qk), 1.0 - 2.0 * (qi * qi + qj * qj)))
         self._c_pitch_roll = (pitch, roll)
 
     # ---- MS5837-30BA ------------------------------------------------------
     def _open_i2c(self) -> None:
         try:
             import smbus2
+
             self._bus = smbus2.SMBus(self.I2C_BUS)
         except Exception as exc:  # noqa: BLE001
-            self._fault("i2c", "I2C bus %d would not open (%s) — depth and pack "
-                               "voltage are both unavailable", self.I2C_BUS, exc)
+            self._fault(
+                "i2c",
+                "I2C bus %d would not open (%s) — depth and pack " "voltage are both unavailable",
+                self.I2C_BUS,
+                exc,
+            )
 
     def _open_depth(self) -> None:
         if self._bus is None:
             return
         try:
             self._bus.write_byte(self.ADDR_MS5837, self._MS_RESET)
-            time.sleep(0.02)                    # the reset reloads the PROM
+            time.sleep(0.02)  # the reset reloads the PROM
             prom = []
             for i in range(7):
-                msb, lsb = self._bus.read_i2c_block_data(
-                    self.ADDR_MS5837, self._MS_PROM + 2 * i, 2)
+                msb, lsb = self._bus.read_i2c_block_data(self.ADDR_MS5837, self._MS_PROM + 2 * i, 2)
                 prom.append((msb << 8) | lsb)
             # The PROM CRC catches the failure a bus check does not: a mis-wired
             # or noisy I2C answers 0xFFFF to everything, and 0xFFFF coefficients
@@ -2353,9 +2416,10 @@ class RealHardware(HardwareBase):
             # as the words it vouches for, and one whole class of dead bus forges
             # a match. _ms5837_prom_valid() is the CRC plus that gap closed.
             if not _ms5837_prom_valid(prom):
-                raise OSError("PROM [%s] is not a factory calibration — the "
-                              "coefficients are not trustworthy"
-                              % " ".join("%04X" % w for w in prom))
+                raise OSError(
+                    "PROM [%s] is not a factory calibration — the "
+                    "coefficients are not trustworthy" % " ".join("%04X" % w for w in prom)
+                )
             self._ms_prom = prom
             log.info("MS5837 online at 0x%02X (PROM accepted)", self.ADDR_MS5837)
         except Exception as exc:  # noqa: BLE001
@@ -2365,9 +2429,13 @@ class RealHardware(HardwareBase):
             # read_pressure() answers None. A rejected PROM lands on exactly the
             # same path as a sensor that stopped mid-dive, which is right — the
             # coefficients are not trustworthy, so there is no depth here either.
-            self._device_failed("ms5837", "MS5837 depth sensor unusable (%s) — depth and "
-                                          "pressure ship as null (cannot tell), never as a "
-                                          "surface reading; see sensor_faults()", exc)
+            self._device_failed(
+                "ms5837",
+                "MS5837 depth sensor unusable (%s) — depth and "
+                "pressure ship as null (cannot tell), never as a "
+                "surface reading; see sensor_faults()",
+                exc,
+            )
 
     def _pressure_tick(self, now: float) -> None:
         """Advance the depth conversion state machine.
@@ -2403,9 +2471,11 @@ class RealHardware(HardwareBase):
                 # healthy for starting a conversion would defeat that.
                 self._device_ok("ms5837", now)
         except Exception as exc:  # noqa: BLE001
-            self._device_failed("ms5837", "MS5837 read failed (%s) — depth goes to "
-                                          "cannot-tell rather than holding its last "
-                                          "metres", exc)
+            self._device_failed(
+                "ms5837",
+                "MS5837 read failed (%s) — depth goes to " "cannot-tell rather than holding its last " "metres",
+                exc,
+            )
             self._ms_stage, self._ms_next = 0, now + 1.0
 
     def _read_adc24(self) -> int:
@@ -2423,9 +2493,13 @@ class RealHardware(HardwareBase):
             self._bus.write_i2c_block_data(self.ADDR_INA219, 0x00, [0x39, 0x9F])
             log.info("INA219 online at 0x%02X", self.ADDR_INA219)
         except Exception as exc:  # noqa: BLE001
-            self._device_failed("ina219", "INA219 not responding (%s) — pack voltage and "
-                                          "current both ship as null; the console shows no "
-                                          "pack reading rather than a number nobody took", exc)
+            self._device_failed(
+                "ina219",
+                "INA219 not responding (%s) — pack voltage and "
+                "current both ship as null; the console shows no "
+                "pack reading rather than a number nobody took",
+                exc,
+            )
 
     def _power_tick(self, now: float) -> None:
         if self._bus is None:
@@ -2434,9 +2508,13 @@ class RealHardware(HardwareBase):
             raw_bus = self._read_reg16(self.ADDR_INA219, 0x02)
             raw_shunt = self._read_reg16(self.ADDR_INA219, 0x01)
         except Exception as exc:  # noqa: BLE001
-            self._device_failed("ina219", "INA219 read failed (%s) — pack voltage goes to "
-                                          "cannot-tell rather than holding the last volts "
-                                          "it managed to measure", exc)
+            self._device_failed(
+                "ina219",
+                "INA219 read failed (%s) — pack voltage goes to "
+                "cannot-tell rather than holding the last volts "
+                "it managed to measure",
+                exc,
+            )
             return
         self._device_ok("ina219", now)
         # Bus voltage register: 13 bits, 4 mV/LSB, left-aligned above the flags.
@@ -2521,10 +2599,15 @@ class RealHardware(HardwareBase):
                 self._en_pin.off()
         except Exception as exc:  # noqa: BLE001
             log.warning("shutdown: could not fully quiet the outputs (%s)", exc)
-        for dev in (getattr(self, "_paddle_in", None), getattr(self, "_spool_a", None),
-                    getattr(self, "_spool_b", None), getattr(self, "_limit_empty", None),
-                    getattr(self, "_limit_full", None), getattr(self, "_leak_warn_in", None),
-                    getattr(self, "_leak_flood_in", None)):
+        for dev in (
+            getattr(self, "_paddle_in", None),
+            getattr(self, "_spool_a", None),
+            getattr(self, "_spool_b", None),
+            getattr(self, "_limit_empty", None),
+            getattr(self, "_limit_full", None),
+            getattr(self, "_leak_warn_in", None),
+            getattr(self, "_leak_flood_in", None),
+        ):
             try:
                 if dev is not None:
                     dev.close()
@@ -2545,7 +2628,7 @@ class RealHardware(HardwareBase):
 def _ms5837_crc4(prom: list[int]) -> int:
     """The 4-bit CRC the MS5837 stores in the top nibble of PROM word 0."""
     words = list(prom) + [0] * (8 - len(prom))
-    words[0] &= 0x0FFF                      # the CRC nibble itself is not covered
+    words[0] &= 0x0FFF  # the CRC nibble itself is not covered
     rem = 0
     for i in range(16):
         rem ^= (words[i >> 1] & 0x00FF) if i % 2 else (words[i >> 1] >> 8)
@@ -2598,7 +2681,7 @@ def _ms5837_mbar(prom: list[int], d1: int, d2: int) -> float:
     temp = 2000 + dt * c6 / 8388608
     off = c2 * 65536 + (c4 * dt) / 128
     sens = c1 * 32768 + (c3 * dt) / 256
-    if temp < 2000:                          # cold water
+    if temp < 2000:  # cold water
         ti = 3 * dt * dt / 8589934592
         offi = 3 * (temp - 2000) ** 2 / 2
         sensi = 5 * (temp - 2000) ** 2 / 8
@@ -2611,7 +2694,7 @@ def _ms5837_mbar(prom: list[int], d1: int, d2: int) -> float:
         sensi = 0.0
     off -= offi
     sens -= sensi
-    _ = (temp - ti) / 100.0                  # water temperature, °C — not plumbed anywhere yet
+    _ = (temp - ti) / 100.0  # water temperature, °C — not plumbed anywhere yet
     return ((d1 * sens / 2097152 - off) / 8192) / 10.0
 
 

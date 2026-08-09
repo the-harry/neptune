@@ -114,6 +114,7 @@ CPU-BOUND AND SYNCHRONOUS ON PURPOSE. There is no I/O to await, only arithmetic 
 few million pixels. An async caller runs `render_area` through asyncio.to_thread so the
 event loop keeps serving telemetry while the map is built.
 """
+
 from __future__ import annotations
 
 import io
@@ -198,10 +199,10 @@ BANK_HILLSHADE_MAX = _f("NAV_BANK_HS_MAX", 1.60)
 # ---- classification codes -------------------------------------------------------
 # WATER HAS ITS OWN CODE AND ITS ONLY PALETTE ENTRY IS TRANSPARENT. That is what makes
 # "water is never painted" structural instead of a rule somebody has to remember.
-BANK_CLASS_OUTSIDE = 0   # outside the corridor, or no survey here — draw nothing
-BANK_CLASS_WATER = 1     # water — draw nothing, ever, at any zoom
-BANK_CLASS_LOW = 2       # amber: under the launch height above the water beside it
-BANK_CLASS_HIGH = 3      # brown: higher bank, wall, urban fabric
+BANK_CLASS_OUTSIDE = 0  # outside the corridor, or no survey here — draw nothing
+BANK_CLASS_WATER = 1  # water — draw nothing, ever, at any zoom
+BANK_CLASS_LOW = 2  # amber: under the launch height above the water beside it
+BANK_CLASS_HIGH = 3  # brown: higher bank, wall, urban fabric
 
 #: Files, all inside the directory nav/lidar.py already made for this area. The extension
 #: is on the DIRECTORY (data/areas/<name>.lidar/), which matches no glob in areas.py — a
@@ -209,7 +210,7 @@ BANK_CLASS_HIGH = 3      # brown: higher bank, wall, urban fabric
 #: areas.list_areas() as a phantom area called "<name>.bank" that nothing can fly and
 #: nothing can delete.
 _TILES_NAME = "bank.mbtiles"
-_PROV_NAME = "bank.json"        # OURS. lidar.py owns provenance.json in the same folder.
+_PROV_NAME = "bank.json"  # OURS. lidar.py owns provenance.json in the same folder.
 _POUNDS_NAME = "pounds.geojson"
 
 
@@ -238,37 +239,54 @@ def library_state() -> dict:
     base = lidar.library_state()
     missing = list(base.get("missing") or [])
     detail = dict(base.get("libraries") or {})
-    needed = ("scipy.ndimage — the corridor buffer, the gradients, and the distance "
-              "transform that measures a bank against its nearest water")
+    needed = (
+        "scipy.ndimage — the corridor buffer, the gradients, and the distance "
+        "transform that measures a bank against its nearest water"
+    )
     try:
         import scipy  # noqa: F401
+
         detail["scipy"] = {"present": True, "error": None, "needed_for": needed}
     except Exception as exc:  # noqa: BLE001 — a half-installed wheel is an absence too
-        detail["scipy"] = {"present": False, "needed_for": needed,
-                           "error": f"{type(exc).__name__}: {exc}"}
+        detail["scipy"] = {"present": False, "needed_for": needed, "error": f"{type(exc).__name__}: {exc}"}
         missing.append("scipy")
     install = "pip install numpy scipy Pillow"
     if not missing:
-        return {"ok": True, "missing": [], "install": None, "libraries": detail,
-                "why": ("numpy, scipy and Pillow are installed, so this machine can "
-                        "build and read the LIDAR launch-bank overlay."),
-                "title": ("LAUNCH-BANK RENDERER AVAILABLE — numpy, scipy and Pillow are "
-                          "all installed on this handheld."),
-                "aria_label": "The launch bank renderer is available on this machine."}
+        return {
+            "ok": True,
+            "missing": [],
+            "install": None,
+            "libraries": detail,
+            "why": (
+                "numpy, scipy and Pillow are installed, so this machine can "
+                "build and read the LIDAR launch-bank overlay."
+            ),
+            "title": (
+                "LAUNCH-BANK RENDERER AVAILABLE — numpy, scipy and Pillow are " "all installed on this handheld."
+            ),
+            "aria_label": "The launch bank renderer is available on this machine.",
+        }
     # PIL installs as `Pillow`, and an install line reading "pip install PIL" sends the
     # reader to a package that has not existed since 2011.
     pretty = ["Pillow" if m == "PIL" else m for m in missing]
     # "numpy and Pillow and scipy" is what a naive join gives for three; an operator
     # reading this at midnight deserves a sentence rather than a chain.
-    names = (pretty[0] if len(pretty) == 1
-             else " and ".join([", ".join(pretty[:-1]), pretty[-1]]))
-    why = (f"The LIDAR launch-bank overlay cannot be built on this machine because "
-           f"{names} {'is' if len(pretty) == 1 else 'are'} not installed. Install with: "
-           f"{install}  (handheld only — the Pi 3B+ must not carry these). Tiles already "
-           f"on the card are still served, and every other map layer is unaffected.")
-    return {"ok": False, "missing": missing, "install": install, "libraries": detail,
-            "why": why, "title": f"LAUNCH-BANK RENDERER UNAVAILABLE — {why}",
-            "aria_label": f"The launch bank renderer is unavailable. {why}"}
+    names = pretty[0] if len(pretty) == 1 else " and ".join([", ".join(pretty[:-1]), pretty[-1]])
+    why = (
+        f"The LIDAR launch-bank overlay cannot be built on this machine because "
+        f"{names} {'is' if len(pretty) == 1 else 'are'} not installed. Install with: "
+        f"{install}  (handheld only — the Pi 3B+ must not carry these). Tiles already "
+        f"on the card are still served, and every other map layer is unaffected."
+    )
+    return {
+        "ok": False,
+        "missing": missing,
+        "install": install,
+        "libraries": detail,
+        "why": why,
+        "title": f"LAUNCH-BANK RENDERER UNAVAILABLE — {why}",
+        "aria_label": f"The launch bank renderer is unavailable. {why}",
+    }
 
 
 def _deps():
@@ -282,9 +300,10 @@ def _deps():
     if not state["ok"]:
         raise BankUnavailable(state["why"])
     import numpy as np
-    from scipy import ndimage, signal
     from PIL import Image
-    Image.MAX_IMAGE_PIXELS = None   # a 2 km square of 1 m LIDAR trips the decompression
+    from scipy import ndimage, signal
+
+    Image.MAX_IMAGE_PIXELS = None  # a 2 km square of 1 m LIDAR trips the decompression
     # -bomb guard, which guards against hostile uploads and not against our own survey.
     return np, ndimage, signal, Image
 
@@ -333,10 +352,8 @@ def _metres_per_degree(lat_deg: float) -> tuple[float, float]:
     operator paces out on a towpath.
     """
     phi = math.radians(lat_deg)
-    m_lat = (111132.92 - 559.82 * math.cos(2 * phi) + 1.175 * math.cos(4 * phi)
-             - 0.0023 * math.cos(6 * phi))
-    m_lon = (111412.84 * math.cos(phi) - 93.5 * math.cos(3 * phi)
-             + 0.118 * math.cos(5 * phi))
+    m_lat = 111132.92 - 559.82 * math.cos(2 * phi) + 1.175 * math.cos(4 * phi) - 0.0023 * math.cos(6 * phi)
+    m_lon = 111412.84 * math.cos(phi) - 93.5 * math.cos(3 * phi) + 0.118 * math.cos(5 * phi)
     return m_lon, m_lat
 
 
@@ -350,14 +367,15 @@ class Grid:
     then propagates the absence instead of quietly averaging a fill value 340 undecillion
     metres below the canal into a hillshade.
     """
-    z: object                # numpy float32 (H, W)
-    valid: object            # numpy bool (H, W)
-    west: float              # OUTER edge of column 0
-    north: float             # OUTER edge of row 0
-    px_lon: float            # degrees per column
-    px_lat: float            # degrees per row (rows run north to south)
-    px_x_m: float            # one column, in metres, at this area's centre latitude
-    px_y_m: float            # one row, in metres
+
+    z: object  # numpy float32 (H, W)
+    valid: object  # numpy bool (H, W)
+    west: float  # OUTER edge of column 0
+    north: float  # OUTER edge of row 0
+    px_lon: float  # degrees per column
+    px_lat: float  # degrees per row (rows run north to south)
+    px_x_m: float  # one column, in metres, at this area's centre latitude
+    px_y_m: float  # one row, in metres
     provenance: dict = field(default_factory=dict)
 
     @property
@@ -367,15 +385,13 @@ class Grid:
     @property
     def bbox(self) -> list[float]:
         h, w = self.z.shape
-        return [self.west, self.north - self.px_lat * h,
-                self.west + self.px_lon * w, self.north]
+        return [self.west, self.north - self.px_lat * h, self.west + self.px_lon * w, self.north]
 
     def lonlat(self, row: float, col: float) -> tuple[float, float]:
         """Centre of pixel (row, col). The half pixel matters: half of 1 m is 0.5 m,
         which is half the width of the vehicle — small, and exactly the kind of small
         that never gets noticed and never stops being wrong."""
-        return (self.west + (col + 0.5) * self.px_lon,
-                self.north - (row + 0.5) * self.px_lat)
+        return (self.west + (col + 0.5) * self.px_lon, self.north - (row + 0.5) * self.px_lat)
 
 
 def load_grid(name: str) -> Grid:
@@ -383,15 +399,15 @@ def load_grid(name: str) -> Grid:
     np, _, _, _ = _deps()
     got = lidar.read_dtm(name, mmap=True)
     if not got.get("ok"):
-        raise BankUnavailable(got.get("why") or
-                              f"no LIDAR grid is stored for the area '{name}'")
+        raise BankUnavailable(got.get("why") or f"no LIDAR grid is stored for the area '{name}'")
     geo = got.get("geo") or {}
     for k in ("west", "north", "px_lon", "px_lat"):
         if geo.get(k) is None:
             raise BankUnavailable(
                 f"the stored grid for '{name}' has no {k} in its record, so it cannot be "
                 f"placed on the earth and nothing can be painted from it. Re-download "
-                f"the area.")
+                f"the area."
+            )
     # COPIED OFF THE MEMMAP DELIBERATELY. Every pass below — the gradient, the distance
     # transforms, the classification — touches the whole array several times, and doing
     # that through a memory map on an eMMC card turns half a second of arithmetic into
@@ -399,10 +415,17 @@ def load_grid(name: str) -> Grid:
     z = np.array(got["grid"], dtype=np.float32)
     px_lat = float(geo["px_lat"])
     m_lon, m_lat = _metres_per_degree(float(geo["north"]) - px_lat * z.shape[0] / 2.0)
-    return Grid(z=z, valid=np.isfinite(z), west=float(geo["west"]),
-                north=float(geo["north"]), px_lon=float(geo["px_lon"]), px_lat=px_lat,
-                px_x_m=float(geo["px_lon"]) * m_lon, px_y_m=px_lat * m_lat,
-                provenance=got.get("provenance") or {})
+    return Grid(
+        z=z,
+        valid=np.isfinite(z),
+        west=float(geo["west"]),
+        north=float(geo["north"]),
+        px_lon=float(geo["px_lon"]),
+        px_lat=px_lat,
+        px_x_m=float(geo["px_lon"]) * m_lon,
+        px_y_m=px_lat * m_lat,
+        provenance=got.get("provenance") or {},
+    )
 
 
 # ================================================================================
@@ -411,12 +434,13 @@ def load_grid(name: str) -> Grid:
 @dataclass
 class BankRaster:
     """Everything the tiler needs, all on the grid, all the same shape."""
+
     grid: Grid
-    classes: object          # uint8 (H, W) — one of the BANK_CLASS_* codes
-    shade: object            # float32 (H, W) — multiplier, 1.0 on flat ground
-    contour: object          # float32 (H, W) — 0..1 coverage of a contour line
-    levels: list = field(default_factory=list)   # detected sheet levels, high first
-    pounds: list = field(default_factory=list)   # label points, one per sheet component
+    classes: object  # uint8 (H, W) — one of the BANK_CLASS_* codes
+    shade: object  # float32 (H, W) — multiplier, 1.0 on flat ground
+    contour: object  # float32 (H, W) — 0..1 coverage of a contour line
+    levels: list = field(default_factory=list)  # detected sheet levels, high first
+    pounds: list = field(default_factory=list)  # label points, one per sheet component
     stats: dict = field(default_factory=dict)
 
 
@@ -478,23 +502,26 @@ def detect_pound_levels(np, signal, values) -> list[dict]:
     centres = (edges[:-1] + edges[1:]) / 2.0
     padded = np.concatenate(([0], counts, [0]))
     peaks, _ = signal.find_peaks(
-        padded, distance=max(1.0, sep_m / bin_m),
+        padded,
+        distance=max(1.0, sep_m / bin_m),
         # PROMINENT, not merely tall: a mode has to stand out of its own neighbourhood.
         # 5% of the biggest bin still catches a short pound beside a long one; the floor
         # stops a nearly-empty area finding structure in a dozen stray pixels.
-        prominence=max(counts.max() * 0.05, BANK_POUND_MIN_PIXELS / 10.0))
+        prominence=max(counts.max() * 0.05, BANK_POUND_MIN_PIXELS / 10.0),
+    )
 
     found = []
     for p in peaks:
-        i = int(p) - 1                      # undo the pad
+        i = int(p) - 1  # undo the pad
         if not 0 <= i < centres.size:
             continue
         near = np.abs(values - centres[i]) <= 1.5 * bin_m
         n = int(near.sum())
         if n < BANK_POUND_MIN_PIXELS:
-            continue        # a flat roof inside the sampling band, not a sheet of water
-        found.append({"level_m_od": round(float(np.median(values[near])), 2),
-                      "bin_pixels": int(counts[i]), "sheet_pixels": n})
+            continue  # a flat roof inside the sampling band, not a sheet of water
+        found.append(
+            {"level_m_od": round(float(np.median(values[near])), 2), "bin_pixels": int(counts[i]), "sheet_pixels": n}
+        )
 
     # "MORE THAN 0.6 m APART" is enforced on the REFINED levels, not on the bin indices:
     # two bins four apart can refine to 0.55 m apart, and reporting those as two pounds
@@ -527,23 +554,30 @@ def classify(grid: Grid, lines=None) -> BankRaster:
 
     h, w = grid.shape
     z, valid = grid.z, grid.valid
-    sampling = (grid.px_y_m, grid.px_x_m)     # EDT distances come out in METRES
+    sampling = (grid.px_y_m, grid.px_x_m)  # EDT distances come out in METRES
 
     line = _rasterise_centreline(np, grid, lines)
     line_px = int(line.sum())
     if line_px == 0:
         # A true and useful claim, and NOT the same claim as "no low banks here".
         return BankRaster(
-            grid=grid, classes=np.zeros((h, w), np.uint8),
-            shade=np.ones((h, w), np.float32), contour=np.zeros((h, w), np.float32),
-            stats={"centreline_pixels": 0, "corridor_pixels": 0,
-                   "centreline_why": centre_why,
-                   "why_empty": (
-                       "no Canal & River Trust canal centreline crosses this area, so "
-                       "there is no corridor to trace and nothing has been painted. "
-                       "Arms, basins and private cuts the Trust holds no centreline for "
-                       "are absent from this layer too — unpainted ground has not been "
-                       "surveyed and found high, it has not been looked at.")})
+            grid=grid,
+            classes=np.zeros((h, w), np.uint8),
+            shade=np.ones((h, w), np.float32),
+            contour=np.zeros((h, w), np.float32),
+            stats={
+                "centreline_pixels": 0,
+                "corridor_pixels": 0,
+                "centreline_why": centre_why,
+                "why_empty": (
+                    "no Canal & River Trust canal centreline crosses this area, so "
+                    "there is no corridor to trace and nothing has been painted. "
+                    "Arms, basins and private cuts the Trust holds no centreline for "
+                    "are absent from this layer too — unpainted ground has not been "
+                    "surveyed and found high, it has not been looked at."
+                ),
+            },
+        )
 
     dist = ndimage.distance_transform_edt(~line, sampling=sampling)
     water_buf = float(settings.lidar_water_buffer_m)
@@ -558,8 +592,7 @@ def classify(grid: Grid, lines=None) -> BankRaster:
     if valid.all():
         zfill = z
     elif valid.any():
-        _, (fy, fx) = ndimage.distance_transform_edt(
-            ~valid, sampling=sampling, return_indices=True)
+        _, (fy, fx) = ndimage.distance_transform_edt(~valid, sampling=sampling, return_indices=True)
         zfill = z[fy, fx]
         del fy, fx
     else:
@@ -596,8 +629,7 @@ def classify(grid: Grid, lines=None) -> BankRaster:
     # 2.4 km area is 5.8 M pixels and costs about 92 MB for the length of one statement.
     # They are dropped the moment the datum is read out of them.
     if water_datum.any():
-        _, (iy, ix) = ndimage.distance_transform_edt(
-            ~water_datum, sampling=sampling, return_indices=True)
+        _, (iy, ix) = ndimage.distance_transform_edt(~water_datum, sampling=sampling, return_indices=True)
         datum = z[iy, ix]
         del iy, ix
     else:
@@ -614,8 +646,7 @@ def classify(grid: Grid, lines=None) -> BankRaster:
     # `valid &` IS LOad-BEARING: a hole in the middle of the channel is unsurveyed, not
     # water. Called water it would be reported as a fact about the cut; left unclassified
     # it is reported as the absence it is.
-    wide = (flat & (dist <= BANK_WATER_REACH_M)
-            & np.isfinite(height) & (np.abs(height) <= BANK_WATER_TOLERANCE_M))
+    wide = flat & (dist <= BANK_WATER_REACH_M) & np.isfinite(height) & (np.abs(height) <= BANK_WATER_TOLERANCE_M)
     water = valid & ((dist <= water_buf) | wide)
 
     paintable = corridor & valid & ~water & np.isfinite(datum)
@@ -638,8 +669,7 @@ def classify(grid: Grid, lines=None) -> BankRaster:
     # a ditch and every ditch as an embankment — the inverted-relief illusion, which here
     # would make a wall look like the way down to the water.
     aspect = np.arctan2(-zy, -zx)
-    shade = (math.cos(zenith) * np.cos(slope)
-             + math.sin(zenith) * np.sin(slope) * np.cos(az - aspect))
+    shade = math.cos(zenith) * np.cos(slope) + math.sin(zenith) * np.sin(slope) * np.cos(az - aspect)
     # Normalised so FLAT GROUND IS EXACTLY 1.0 — see BANK_HILLSHADE_MIN.
     shade = np.clip(shade / math.cos(zenith), BANK_HILLSHADE_MIN, BANK_HILLSHADE_MAX)
     shade = np.where(valid, shade, 1.0).astype(np.float32)
@@ -653,13 +683,12 @@ def classify(grid: Grid, lines=None) -> BankRaster:
     g_per_px = np.hypot(gx * grid.px_x_m, gy * grid.px_y_m)
     with np.errstate(invalid="ignore", divide="ignore"):
         to_line = np.abs(z / interval - np.round(z / interval)) * interval
-        cov = np.clip(width_px / 2.0 + 0.5 - to_line / np.maximum(g_per_px, 1e-6),
-                      0.0, 1.0)
+        cov = np.clip(width_px / 2.0 + 0.5 - to_line / np.maximum(g_per_px, 1e-6), 0.0, 1.0)
     # Where the ground climbs a whole interval or more per pixel the contours are closer
     # together than the pixels are and cannot be drawn as lines at all; the honest render
     # is the fraction of ground they cover, which is the line width itself.
     cov = np.where(g_per_px > interval, width_px, cov)
-    contour = np.where(paintable, cov, 0.0).astype(np.float32)   # never on the water
+    contour = np.where(paintable, cov, 0.0).astype(np.float32)  # never on the water
 
     pounds = _pound_labels(np, ndimage, grid, levels, water_datum)
 
@@ -686,8 +715,9 @@ def classify(grid: Grid, lines=None) -> BankRaster:
         "valid_px": int(valid.sum()),
         "classify_seconds": round(time.time() - t0, 2),
     }
-    return BankRaster(grid=grid, classes=classes, shade=shade, contour=contour,
-                      levels=levels, pounds=pounds, stats=stats)
+    return BankRaster(
+        grid=grid, classes=classes, shade=shade, contour=contour, levels=levels, pounds=pounds, stats=stats
+    )
 
 
 def _pound_labels(np, ndimage, grid: Grid, levels, water_datum) -> list[dict]:
@@ -715,7 +745,7 @@ def _pound_labels(np, ndimage, grid: Grid, levels, water_datum) -> list[dict]:
         boxes = ndimage.find_objects(lab)
         for i, size in enumerate(sizes):
             if size < min_px:
-                continue          # a puddle of noise, not a pound worth naming
+                continue  # a puddle of noise, not a pound worth naming
             sl = boxes[i]
             ys, xs = np.nonzero(lab[sl] == (i + 1))
             cy, cx = ys.mean(), xs.mean()
@@ -724,30 +754,34 @@ def _pound_labels(np, ndimage, grid: Grid, levels, water_datum) -> list[dict]:
             k = int(np.argmin((ys - cy) ** 2 + (xs - cx) ** 2))
             lon, lat = grid.lonlat(int(ys[k]) + sl[0].start, int(xs[k]) + sl[1].start)
             area = float(size) * grid.px_x_m * grid.px_y_m
-            out.append({
-                "type": "Feature",
-                "geometry": {"type": "Point", "coordinates": [round(lon, 7), round(lat, 7)]},
-                "properties": {
-                    "level_m_od": lv,
-                    "label": f"{lv:.1f} m OD",
-                    "sheet_area_m2": round(area, 1),
-                    "sheet_pixels": int(size),
-                    "survey_vintage": vintage,
-                    "title": (
-                        f"WATER LEVEL {lv:.1f} m above Ordnance Datum — the height of "
-                        f"this flat sheet of water as the {vintage} LIDAR survey found "
-                        f"it, over about {area:,.0f} square metres. The amber and brown "
-                        f"paint on the banks beside it is measured against THIS level "
-                        f"and not against one taken elsewhere on the canal. It is a "
-                        f"detected water surface, not a surveyed pound datum, and the "
-                        f"water was this height in {vintage}."),
-                    "aria_label": (
-                        f"Detected water level {lv:.1f} metres above Ordnance Datum, "
-                        f"over about {area:,.0f} square metres of water. Bank heights "
-                        f"nearby are measured against this level. From the {vintage} "
-                        f"LIDAR survey."),
-                },
-            })
+            out.append(
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [round(lon, 7), round(lat, 7)]},
+                    "properties": {
+                        "level_m_od": lv,
+                        "label": f"{lv:.1f} m OD",
+                        "sheet_area_m2": round(area, 1),
+                        "sheet_pixels": int(size),
+                        "survey_vintage": vintage,
+                        "title": (
+                            f"WATER LEVEL {lv:.1f} m above Ordnance Datum — the height of "
+                            f"this flat sheet of water as the {vintage} LIDAR survey found "
+                            f"it, over about {area:,.0f} square metres. The amber and brown "
+                            f"paint on the banks beside it is measured against THIS level "
+                            f"and not against one taken elsewhere on the canal. It is a "
+                            f"detected water surface, not a surveyed pound datum, and the "
+                            f"water was this height in {vintage}."
+                        ),
+                        "aria_label": (
+                            f"Detected water level {lv:.1f} metres above Ordnance Datum, "
+                            f"over about {area:,.0f} square metres of water. Bank heights "
+                            f"nearby are measured against this level. From the {vintage} "
+                            f"LIDAR survey."
+                        ),
+                    },
+                }
+            )
     out.sort(key=lambda f: -f["properties"]["level_m_od"])
     return out
 
@@ -798,8 +832,8 @@ def read_tile(name: str, z: int, x: int, y: int) -> bytes | None:
         return None
     try:
         row = con.execute(
-            "SELECT tile_data FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=?",
-            (z, x, (1 << z) - 1 - y)).fetchone()
+            "SELECT tile_data FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=?", (z, x, (1 << z) - 1 - y)
+        ).fetchone()
         return bytes(row[0]) if row else None
     except sqlite3.Error:
         return None
@@ -832,7 +866,7 @@ def _tiles_held(path: Path) -> tuple[int | None, str]:
         return int(row[0]), ""
     except sqlite3.Error as exc:
         return None, str(exc)
-    except (TypeError, ValueError, IndexError) as exc:   # a tiles table of another shape
+    except (TypeError, ValueError, IndexError) as exc:  # a tiles table of another shape
         return None, f"the tile count came back unreadable ({exc})"
     finally:
         if con is not None:
@@ -882,7 +916,7 @@ def _tile_rgba(np, raster: BankRaster, z: int, x: int, y: int):
     col = (lon - grid.west) / grid.px_lon - 0.5
     row = (grid.north - lat) / grid.px_lat - 0.5
     if col[-1] < -0.5 or col[0] > w - 0.5 or row[-1] < -0.5 or row[0] > h - 0.5:
-        return None                                     # tile is off the survey entirely
+        return None  # tile is off the survey entirely
 
     amber = np.array(_hex_rgb(settings.lidar_colour_low), dtype=np.float32)
     brown = np.array(_hex_rgb(settings.lidar_colour_high), dtype=np.float32)
@@ -890,8 +924,7 @@ def _tile_rgba(np, raster: BankRaster, z: int, x: int, y: int):
     if 360.0 / (float(1 << z) * BANK_TILE_SIZE) <= abs(grid.px_lon):
         ci = np.clip(np.rint(col).astype(np.int64), 0, w - 1)
         ri = np.clip(np.rint(row).astype(np.int64), 0, h - 1)
-        inside = (((col >= -0.5) & (col <= w - 0.5))[None, :]
-                  & ((row >= -0.5) & (row <= h - 0.5))[:, None])
+        inside = ((col >= -0.5) & (col <= w - 0.5))[None, :] & ((row >= -0.5) & (row <= h - 0.5))[:, None]
         sel = np.ix_(ri, ci)
         cls = raster.classes[sel]
         is_low = (cls == BANK_CLASS_LOW) & inside
@@ -912,8 +945,7 @@ def _tile_rgba(np, raster: BankRaster, z: int, x: int, y: int):
         glats = grid.north - grid.px_lat * (np.arange(r0, r1, dtype=np.float64) + 0.5)
         tx = np.floor((glons + 180.0) / 360.0 * n).astype(np.int64) - x * BANK_TILE_SIZE
         lat_r = np.radians(np.clip(glats, -85.05112878, 85.05112878))
-        ty = np.floor((1.0 - np.arcsinh(np.tan(lat_r)) / math.pi) / 2.0 * n
-                      ).astype(np.int64) - y * BANK_TILE_SIZE
+        ty = np.floor((1.0 - np.arcsinh(np.tan(lat_r)) / math.pi) / 2.0 * n).astype(np.int64) - y * BANK_TILE_SIZE
         okx, oky = (tx >= 0) & (tx < BANK_TILE_SIZE), (ty >= 0) & (ty < BANK_TILE_SIZE)
         if not okx.any() or not oky.any():
             return None
@@ -930,10 +962,12 @@ def _tile_rgba(np, raster: BankRaster, z: int, x: int, y: int):
         n_all = np.bincount(idx, minlength=nb).astype(np.float32)
         n_low = np.bincount(idx[low_m], minlength=nb).astype(np.float32)
         n_high = np.bincount(idx[high_m], minlength=nb).astype(np.float32)
-        s_shade = np.bincount(idx[paint_m], weights=raster.shade[r0:r1, c0:c1][sub].ravel()[paint_m],
-                              minlength=nb).astype(np.float32)
-        s_cont = np.bincount(idx[paint_m], weights=raster.contour[r0:r1, c0:c1][sub].ravel()[paint_m],
-                             minlength=nb).astype(np.float32)
+        s_shade = np.bincount(
+            idx[paint_m], weights=raster.shade[r0:r1, c0:c1][sub].ravel()[paint_m], minlength=nb
+        ).astype(np.float32)
+        s_cont = np.bincount(
+            idx[paint_m], weights=raster.contour[r0:r1, c0:c1][sub].ravel()[paint_m], minlength=nb
+        ).astype(np.float32)
         n_paint = n_low + n_high
         f_paint = (n_paint / np.maximum(n_all, 1.0)).reshape(shape)
         # TIES AND MIXTURES GO BROWN. Amber is the colour that says "this might be a way
@@ -946,8 +980,7 @@ def _tile_rgba(np, raster: BankRaster, z: int, x: int, y: int):
         shade = np.where(n_paint > 0, s_shade / np.maximum(n_paint, 1.0), 1.0).reshape(shape)
         cont = np.where(n_paint > 0, s_cont / np.maximum(n_paint, 1.0), 0.0).reshape(shape)
 
-    base = np.where(np.asarray(is_low, dtype=bool)[..., None],
-                    amber[None, None, :], brown[None, None, :])
+    base = np.where(np.asarray(is_low, dtype=bool)[..., None], amber[None, None, :], brown[None, None, :])
     rgb = base * shade[..., None]
     # White contours blended in AFTER the shade, so they read as lines drawn on the relief
     # rather than being darkened into it.
@@ -965,8 +998,9 @@ def _tile_rgba(np, raster: BankRaster, z: int, x: int, y: int):
     return out if out[..., 3].any() else None
 
 
-def write_pyramid(name: str, raster: BankRaster, zmin: int | None = None,
-                  zmax: int | None = None, progress=None) -> dict:
+def write_pyramid(
+    name: str, raster: BankRaster, zmin: int | None = None, zmax: int | None = None, progress=None
+) -> dict:
     """Render the class raster into an XYZ pyramid → <area>.lidar/bank.mbtiles.
 
     Fully transparent tiles are NOT written. A tile that would paint nothing is a tile the
@@ -985,7 +1019,8 @@ def write_pyramid(name: str, raster: BankRaster, zmin: int | None = None,
         raise BankUnavailable(
             f"zmin {zmin} is above zmax {zmax}, so no zoom level would be rendered at "
             f"all. An area built from that would report itself ABSENT and look exactly "
-            f"like a stretch of canal nobody has surveyed.")
+            f"like a stretch of canal nobody has surveyed."
+        )
     path = tiles_path(name)
     path.parent.mkdir(parents=True, exist_ok=True)
     # A rebuild REPLACES the pyramid rather than merging into it. A stale tile from a
@@ -1012,41 +1047,51 @@ def write_pyramid(name: str, raster: BankRaster, zmin: int | None = None,
                         continue
                     buf = io.BytesIO()
                     Image.fromarray(rgba, "RGBA").save(buf, format="PNG", optimize=True)
-                    con.execute("INSERT OR REPLACE INTO tiles VALUES (?,?,?,?)",
-                                (z, tx, (1 << z) - 1 - ty, buf.getvalue()))
+                    con.execute(
+                        "INSERT OR REPLACE INTO tiles VALUES (?,?,?,?)", (z, tx, (1 << z) - 1 - ty, buf.getvalue())
+                    )
                     written += 1
                     zw += 1
-            con.commit()          # per zoom: a run killed part-way keeps whole levels
+            con.commit()  # per zoom: a run killed part-way keeps whole levels
             per_zoom[str(z)] = zw
             if progress:
-                progress({"name": name, "state": "running", "zoom": z,
-                          "tiles": written, "blank": blank})
+                progress({"name": name, "state": "running", "zoom": z, "tiles": written, "blank": blank})
         for k, v in {
-                "name": f"{name} launch banks", "format": "png", "type": "overlay",
-                "minzoom": str(zmin), "maxzoom": str(zmax),
-                "bounds": ",".join(f"{b:.6f}" for b in bbox),
-                "attribution": settings.lidar_attribution,
-                "description": (
-                    f"Launch-bank classification over the canal corridor. Amber is bank "
-                    f"less than {settings.lidar_launch_max_height_m:g} m above the water "
-                    f"beside it — a measured height, not permission to launch. Brown is "
-                    f"higher bank and urban fabric. Water is never painted.")}.items():
+            "name": f"{name} launch banks",
+            "format": "png",
+            "type": "overlay",
+            "minzoom": str(zmin),
+            "maxzoom": str(zmax),
+            "bounds": ",".join(f"{b:.6f}" for b in bbox),
+            "attribution": settings.lidar_attribution,
+            "description": (
+                f"Launch-bank classification over the canal corridor. Amber is bank "
+                f"less than {settings.lidar_launch_max_height_m:g} m above the water "
+                f"beside it — a measured height, not permission to launch. Brown is "
+                f"higher bank and urban fabric. Water is never painted."
+            ),
+        }.items():
             con.execute("INSERT INTO metadata VALUES (?,?)", (k, v))
         con.commit()
     finally:
         con.close()
-    return {"tiles": written, "blank": blank, "zmin": zmin, "zmax": zmax,
-            "per_zoom": per_zoom, "tile_seconds": round(time.time() - t0, 2),
-            "bytes": path.stat().st_size if path.exists() else 0,
-            "bbox": [round(b, 7) for b in bbox],
-            "scheme": "XYZ 256 px PNG, MBTiles (TMS rows), same as the satellite archive"}
+    return {
+        "tiles": written,
+        "blank": blank,
+        "zmin": zmin,
+        "zmax": zmax,
+        "per_zoom": per_zoom,
+        "tile_seconds": round(time.time() - t0, 2),
+        "bytes": path.stat().st_size if path.exists() else 0,
+        "bbox": [round(b, 7) for b in bbox],
+        "scheme": "XYZ 256 px PNG, MBTiles (TMS rows), same as the satellite archive",
+    }
 
 
 # ================================================================================
 # THE JOB, AND WHAT IT LEAVES BEHIND
 # ================================================================================
-def render_area(name: str, *, zmin: int | None = None, zmax: int | None = None,
-                progress=None) -> dict:
+def render_area(name: str, *, zmin: int | None = None, zmax: int | None = None, progress=None) -> dict:
     """Classify the stored grid for one area and write its pyramid, labels and record.
 
     Synchronous and CPU-bound; an async caller wraps it in asyncio.to_thread. Returns the
@@ -1059,18 +1104,29 @@ def render_area(name: str, *, zmin: int | None = None, zmax: int | None = None,
     vintage = settings.lidar_survey_vintage
     src = grid.provenance or {}
 
-    _write_atomic(pounds_path(name), json.dumps({
-        "type": "FeatureCollection",
-        "layer": BANK_LAYER_KEY, "area": name,
-        "survey_vintage": vintage,
-        "attribution": settings.lidar_attribution,
-        "title": ("Detected water levels, one per flat sheet of water the LIDAR found "
-                  "along this corridor. Each is the height the banks beside it are "
-                  "measured against — a detected water surface, not a surveyed datum."),
-        "aria_label": (f"{len(raster.pounds)} detected water level labels for area "
-                       f"{name}, from the {vintage} LIDAR survey."),
-        "features": raster.pounds,
-    }, indent=1))
+    _write_atomic(
+        pounds_path(name),
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "layer": BANK_LAYER_KEY,
+                "area": name,
+                "survey_vintage": vintage,
+                "attribution": settings.lidar_attribution,
+                "title": (
+                    "Detected water levels, one per flat sheet of water the LIDAR found "
+                    "along this corridor. Each is the height the banks beside it are "
+                    "measured against — a detected water surface, not a surveyed datum."
+                ),
+                "aria_label": (
+                    f"{len(raster.pounds)} detected water level labels for area "
+                    f"{name}, from the {vintage} LIDAR survey."
+                ),
+                "features": raster.pounds,
+            },
+            indent=1,
+        ),
+    )
 
     state, why = _state_of(raster.stats, tiles["tiles"])
     prov = {
@@ -1083,36 +1139,50 @@ def render_area(name: str, *, zmin: int | None = None, zmax: int | None = None,
         "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "bbox": [round(v, 7) for v in grid.bbox],
         "attribution": settings.lidar_attribution,
-        "grid": {"width": int(grid.shape[1]), "height": int(grid.shape[0]),
-                 "px_m": [round(grid.px_x_m, 4), round(grid.px_y_m, 4)],
-                 "nodata_fraction": round(1.0 - float(grid.valid.mean()), 4)},
+        "grid": {
+            "width": int(grid.shape[1]),
+            "height": int(grid.shape[0]),
+            "px_m": [round(grid.px_x_m, 4), round(grid.px_y_m, 4)],
+            "nodata_fraction": round(1.0 - float(grid.valid.mean()), 4),
+        },
         # Carried forward from the acquisition half so ONE record answers "when was this
         # flown, when was it fetched, and when was it painted".
-        "source": {"fetched": src.get("fetched"),
-                   "survey_vintage": src.get("survey_vintage", vintage),
-                   "download_state": src.get("state"),
-                   "download_why": src.get("why")},
-        "corridor": {"water_buffer_m": settings.lidar_water_buffer_m,
-                     "band_buffer_m": settings.lidar_band_buffer_m,
-                     "total_half_width_m": (float(settings.lidar_water_buffer_m)
-                                            + float(settings.lidar_band_buffer_m)),
-                     "centreline_layer": settings.lidar_centreline_layer,
-                     "centreline_why": raster.stats.get("centreline_why")},
-        "classification": {"launch_max_height_m": settings.lidar_launch_max_height_m,
-                           "colour_low": settings.lidar_colour_low,
-                           "colour_high": settings.lidar_colour_high,
-                           "paint_alpha": BANK_PAINT_ALPHA},
-        "hillshade": {"azimuth_deg": settings.lidar_hillshade_azimuth_deg,
-                      "altitude_deg": settings.lidar_hillshade_altitude_deg,
-                      "z_factor": settings.lidar_hillshade_z_factor},
-        "contours": {"interval_m": settings.lidar_contour_interval_m,
-                     "width_px": settings.lidar_contour_width_px,
-                     "alpha": settings.lidar_contour_alpha},
-        "pound_detection": {"bin_m": settings.lidar_pound_bin_m,
-                            "separation_m": settings.lidar_pound_separation_m,
-                            "flat_gradient": settings.lidar_flat_gradient,
-                            "sample_m": settings.lidar_water_sample_m,
-                            "min_sheet_pixels": BANK_POUND_MIN_PIXELS},
+        "source": {
+            "fetched": src.get("fetched"),
+            "survey_vintage": src.get("survey_vintage", vintage),
+            "download_state": src.get("state"),
+            "download_why": src.get("why"),
+        },
+        "corridor": {
+            "water_buffer_m": settings.lidar_water_buffer_m,
+            "band_buffer_m": settings.lidar_band_buffer_m,
+            "total_half_width_m": (float(settings.lidar_water_buffer_m) + float(settings.lidar_band_buffer_m)),
+            "centreline_layer": settings.lidar_centreline_layer,
+            "centreline_why": raster.stats.get("centreline_why"),
+        },
+        "classification": {
+            "launch_max_height_m": settings.lidar_launch_max_height_m,
+            "colour_low": settings.lidar_colour_low,
+            "colour_high": settings.lidar_colour_high,
+            "paint_alpha": BANK_PAINT_ALPHA,
+        },
+        "hillshade": {
+            "azimuth_deg": settings.lidar_hillshade_azimuth_deg,
+            "altitude_deg": settings.lidar_hillshade_altitude_deg,
+            "z_factor": settings.lidar_hillshade_z_factor,
+        },
+        "contours": {
+            "interval_m": settings.lidar_contour_interval_m,
+            "width_px": settings.lidar_contour_width_px,
+            "alpha": settings.lidar_contour_alpha,
+        },
+        "pound_detection": {
+            "bin_m": settings.lidar_pound_bin_m,
+            "separation_m": settings.lidar_pound_separation_m,
+            "flat_gradient": settings.lidar_flat_gradient,
+            "sample_m": settings.lidar_water_sample_m,
+            "min_sheet_pixels": BANK_POUND_MIN_PIXELS,
+        },
         "levels": raster.levels,
         # TWO COUNTS, AND THEY ARE DIFFERENT NUMBERS. `pounds` is how many distinct water
         # levels were detected — the one nav/service.py reads to say "N water level(s)
@@ -1128,7 +1198,8 @@ def render_area(name: str, *, zmin: int | None = None, zmax: int | None = None,
         "aria_label": _aria(name, raster, state),
         "survey": (
             f"Every height in this layer comes from the Environment Agency's {vintage} "
-            f"1 m LIDAR composite terrain model."),
+            f"1 m LIDAR composite terrain model."
+        ),
         # THE DATE ON ITS OWN IS NOT A WARNING. "2022" in a field is a number a hurried
         # operator reads straight past; what has to travel with it is what a four-year-old
         # survey of a bank actually means, in a sentence, in the same voice every other
@@ -1147,18 +1218,21 @@ _WHAT_AMBER_MEANS = (
     "geometric fact measured from a LIDAR terrain model and it is NOT a statement that "
     "you can launch there. It knows nothing about fences, gates, private land, live "
     "railway, reed beds, mud, or whether anything can be carried to it. The recon run "
-    "that proved this layer painted a railway cutting amber.")
+    "that proved this layer painted a railway cutting amber."
+)
 
 _WATER_RULE = (
     "LIDAR cannot see through water, so this layer knows nothing about the channel and "
     "paints none of it. Every water pixel is fully transparent and the satellite imagery "
-    "shows through it unaltered. Nothing here says anything whatever about depth.")
+    "shows through it unaltered. Nothing here says anything whatever about depth."
+)
 
 _WHAT_IS_MISSING = (
     "The corridor is buffered from the Canal & River Trust canal centreline, so an arm, "
     "a basin or a marina that is not in that centreline is not in this layer at all. "
     "Ground with no paint on it has NOT been surveyed and found high — it has not been "
-    "looked at.")
+    "looked at."
+)
 
 
 def _vintage_warning(vintage: str) -> str:
@@ -1168,11 +1242,13 @@ def _vintage_warning(vintage: str) -> str:
     `time.gmtime().tm_year` is the wrong kind of right — it agrees with the data in 2022
     and lies in every year this vehicle will actually fly.
     """
-    return (f"The terrain behind this layer is the {vintage} LIDAR survey, and nothing "
-            f"in it has been checked since {vintage}. Banks change: piling is driven, "
-            f"moorings are built, edges collapse, wharves are filled in and slipways are "
-            f"fenced off. Treat every amber pixel as a {vintage} observation and not as "
-            f"a description of what is there today.")
+    return (
+        f"The terrain behind this layer is the {vintage} LIDAR survey, and nothing "
+        f"in it has been checked since {vintage}. Banks change: piling is driven, "
+        f"moorings are built, edges collapse, wharves are filled in and slipways are "
+        f"fenced off. Treat every amber pixel as a {vintage} observation and not as "
+        f"a description of what is there today."
+    )
 
 
 def _state_of(stats: dict, tiles: int) -> tuple[str, str]:
@@ -1185,49 +1261,56 @@ def _state_of(stats: dict, tiles: int) -> tuple[str, str]:
     if stats.get("why_empty"):
         return "absent", stats["why_empty"]
     if not stats.get("corridor_pixels"):
-        return "absent", ("no canal centreline crosses this area, so there is no corridor "
-                          "and nothing has been classified here.")
+        return "absent", (
+            "no canal centreline crosses this area, so there is no corridor " "and nothing has been classified here."
+        )
     if tiles == 0:
         return "absent", (
             "the corridor was traced but no tile carries any paint. Treat this area as "
             "UNSURVEYED for bank height — the imagery under it says nothing about "
-            "whether a bank is low or a wall.")
+            "whether a bank is low or a wall."
+        )
     cov = stats.get("corridor_coverage", 0.0)
     if cov < float(settings.lidar_min_coverage):
         return "partial", (
             f"the LIDAR reaches only {cov * 100:.1f}% of this corridor — below the "
             f"{float(settings.lidar_min_coverage) * 100:.0f}% this layer treats as "
             f"usable. Most of this area is drawn as nothing, which is NOT the same as "
-            f"bank that was measured and found high.")
+            f"bank that was measured and found high."
+        )
     if cov < 0.995:
         return "partial", (
             f"the LIDAR reaches {cov * 100:.1f}% of this corridor. The rest was not flown "
             f"or not delivered and is drawn as nothing, which is NOT the same as bank "
-            f"that was measured and found high.")
-    return "present", ("the LIDAR covers this whole corridor and every pixel of it has "
-                       "been classified.")
+            f"that was measured and found high."
+        )
+    return "present", ("the LIDAR covers this whole corridor and every pixel of it has " "been classified.")
 
 
 def _title(name: str, raster: BankRaster, state: str, why: str) -> str:
     s = raster.stats
     lv = ", ".join(f"{r['level_m_od']:.1f}" for r in raster.levels) or "none"
-    return (f"LAUNCH BANKS, {name}: {state.upper()}. {why} "
-            f"Amber is bank under {settings.lidar_launch_max_height_m:g} m above the "
-            f"water beside it and is {s.get('amber_fraction_of_painted', 0) * 100:.0f}% "
-            f"of the paint; brown is everything higher. Water carries no paint at all, "
-            f"because nothing here knows the depth. Water levels detected, metres above "
-            f"Ordnance Datum: {lv}. Environment Agency LIDAR Composite DTM 1 m, "
-            f"{settings.lidar_survey_vintage} survey.")
+    return (
+        f"LAUNCH BANKS, {name}: {state.upper()}. {why} "
+        f"Amber is bank under {settings.lidar_launch_max_height_m:g} m above the "
+        f"water beside it and is {s.get('amber_fraction_of_painted', 0) * 100:.0f}% "
+        f"of the paint; brown is everything higher. Water carries no paint at all, "
+        f"because nothing here knows the depth. Water levels detected, metres above "
+        f"Ordnance Datum: {lv}. Environment Agency LIDAR Composite DTM 1 m, "
+        f"{settings.lidar_survey_vintage} survey."
+    )
 
 
 def _aria(name: str, raster: BankRaster, state: str) -> str:
     s = raster.stats
-    return (f"Launch bank layer for area {name}. Status {state}. "
-            f"{s.get('amber_fraction_of_painted', 0) * 100:.0f} percent of the painted "
-            f"corridor is amber, meaning bank less than "
-            f"{settings.lidar_launch_max_height_m:g} metres above the water beside it — "
-            f"a measured height, not permission to launch. {len(raster.levels)} water "
-            f"levels detected. From the {settings.lidar_survey_vintage} LIDAR survey.")
+    return (
+        f"Launch bank layer for area {name}. Status {state}. "
+        f"{s.get('amber_fraction_of_painted', 0) * 100:.0f} percent of the painted "
+        f"corridor is amber, meaning bank less than "
+        f"{settings.lidar_launch_max_height_m:g} metres above the water beside it — "
+        f"a measured height, not permission to launch. {len(raster.levels)} water "
+        f"levels detected. From the {settings.lidar_survey_vintage} LIDAR survey."
+    )
 
 
 def card(name: str) -> dict:
@@ -1245,27 +1328,41 @@ def card(name: str) -> dict:
         prov = json.loads(render_provenance_path(name).read_text(encoding="utf-8"))
     except FileNotFoundError:
         held = lidar.card(name)
-        return {"area": name, "layer": BANK_LAYER_KEY, "state": "absent",
-                "painted": False, "tiles_bytes": 0, "libraries": libs,
-                "survey_vintage": settings.lidar_survey_vintage,
-                "why": (f"no launch-bank paint has been built for the area '{name}'. "
-                        f"{held.get('why', '')} The satellite imagery is drawn unpainted, "
-                        f"and unpainted means NOT SURVEYED here — it does not mean there "
-                        f"are no low banks."),
-                "title": (f"LAUNCH BANKS, {name}: ABSENT — this handheld holds no bank "
-                          f"classification for this area."),
-                "aria_label": (f"Launch bank layer for area {name} is absent. No bank "
-                               f"classification is held.")}
+        return {
+            "area": name,
+            "layer": BANK_LAYER_KEY,
+            "state": "absent",
+            "painted": False,
+            "tiles_bytes": 0,
+            "libraries": libs,
+            "survey_vintage": settings.lidar_survey_vintage,
+            "why": (
+                f"no launch-bank paint has been built for the area '{name}'. "
+                f"{held.get('why', '')} The satellite imagery is drawn unpainted, "
+                f"and unpainted means NOT SURVEYED here — it does not mean there "
+                f"are no low banks."
+            ),
+            "title": (f"LAUNCH BANKS, {name}: ABSENT — this handheld holds no bank " f"classification for this area."),
+            "aria_label": (f"Launch bank layer for area {name} is absent. No bank " f"classification is held."),
+        }
     except Exception as exc:  # noqa: BLE001
         # A record that will not parse describes an area nobody can vouch for: nothing on
         # it can be dated or attributed, so it is not served as a survey.
-        return {"area": name, "layer": BANK_LAYER_KEY, "state": "absent",
-                "painted": False, "tiles_bytes": 0, "libraries": libs,
-                "why": (f"the record beside this area's bank tiles is unreadable ({exc}), "
-                        f"so nothing here can be dated or attributed. Rebuild the layer "
-                        f"before trusting the paint."),
-                "title": f"LAUNCH BANKS, {name}: ABSENT — unreadable record.",
-                "aria_label": f"Launch bank layer for area {name} has an unreadable record."}
+        return {
+            "area": name,
+            "layer": BANK_LAYER_KEY,
+            "state": "absent",
+            "painted": False,
+            "tiles_bytes": 0,
+            "libraries": libs,
+            "why": (
+                f"the record beside this area's bank tiles is unreadable ({exc}), "
+                f"so nothing here can be dated or attributed. Rebuild the layer "
+                f"before trusting the paint."
+            ),
+            "title": f"LAUNCH BANKS, {name}: ABSENT — unreadable record.",
+            "aria_label": f"Launch bank layer for area {name} has an unreadable record.",
+        }
     prov["painted"] = tiles.exists()
     prov["tiles_bytes"] = tiles.stat().st_size if tiles.exists() else 0
     prov["libraries"] = libs
@@ -1273,9 +1370,11 @@ def card(name: str) -> dict:
         # The mirror of the empty-layer lie: everything says the area is here and the
         # pixels are gone.
         prov["state"] = "absent"
-        prov["why"] = ("the record for this area's paint is on the card but the tile "
-                       "archive beside it is not, so there is nothing to draw. Rebuild "
-                       "the layer.")
+        prov["why"] = (
+            "the record for this area's paint is on the card but the tile "
+            "archive beside it is not, so there is nothing to draw. Rebuild "
+            "the layer."
+        )
     elif tiles.exists() and prov.get("state") != "absent":
         # AND THE SAME LIE ONE STEP QUIETER: the archive is present, so the check above
         # is satisfied, and it is EMPTY or SHORT. The record describes the build; only
@@ -1292,11 +1391,13 @@ def card(name: str) -> dict:
                 f"the tile archive for this area is on the card but will not be read "
                 f"({why_not}). Its record claims {claimed} tiles; none of them can be "
                 f"served, so this area is drawn as nothing. Unpainted means NOT "
-                f"SURVEYED — it does not mean there are no low banks. Rebuild the layer.")
-            prov["title"] = (f"LAUNCH BANKS, {name}: UNREADABLE — the tile archive is "
-                             f"there and will not open.")
-            prov["aria_label"] = (f"Launch bank layer for area {name} is unreadable. The "
-                                  f"tile archive will not open and no paint can be drawn.")
+                f"SURVEYED — it does not mean there are no low banks. Rebuild the layer."
+            )
+            prov["title"] = f"LAUNCH BANKS, {name}: UNREADABLE — the tile archive is " f"there and will not open."
+            prov["aria_label"] = (
+                f"Launch bank layer for area {name} is unreadable. The "
+                f"tile archive will not open and no paint can be drawn."
+            )
         elif held == 0:
             prov["state"] = "unreadable"
             prov["painted"] = False
@@ -1304,22 +1405,27 @@ def card(name: str) -> dict:
                 f"the tile archive for this area opens and is EMPTY: its record claims "
                 f"{claimed} tiles and it holds none. This is a broken card and not an "
                 f"unsurveyed area — nothing will be drawn, and unpainted means NOT "
-                f"SURVEYED, not measured and found high. Rebuild the layer.")
-            prov["title"] = (f"LAUNCH BANKS, {name}: UNREADABLE — the tile archive is "
-                             f"empty, {claimed} tiles expected.")
-            prov["aria_label"] = (f"Launch bank layer for area {name} is unreadable. The "
-                                  f"tile archive holds no tiles of {claimed} expected.")
+                f"SURVEYED, not measured and found high. Rebuild the layer."
+            )
+            prov["title"] = (
+                f"LAUNCH BANKS, {name}: UNREADABLE — the tile archive is " f"empty, {claimed} tiles expected."
+            )
+            prov["aria_label"] = (
+                f"Launch bank layer for area {name} is unreadable. The "
+                f"tile archive holds no tiles of {claimed} expected."
+            )
         elif claimed and held < claimed:
             prov["state"] = "partial"
             prov["why"] = (
                 f"the tile archive holds {held} of the {claimed} tiles its record claims "
                 f"were built, so part of this corridor will draw as nothing that was in "
                 f"fact classified. Ground with no paint here has NOT been surveyed and "
-                f"found high — some of it was surveyed and lost. Rebuild the layer.")
-            prov["title"] = (f"LAUNCH BANKS, {name}: PARTIAL — {held} of {claimed} tiles "
-                             f"survive on this card.")
-            prov["aria_label"] = (f"Launch bank layer for area {name} is partial. The tile "
-                                  f"archive holds {held} of {claimed} tiles.")
+                f"found high — some of it was surveyed and lost. Rebuild the layer."
+            )
+            prov["title"] = f"LAUNCH BANKS, {name}: PARTIAL — {held} of {claimed} tiles " f"survive on this card."
+            prov["aria_label"] = (
+                f"Launch bank layer for area {name} is partial. The tile " f"archive holds {held} of {claimed} tiles."
+            )
     return prov
 
 
@@ -1340,8 +1446,11 @@ def list_painted() -> list[dict]:
     if not d.is_dir():
         return []
     suffix = settings.lidar_dir_suffix
-    return [card(p.name[: -len(suffix)]) for p in sorted(d.iterdir())
-            if p.is_dir() and p.name.endswith(suffix) and (p / _PROV_NAME).exists()]
+    return [
+        card(p.name[: -len(suffix)])
+        for p in sorted(d.iterdir())
+        if p.is_dir() and p.name.endswith(suffix) and (p / _PROV_NAME).exists()
+    ]
 
 
 # ================================================================================
@@ -1349,10 +1458,12 @@ def list_painted() -> list[dict]:
 # ================================================================================
 def _main(argv: list[str]) -> int:
     import argparse
+
     ap = argparse.ArgumentParser(
         prog="python -m nav.bank",
         description="Paint the LIDAR launch-bank overlay for an offline area. Reads the "
-                    "grid nav/lidar.py downloaded; touches no network.")
+        "grid nav/lidar.py downloaded; touches no network.",
+    )
     ap.add_argument("area", nargs="?", help="area name (as used by nav.lidar)")
     ap.add_argument("--status", metavar="AREA", help="what paint is on the card")
     ap.add_argument("--list", action="store_true", help="every area with a bank layer")
@@ -1375,14 +1486,14 @@ def _main(argv: list[str]) -> int:
         if args.levels:
             grid = load_grid(args.levels)
             raster = classify(grid)
-            print(f"{args.levels}: {grid.shape[1]}x{grid.shape[0]} px, "
-                  f"{grid.px_x_m:.3f} x {grid.px_y_m:.3f} m")
+            print(f"{args.levels}: {grid.shape[1]}x{grid.shape[0]} px, " f"{grid.px_x_m:.3f} x {grid.px_y_m:.3f} m")
             if not raster.levels:
-                print("no water levels detected — " + raster.stats.get(
-                    "why_empty", "no flat sheet of water was found in the sampling band."))
+                print(
+                    "no water levels detected — "
+                    + raster.stats.get("why_empty", "no flat sheet of water was found in the sampling band.")
+                )
             for r in raster.levels:
-                print(f"  {r['level_m_od']:8.2f} m OD   "
-                      f"{r['sheet_pixels']:>7,} px of flat water")
+                print(f"  {r['level_m_od']:8.2f} m OD   " f"{r['sheet_pixels']:>7,} px of flat water")
             print(json.dumps(raster.stats, indent=1))
             return 0
         if not args.area:
@@ -1390,14 +1501,12 @@ def _main(argv: list[str]) -> int:
             return 1
 
         def show(ev):
-            print(f"  z{ev['zoom']:>2}: {ev['tiles']:>5} tiles written, "
-                  f"{ev['blank']:>5} empty skipped")
+            print(f"  z{ev['zoom']:>2}: {ev['tiles']:>5} tiles written, " f"{ev['blank']:>5} empty skipped")
 
         prov = render_area(args.area, zmin=args.zmin, zmax=args.zmax, progress=show)
         print()
         print(prov["title"])
-        print(json.dumps({k: prov[k] for k in ("state", "levels", "stats", "tiles")},
-                         indent=1))
+        print(json.dumps({k: prov[k] for k in ("state", "levels", "stats", "tiles")}, indent=1))
         return 0 if prov["state"] != "absent" else 3
     except BankUnavailable as exc:
         print(str(exc))
@@ -1406,4 +1515,5 @@ def _main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     import sys
+
     raise SystemExit(_main(sys.argv[1:]))

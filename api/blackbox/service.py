@@ -1,4 +1,5 @@
 """Blackbox HTTP surface (spec §1/§5): session handshake + client-log upload."""
+
 from __future__ import annotations
 
 import logging

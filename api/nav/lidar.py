@@ -41,6 +41,7 @@ still serve every other layer — the same rule that makes a missing depth senso
 itself instead of killing the console. library_state() is the one place that decides
 whether this layer can run, and it answers with the sentence an operator can act on.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -68,6 +69,7 @@ log = logging.getLogger("neptune.nav.lidar")
 # be told "the console will not start" when the truth is "one optional map layer needs
 # one pip command". The console must survive every absence it can describe.
 
+
 def _try_import(module: str):
     try:
         return __import__(module), None
@@ -82,8 +84,10 @@ def library_state() -> dict:
     an operator at a kitchen table the night before a dive needs is the name of the
     library and the command that installs it. `why` is written to be shown verbatim.
     """
-    need = (("numpy", "the elevation grid itself — every array, mask and statistic"),
-            ("PIL", "Pillow, which decodes the float32 GeoTIFF the service returns"))
+    need = (
+        ("numpy", "the elevation grid itself — every array, mask and statistic"),
+        ("PIL", "Pillow, which decodes the float32 GeoTIFF the service returns"),
+    )
     missing, detail = [], {}
     for mod, what in need:
         obj, err = _try_import(mod)
@@ -91,18 +95,26 @@ def library_state() -> dict:
         if obj is None:
             missing.append(mod)
     if not missing:
-        return {"ok": True, "missing": [], "install": None,
-                "why": "numpy and Pillow are installed, so the LIDAR launch-bank layer "
-                       "can be downloaded and decoded on this machine.",
-                "libraries": detail}
+        return {
+            "ok": True,
+            "missing": [],
+            "install": None,
+            "why": "numpy and Pillow are installed, so the LIDAR launch-bank layer "
+            "can be downloaded and decoded on this machine.",
+            "libraries": detail,
+        }
     names = " and ".join("Pillow" if m == "PIL" else m for m in missing)
     cmd = "pip install numpy scipy Pillow"
     return {
-        "ok": False, "missing": missing, "install": cmd,
-        "why": (f"The LIDAR launch-bank layer is unavailable on this machine because "
-                f"{names} {'is' if len(missing) == 1 else 'are'} not installed. "
-                f"Install with: {cmd}  (handheld only — the Pi must not carry these). "
-                f"Every other map layer is unaffected."),
+        "ok": False,
+        "missing": missing,
+        "install": cmd,
+        "why": (
+            f"The LIDAR launch-bank layer is unavailable on this machine because "
+            f"{names} {'is' if len(missing) == 1 else 'are'} not installed. "
+            f"Install with: {cmd}  (handheld only — the Pi must not carry these). "
+            f"Every other map layer is unaffected."
+        ),
         "libraries": detail,
     }
 
@@ -144,7 +156,7 @@ async def _fetch_retry(url: str, tries: int | None = None) -> tuple[bytes | None
             if attempt == tries - 1:
                 log.warning("lidar fetch failed (%s): %s", url.split("?")[0], last)
                 return None, last
-            await asyncio.sleep(1.0 * (2 ** attempt))
+            await asyncio.sleep(1.0 * (2**attempt))
     return None, last
 
 
@@ -174,11 +186,13 @@ def coverage_url(bbox: list[float]) -> str:
     reason — see the guard there.
     """
     w, s, e, n = bbox
-    q = (f"service=WCS&version=2.0.1&request=GetCoverage"
-         f"&coverageId={urllib.parse.quote(settings.lidar_coverage_id)}"
-         f"&subset=Long({w:.7f},{e:.7f})&subset=Lat({s:.7f},{n:.7f})"
-         f"&format={urllib.parse.quote(settings.lidar_format)}"
-         f"&subsettingCrs={urllib.parse.quote(settings.lidar_subset_crs, safe='')}")
+    q = (
+        f"service=WCS&version=2.0.1&request=GetCoverage"
+        f"&coverageId={urllib.parse.quote(settings.lidar_coverage_id)}"
+        f"&subset=Long({w:.7f},{e:.7f})&subset=Lat({s:.7f},{n:.7f})"
+        f"&format={urllib.parse.quote(settings.lidar_format)}"
+        f"&subsettingCrs={urllib.parse.quote(settings.lidar_subset_crs, safe='')}"
+    )
     return f"{settings.lidar_wcs_url}?{q}"
 
 
@@ -190,15 +204,15 @@ def coverage_url(bbox: list[float]) -> str:
 # happens to be wrong. A refused sub-request leaves a hole the provenance names; a
 # wrong one paints amber over a wall.
 
-_GEOKEY_GEOGRAPHIC = 2048       # GeographicTypeGeoKey
-_GEOKEY_PROJECTED = 3072        # ProjectedCSTypeGeoKey
-_TAG_PIXEL_SCALE = 33550        # ModelPixelScaleTag
-_TAG_TIEPOINT = 33922           # ModelTiepointTag
-_TAG_TRANSFORM = 34264          # ModelTransformationTag (what this service sends)
+_GEOKEY_GEOGRAPHIC = 2048  # GeographicTypeGeoKey
+_GEOKEY_PROJECTED = 3072  # ProjectedCSTypeGeoKey
+_TAG_PIXEL_SCALE = 33550  # ModelPixelScaleTag
+_TAG_TIEPOINT = 33922  # ModelTiepointTag
+_TAG_TRANSFORM = 34264  # ModelTransformationTag (what this service sends)
 _TAG_GEOKEYS = 34735
 _TAG_GDAL_NODATA = 42113
 _TAG_COMPRESSION = 259
-_TAG_SAMPLEFORMAT = 339         # 3 = IEEE float
+_TAG_SAMPLEFORMAT = 339  # 3 = IEEE float
 _TAG_BITS = 258
 
 
@@ -240,7 +254,7 @@ def _transform(tags, width: int, height: int) -> dict | None:
         sx, r1, _, x0, r2, sy, _, y0 = (float(v) for v in t[:8])
         if abs(r1) > 1e-15 or abs(r2) > 1e-15:
             return None
-        px_lon, px_lat = sx, -sy          # sy is negative: north-up rasters count down
+        px_lon, px_lat = sx, -sy  # sy is negative: north-up rasters count down
     else:
         scale, tie = tags.get(_TAG_PIXEL_SCALE), tags.get(_TAG_TIEPOINT)
         if not scale or not tie or len(scale) < 2 or len(tie) < 6:
@@ -252,9 +266,16 @@ def _transform(tags, width: int, height: int) -> dict | None:
         y0 = float(tie[4]) + float(tie[1]) * px_lat
     if not (px_lon > 0 and px_lat > 0):
         return None
-    return {"west": x0, "north": y0, "px_lon": px_lon, "px_lat": px_lat,
-            "east": x0 + px_lon * width, "south": y0 - px_lat * height,
-            "width": int(width), "height": int(height)}
+    return {
+        "west": x0,
+        "north": y0,
+        "px_lon": px_lon,
+        "px_lat": px_lat,
+        "east": x0 + px_lon * width,
+        "south": y0 - px_lat * height,
+        "width": int(width),
+        "height": int(height),
+    }
 
 
 def _nodata_value(tags) -> float | None:
@@ -299,8 +320,9 @@ def decode_dtm(raw: bytes) -> dict:
         im.load()
     except Exception as exc:  # noqa: BLE001
         head = raw[:200].decode("utf-8", "replace").strip() if raw else "(empty response)"
-        return _fail(f"the service did not return a readable TIFF ({type(exc).__name__}: "
-                     f"{exc}); the body began: {head!r}")
+        return _fail(
+            f"the service did not return a readable TIFF ({type(exc).__name__}: " f"{exc}); the body began: {head!r}"
+        )
 
     tags = getattr(im, "tag_v2", {}) or {}
     compression = tags.get(_TAG_COMPRESSION)
@@ -308,31 +330,37 @@ def decode_dtm(raw: bytes) -> dict:
         # REFUSED, not decoded-and-hoped. Pillow 12.3.0 silently mis-decodes tiled
         # float32 deflate (32946) from this service; a wrong elevation is worse than a
         # missing one because nothing downstream can tell it is wrong.
-        return _fail(f"the TIFF is compressed (compression tag {compression}) and this "
-                     f"decoder only trusts uncompressed float32; ask for the "
-                     f"uncompressed form rather than decoding this one")
-    if im.mode != "F" or tags.get(_TAG_SAMPLEFORMAT, (3,))[0] != 3 or \
-            tags.get(_TAG_BITS, (32,))[0] != 32:
-        return _fail(f"the TIFF is not 32-bit float elevation (PIL mode {im.mode!r}, "
-                     f"SampleFormat {tags.get(_TAG_SAMPLEFORMAT)}, "
-                     f"BitsPerSample {tags.get(_TAG_BITS)})")
+        return _fail(
+            f"the TIFF is compressed (compression tag {compression}) and this "
+            f"decoder only trusts uncompressed float32; ask for the "
+            f"uncompressed form rather than decoding this one"
+        )
+    if im.mode != "F" or tags.get(_TAG_SAMPLEFORMAT, (3,))[0] != 3 or tags.get(_TAG_BITS, (32,))[0] != 32:
+        return _fail(
+            f"the TIFF is not 32-bit float elevation (PIL mode {im.mode!r}, "
+            f"SampleFormat {tags.get(_TAG_SAMPLEFORMAT)}, "
+            f"BitsPerSample {tags.get(_TAG_BITS)})"
+        )
 
     epsg = _geokey(tags, _GEOKEY_GEOGRAPHIC) or _geokey(tags, _GEOKEY_PROJECTED)
     if epsg is not None and int(epsg) != 4326:
         # The mosaic places pixels by lon/lat arithmetic. A grid in any other CRS would
         # land in the wrong place on the map with no symptom other than a canal that is
         # not where the satellite says it is.
-        return _fail(f"the grid came back in EPSG:{int(epsg)}, not the EPSG:4326 that "
-                     f"was asked for; it cannot be placed on the map by this code")
+        return _fail(
+            f"the grid came back in EPSG:{int(epsg)}, not the EPSG:4326 that "
+            f"was asked for; it cannot be placed on the map by this code"
+        )
 
     arr = np.asarray(im)
     if arr.dtype != np.float32 or arr.ndim != 2 or arr.size == 0:
-        return _fail(f"the decoded array is not a 2-D float32 grid "
-                     f"(dtype {arr.dtype}, shape {arr.shape})")
+        return _fail(f"the decoded array is not a 2-D float32 grid " f"(dtype {arr.dtype}, shape {arr.shape})")
     geo = _transform(tags, arr.shape[1], arr.shape[0])
     if geo is None:
-        return _fail("the TIFF carries no readable north-up georeference "
-                     "(ModelTransformation / ModelPixelScale + ModelTiepoint)")
+        return _fail(
+            "the TIFF carries no readable north-up georeference "
+            "(ModelTransformation / ModelPixelScale + ModelTiepoint)"
+        )
 
     nodata = _nodata_value(tags)
     grid = np.array(arr, dtype=np.float32, copy=True)
@@ -343,15 +371,14 @@ def decode_dtm(raw: bytes) -> dict:
     # nodata, this ground is outside the survey" is a true and useful thing to record;
     # said over a response that was actually 900 km of nonsense it is a lie that closes
     # the case, and the next run would not retry a box it should retry.
-    unsurveyed = ~np.isfinite(grid)                            # NaN / inf
+    unsurveyed = ~np.isfinite(grid)  # NaN / inf
     if nodata is not None:
         # Compared with a tolerance, not ==: the tag is decimal ASCII and the pixels are
         # float32, so an exact equality test is one rounding away from leaving the
         # sentinel in the grid, and the sentinel is 3.4e38.
         unsurveyed |= np.isclose(grid, np.float32(nodata), rtol=1e-6, atol=0.0)
-    unsurveyed |= grid < settings.lidar_sentinel_below   # the ~-3.4e38 fill, tag or not
-    implausible = (~unsurveyed) & ((grid < settings.lidar_elev_min_m)
-                                   | (grid > settings.lidar_elev_max_m))
+    unsurveyed |= grid < settings.lidar_sentinel_below  # the ~-3.4e38 fill, tag or not
+    implausible = (~unsurveyed) & ((grid < settings.lidar_elev_min_m) | (grid > settings.lidar_elev_max_m))
     # Denormals: 6.9e-41 is not a height above Newlyn, it is uninitialised memory.
     implausible |= (~unsurveyed) & (grid != 0) & (np.abs(grid) < 1e-30)
     bad = unsurveyed | implausible
@@ -361,24 +388,35 @@ def decode_dtm(raw: bytes) -> dict:
     n_unsurveyed = int(np.count_nonzero(unsurveyed))
     n_implausible = int(np.count_nonzero(implausible))
     valid = int(total - n_unsurveyed - n_implausible)
-    out = {"ok": True, "why": "", "grid": grid, "geo": geo,
-           "nodata_value": nodata, "nodata_tag_present": nodata is not None,
-           "pixels": total, "valid_pixels": valid,
-           "nodata_pixels": n_unsurveyed, "implausible_pixels": n_implausible,
-           "nodata_fraction": round(1.0 - valid / total, 6) if total else 1.0,
-           "compression": int(compression) if compression else 1,
-           "elev_min": None, "elev_max": None, "fill": False}
+    out = {
+        "ok": True,
+        "why": "",
+        "grid": grid,
+        "geo": geo,
+        "nodata_value": nodata,
+        "nodata_tag_present": nodata is not None,
+        "pixels": total,
+        "valid_pixels": valid,
+        "nodata_pixels": n_unsurveyed,
+        "implausible_pixels": n_implausible,
+        "nodata_fraction": round(1.0 - valid / total, 6) if total else 1.0,
+        "compression": int(compression) if compression else 1,
+        "elev_min": None,
+        "elev_max": None,
+        "fill": False,
+    }
 
     if valid == 0:
         out["ok"] = False
         out["why"] = (
             f"every pixel in this box is nodata — the {settings.lidar_survey_vintage} "
             f"LIDAR composite does not cover this ground"
-            if n_implausible == 0 else
-            f"nothing in this box is a plausible elevation: {n_implausible} of {total} "
+            if n_implausible == 0
+            else f"nothing in this box is a plausible elevation: {n_implausible} of {total} "
             f"pixels fall outside {settings.lidar_elev_min_m:g} to "
             f"{settings.lidar_elev_max_m:g} m OD and the rest is nodata. This is not "
-            f"terrain and has not been stored")
+            f"terrain and has not been stored"
+        )
         return out
 
     lo, hi = float(np.nanmin(grid)), float(np.nanmax(grid))
@@ -390,9 +428,11 @@ def decode_dtm(raw: bytes) -> dict:
     if (hi - lo) < settings.lidar_fill_span_m and abs(hi) < settings.lidar_fill_span_m:
         out["ok"] = False
         out["fill"] = True
-        out["why"] = (f"the grid is a flat sheet at {lo:.3f}-{hi:.3f} m with no relief, "
-                      f"which is how this service answers a box outside the survey — "
-                      f"it is fill, not terrain, and has not been stored")
+        out["why"] = (
+            f"the grid is a flat sheet at {lo:.3f}-{hi:.3f} m with no relief, "
+            f"which is how this service answers a box outside the survey — "
+            f"it is fill, not terrain, and has not been stored"
+        )
     return out
 
 
@@ -422,9 +462,17 @@ def area_grid(bbox: list[float], px_m: float | None = None) -> dict:
     px_lon = px_m / max(1.0, 111320.0 * math.cos(math.radians(lat_mid)))
     width = max(1, int(math.ceil((e - w) / px_lon)))
     height = max(1, int(math.ceil((n - s) / px_lat)))
-    return {"west": w, "north": s + height * px_lat, "px_lon": px_lon, "px_lat": px_lat,
-            "east": w + width * px_lon, "south": s,
-            "width": width, "height": height, "px_m": px_m}
+    return {
+        "west": w,
+        "north": s + height * px_lat,
+        "px_lon": px_lon,
+        "px_lat": px_lat,
+        "east": w + width * px_lon,
+        "south": s,
+        "width": width,
+        "height": height,
+        "px_m": px_m,
+    }
 
 
 def subrequest_boxes(grid: dict) -> list[dict]:
@@ -449,14 +497,23 @@ def subrequest_boxes(grid: dict) -> list[dict]:
         for col, i0 in enumerate(range(0, grid["width"], step)):
             i1 = min(grid["width"], i0 + step)
             j1 = min(grid["height"], j0 + step)
-            out.append({
-                "row": row, "col": col, "key": f"r{row:02d}c{col:02d}",
-                "i0": i0, "j0": j0, "i1": i1, "j1": j1,
-                "bbox": [grid["west"] + i0 * grid["px_lon"],
-                         grid["north"] - j1 * grid["px_lat"],
-                         grid["west"] + i1 * grid["px_lon"],
-                         grid["north"] - j0 * grid["px_lat"]],
-            })
+            out.append(
+                {
+                    "row": row,
+                    "col": col,
+                    "key": f"r{row:02d}c{col:02d}",
+                    "i0": i0,
+                    "j0": j0,
+                    "i1": i1,
+                    "j1": j1,
+                    "bbox": [
+                        grid["west"] + i0 * grid["px_lon"],
+                        grid["north"] - j1 * grid["px_lat"],
+                        grid["west"] + i1 * grid["px_lon"],
+                        grid["north"] - j0 * grid["px_lat"],
+                    ],
+                }
+            )
     return out
 
 
@@ -472,8 +529,8 @@ def subrequest_boxes(grid: dict) -> list[dict]:
 # W, S, E, N] per feature), so windowing a national file down to one area is a small
 # JSON load and a handful of seeks rather than parsing 9.8 MB.
 
-def _segment_hits_box(x1: float, y1: float, x2: float, y2: float,
-                      w: float, s: float, e: float, n: float) -> bool:
+
+def _segment_hits_box(x1: float, y1: float, x2: float, y2: float, w: float, s: float, e: float, n: float) -> bool:
     """Liang-Barsky: does the segment touch the axis-aligned box at all.
 
     Endpoint-in-box would have been shorter and is wrong: a centreline vertex every
@@ -530,11 +587,17 @@ def centreline_in(bbox: list[float]) -> dict:
     path = crt.national_dir() / f"{key}.geojson"
     idx_path = crt.national_index_path(key)
     if not path.exists():
-        return {"ok": False, "lines": [], "features": 0,
-                "why": (f"the Canal & River Trust centreline is not on this handheld "
-                        f"({path}). The LIDAR bank layer traces its corridor from that "
-                        f"file and cannot be planned without it. Fetch it once, with "
-                        f"internet: python -m nav.cli crt-fetch")}
+        return {
+            "ok": False,
+            "lines": [],
+            "features": 0,
+            "why": (
+                f"the Canal & River Trust centreline is not on this handheld "
+                f"({path}). The LIDAR bank layer traces its corridor from that "
+                f"file and cannot be planned without it. Fetch it once, with "
+                f"internet: python -m nav.cli crt-fetch"
+            ),
+        }
     w, s, e, n = (float(v) for v in bbox)
     lines: list = []
     features = 0
@@ -548,8 +611,12 @@ def centreline_in(bbox: list[float]) -> dict:
         try:
             doc = json.loads(path.read_text(encoding="utf-8"))
         except Exception as exc2:  # noqa: BLE001
-            return {"ok": False, "lines": [], "features": 0,
-                    "why": f"the centreline file {path.name} could not be read ({exc2})"}
+            return {
+                "ok": False,
+                "lines": [],
+                "features": 0,
+                "why": f"the centreline file {path.name} could not be read ({exc2})",
+            }
         for feat in doc.get("features", []):
             got: list = []
             _walk_lines(feat.get("geometry"), got)
@@ -557,12 +624,15 @@ def centreline_in(bbox: list[float]) -> dict:
                 features += 1
                 lines.extend(got)
     else:
-        picks = [(int(r[0]), int(r[1])) for r in entries
-                 # A feature with no recorded box could not be placed, so it is never
-                 # windowed OUT — the same rule the map backend applies. Excluding it
-                 # would be this file deciding what to skip on the strength of not
-                 # understanding it.
-                 if len(r) < 6 or not (r[4] < w or r[2] > e or r[5] < s or r[3] > n)]
+        picks = [
+            (int(r[0]), int(r[1]))
+            for r in entries
+            # A feature with no recorded box could not be placed, so it is never
+            # windowed OUT — the same rule the map backend applies. Excluding it
+            # would be this file deciding what to skip on the strength of not
+            # understanding it.
+            if len(r) < 6 or not (r[4] < w or r[2] > e or r[5] < s or r[3] > n)
+        ]
         with open(path, "rb") as fh:
             for off, ln in picks:
                 fh.seek(off)
@@ -576,13 +646,23 @@ def centreline_in(bbox: list[float]) -> dict:
                     features += 1
                     lines.extend(got)
     if not lines:
-        return {"ok": True, "lines": [], "features": 0,
-                "why": ("no Canal & River Trust canal centreline passes through this "
-                        "area. Arms, basins and private cuts that the Trust does not "
-                        "hold a centreline for are absent from this layer too, and "
-                        "that is a gap in the source, not in the ground")}
-    return {"ok": True, "lines": lines, "features": features,
-            "why": f"{features} Trust centreline feature(s) cross this area"}
+        return {
+            "ok": True,
+            "lines": [],
+            "features": 0,
+            "why": (
+                "no Canal & River Trust canal centreline passes through this "
+                "area. Arms, basins and private cuts that the Trust does not "
+                "hold a centreline for are absent from this layer too, and "
+                "that is a gap in the source, not in the ground"
+            ),
+        }
+    return {
+        "ok": True,
+        "lines": lines,
+        "features": features,
+        "why": f"{features} Trust centreline feature(s) cross this area",
+    }
 
 
 def _on_corridor(box: list[float], lines: list, margin_deg: tuple[float, float]) -> bool:
@@ -607,6 +687,7 @@ def _on_corridor(box: list[float], lines: list, margin_deg: tuple[float, float])
 # in that module. It is the same trap crt.py sidestepped by living outside areas_dir
 # altogether; this layer has to sit beside the imagery it is painted over, so it sits
 # beside it as a folder.
+
 
 def area_lidar_dir(name: str) -> Path:
     return settings.areas_dir / f"{name}{settings.lidar_dir_suffix}"
@@ -665,37 +746,44 @@ def plan(bbox: list[float], px_m: float | None = None) -> dict:
     grid = area_grid(bbox, px_m)
     boxes = subrequest_boxes(grid)
     centre = centreline_in(bbox)
-    margin = (settings.lidar_fetch_margin_m / max(1.0, 111320.0 * math.cos(
-        math.radians((bbox[1] + bbox[3]) / 2.0))),
-        settings.lidar_fetch_margin_m / 111132.0)
+    margin = (
+        settings.lidar_fetch_margin_m / max(1.0, 111320.0 * math.cos(math.radians((bbox[1] + bbox[3]) / 2.0))),
+        settings.lidar_fetch_margin_m / 111132.0,
+    )
     wanted, skipped = [], []
     for b in boxes:
-        (wanted if (centre["lines"] and _on_corridor(b["bbox"], centre["lines"], margin))
-         else skipped).append(b)
+        (wanted if (centre["lines"] and _on_corridor(b["bbox"], centre["lines"], margin)) else skipped).append(b)
     mb = round(len(wanted) * settings.lidar_avg_mb_per_request, 1)
     over = None
     if len(wanted) > settings.lidar_max_requests:
-        over = (f"{len(wanted)} sub-requests exceeds the cap of "
-                f"{settings.lidar_max_requests} — shrink the area")
+        over = f"{len(wanted)} sub-requests exceeds the cap of " f"{settings.lidar_max_requests} — shrink the area"
     if grid["width"] * grid["height"] > settings.lidar_max_pixels:
-        over = (f"{grid['width']}x{grid['height']} pixels exceeds the cap of "
-                f"{settings.lidar_max_pixels:,} — shrink the area or raise "
-                f"NAV_LIDAR_PX_M")
-    return {"grid": grid, "requests": len(wanted), "skipped_off_corridor": len(skipped),
-            "sub_boxes": wanted, "est_mb": mb,
-            "est_seconds": round(len(wanted) * (settings.lidar_avg_seconds_per_request
-                                                + 1.0 / max(0.05, settings.lidar_rate_per_s))),
-            "centreline": {"ok": centre["ok"], "features": centre["features"],
-                           "why": centre["why"]},
-            "over_cap": over,
-            "libraries": library_state()}
+        over = (
+            f"{grid['width']}x{grid['height']} pixels exceeds the cap of "
+            f"{settings.lidar_max_pixels:,} — shrink the area or raise "
+            f"NAV_LIDAR_PX_M"
+        )
+    return {
+        "grid": grid,
+        "requests": len(wanted),
+        "skipped_off_corridor": len(skipped),
+        "sub_boxes": wanted,
+        "est_mb": mb,
+        "est_seconds": round(
+            len(wanted) * (settings.lidar_avg_seconds_per_request + 1.0 / max(0.05, settings.lidar_rate_per_s))
+        ),
+        "centreline": {"ok": centre["ok"], "features": centre["features"], "why": centre["why"]},
+        "over_cap": over,
+        "libraries": library_state(),
+    }
 
 
 # ---------------------------------------------------------------------------
 # THE DOWNLOAD
 # ---------------------------------------------------------------------------
-async def download_dtm(name: str, bbox: list[float], progress=None,
-                       refresh: bool = False, px_m: float | None = None) -> dict:
+async def download_dtm(
+    name: str, bbox: list[float], progress=None, refresh: bool = False, px_m: float | None = None
+) -> dict:
     """Fetch, decode and mosaic the 1 m DTM for one offline area. Returns; never raises
     for a network or data failure — an area that got seven of nine sub-requests is a
     PARTIAL area and says so.
@@ -706,6 +794,7 @@ async def download_dtm(name: str, bbox: list[float], progress=None,
     for the ones that did not. Re-requesting 9 MB that is already on disk over a phone
     hotspot is the cost of getting this wrong.
     """
+
     async def emit(msg: dict) -> None:
         if progress:
             await progress({"name": name, "layer": "lidar", **msg})
@@ -713,8 +802,13 @@ async def download_dtm(name: str, bbox: list[float], progress=None,
     libs = library_state()
     if not libs["ok"]:
         await emit({"state": "unavailable", "why": libs["why"]})
-        return {"name": name, "state": "unavailable", "why": libs["why"],
-                "missing": libs["missing"], "install": libs["install"]}
+        return {
+            "name": name,
+            "state": "unavailable",
+            "why": libs["why"],
+            "missing": libs["missing"],
+            "install": libs["install"],
+        }
 
     import numpy as np
 
@@ -723,11 +817,16 @@ async def download_dtm(name: str, bbox: list[float], progress=None,
         await emit({"state": "refused", "why": p["over_cap"]})
         return {"name": name, "state": "refused", "why": p["over_cap"]}
     if not p["centreline"]["ok"] or not p["sub_boxes"]:
-        why = p["centreline"]["why"] if not p["centreline"]["ok"] else (
-            "no Canal & River Trust centreline passes within "
-            f"{settings.lidar_fetch_margin_m:.0f} m of this area, so there is no "
-            "corridor to survey. Arms and basins the Trust holds no centreline for are "
-            "absent from this layer, and that is a gap in the source, not in the ground")
+        why = (
+            p["centreline"]["why"]
+            if not p["centreline"]["ok"]
+            else (
+                "no Canal & River Trust centreline passes within "
+                f"{settings.lidar_fetch_margin_m:.0f} m of this area, so there is no "
+                "corridor to survey. Arms and basins the Trust holds no centreline for are "
+                "absent from this layer, and that is a gap in the source, not in the ground"
+            )
+        )
         await emit({"state": "absent", "why": why})
         record = _provenance(name, bbox, p, [], why, "absent")
         _write_atomic_json(provenance_path(name), record)
@@ -743,16 +842,21 @@ async def download_dtm(name: str, bbox: list[float], progress=None,
         # different pixel size or a grown bbox is a different lattice, and pouring new
         # sub-requests into the old array would offset them by whatever the two grids
         # differ by — a shift with no symptom except a bank in the wrong place.
-        if (prev.get("grid") or {}).get("width") == grid["width"] and \
-           (prev.get("grid") or {}).get("height") == grid["height"] and \
-           abs((prev.get("grid") or {}).get("west", 1e9) - grid["west"]) < 1e-12:
+        if (
+            (prev.get("grid") or {}).get("width") == grid["width"]
+            and (prev.get("grid") or {}).get("height") == grid["height"]
+            and abs((prev.get("grid") or {}).get("west", 1e9) - grid["west"]) < 1e-12
+        ):
             # Only sub-requests THIS plan still wants are carried forward. A wider fetch
             # margin, or a Trust centreline that has moved, changes which boxes are on
             # the corridor — and a ledger still listing yesterday's boxes would make
             # _state_of count "7 of 9 landed" against a plan that only ever wanted 7.
             planned = {b["key"] for b in p["sub_boxes"]}
-            done = {k: v for k, v in (prev.get("parts") or {}).items()
-                    if k in planned and v.get("state") in ("present", "absent", "fill")}
+            done = {
+                k: v
+                for k, v in (prev.get("parts") or {}).items()
+                if k in planned and v.get("state") in ("present", "absent", "fill")
+            }
         else:
             log.info("lidar: %s was stored on a different grid — refetching all", name)
 
@@ -764,8 +868,9 @@ async def download_dtm(name: str, bbox: list[float], progress=None,
                 mm = None
                 done = {}
         if mm is None:
-            mm = np.lib.format.open_memmap(dtm_path(name), mode="w+", dtype=np.float32,
-                                           shape=(grid["height"], grid["width"]))
+            mm = np.lib.format.open_memmap(
+                dtm_path(name), mode="w+", dtype=np.float32, shape=(grid["height"], grid["width"])
+            )
             # NaN, not zero. An unfetched pixel that reads 0.0 is "sea level here",
             # which is the exact shape of a launchable bank; NaN is the only initial
             # value that cannot be mistaken for a measurement.
@@ -777,9 +882,15 @@ async def download_dtm(name: str, bbox: list[float], progress=None,
         return {"name": name, "state": "failed", "why": why}
 
     parts: dict[str, dict] = dict(done)
-    await emit({"state": "starting", "requests": p["requests"],
-                "already": len(done), "est_mb": p["est_mb"],
-                "skipped_off_corridor": p["skipped_off_corridor"]})
+    await emit(
+        {
+            "state": "starting",
+            "requests": p["requests"],
+            "already": len(done),
+            "est_mb": p["est_mb"],
+            "skipped_off_corridor": p["skipped_off_corridor"],
+        }
+    )
 
     delay = 1.0 / max(0.05, settings.lidar_rate_per_s)
     wire_bytes = 0
@@ -789,34 +900,48 @@ async def download_dtm(name: str, bbox: list[float], progress=None,
         url = coverage_url(box["bbox"])
         raw, why = await _fetch_retry(url)
         if raw is None:
-            parts[box["key"]] = {"state": "failed", "why": why, "bbox": box["bbox"],
-                                 "fetched": _iso()}
+            parts[box["key"]] = {"state": "failed", "why": why, "bbox": box["bbox"], "fetched": _iso()}
         else:
             wire_bytes += len(raw)
             dec = decode_dtm(raw)
-            rec = {"bbox": box["bbox"], "bytes": len(raw), "fetched": _iso(),
-                   "survey_vintage": settings.lidar_survey_vintage}
+            rec = {
+                "bbox": box["bbox"],
+                "bytes": len(raw),
+                "fetched": _iso(),
+                "survey_vintage": settings.lidar_survey_vintage,
+            }
             if dec["ok"]:
                 placed = _place(np, mm, grid, box, dec)
-                rec.update({"state": "present", "why": "",
-                            "pixels": dec["pixels"], "valid_pixels": dec["valid_pixels"],
-                            "nodata_fraction": dec["nodata_fraction"],
-                            "nodata_value": dec["nodata_value"],
-                            "nodata_tag_present": dec["nodata_tag_present"],
-                            "elev_min_m": dec["elev_min"], "elev_max_m": dec["elev_max"],
-                            "source_px_lon_deg": dec["geo"]["px_lon"],
-                            "source_px_lat_deg": dec["geo"]["px_lat"],
-                            "source_size": [dec["geo"]["width"], dec["geo"]["height"]],
-                            "placed_pixels": placed})
+                rec.update(
+                    {
+                        "state": "present",
+                        "why": "",
+                        "pixels": dec["pixels"],
+                        "valid_pixels": dec["valid_pixels"],
+                        "nodata_fraction": dec["nodata_fraction"],
+                        "nodata_value": dec["nodata_value"],
+                        "nodata_tag_present": dec["nodata_tag_present"],
+                        "elev_min_m": dec["elev_min"],
+                        "elev_max_m": dec["elev_max"],
+                        "source_px_lon_deg": dec["geo"]["px_lon"],
+                        "source_px_lat_deg": dec["geo"]["px_lat"],
+                        "source_size": [dec["geo"]["width"], dec["geo"]["height"]],
+                        "placed_pixels": placed,
+                    }
+                )
             else:
                 # An honest empty: the box was asked for, answered, and holds no survey.
                 # Recorded as its own state so a later run does not keep asking, and so
                 # the provenance can tell "outside the survey" from "the link dropped".
-                rec.update({"state": "fill" if dec.get("fill") else "absent",
-                            "why": dec["why"],
-                            "nodata_fraction": dec.get("nodata_fraction"),
-                            "elev_min_m": dec.get("elev_min"),
-                            "elev_max_m": dec.get("elev_max")})
+                rec.update(
+                    {
+                        "state": "fill" if dec.get("fill") else "absent",
+                        "why": dec["why"],
+                        "nodata_fraction": dec.get("nodata_fraction"),
+                        "elev_min_m": dec.get("elev_min"),
+                        "elev_max_m": dec.get("elev_max"),
+                    }
+                )
             parts[box["key"]] = rec
         # THE LEDGER IS FLUSHED PER SUB-REQUEST, and the memmap with it. Nine minutes of
         # download must not be undone by a lid closing on the tenth: satellite.py learned
@@ -825,11 +950,18 @@ async def download_dtm(name: str, bbox: list[float], progress=None,
             mm.flush()
         except Exception:  # noqa: BLE001
             pass
-        _write_atomic_json(provenance_path(name),
-                           _provenance(name, bbox, p, parts, "", "downloading",
-                                       wire_bytes=wire_bytes))
-        await emit({"state": "running", "done": i + 1, "total": p["requests"],
-                    "key": box["key"], "part_state": parts[box["key"]]["state"]})
+        _write_atomic_json(
+            provenance_path(name), _provenance(name, bbox, p, parts, "", "downloading", wire_bytes=wire_bytes)
+        )
+        await emit(
+            {
+                "state": "running",
+                "done": i + 1,
+                "total": p["requests"],
+                "key": box["key"],
+                "part_state": parts[box["key"]]["state"],
+            }
+        )
         await asyncio.sleep(delay)
 
     stats = _grid_stats(np, mm, p["sub_boxes"])
@@ -840,12 +972,10 @@ async def download_dtm(name: str, bbox: list[float], progress=None,
     del mm
 
     state, why = _state_of(parts, stats)
-    record = _provenance(name, bbox, p, parts, why, state, wire_bytes=wire_bytes,
-                         stats=stats)
+    record = _provenance(name, bbox, p, parts, why, state, wire_bytes=wire_bytes, stats=stats)
     _write_atomic_json(provenance_path(name), record)
     await emit({"state": state, "why": why, "coverage": stats["coverage_fraction"]})
-    return {"name": name, "state": state, "why": why, "provenance": record,
-            "dtm": str(dtm_path(name))}
+    return {"name": name, "state": state, "why": why, "provenance": record, "dtm": str(dtm_path(name))}
 
 
 def _place(np, mm, grid: dict, box: dict, dec: dict) -> int:
@@ -909,7 +1039,7 @@ def _grid_stats(np, mm, boxes: list[dict]) -> dict:
     # Row-blocked so a 144 MB grid never has a second full-size boolean beside it.
     step = max(1, 4_000_000 // max(1, mm.shape[1]))
     for j in range(0, mm.shape[0], step):
-        chunk = np.asarray(mm[j:j + step])
+        chunk = np.asarray(mm[j : j + step])
         good = np.isfinite(chunk)
         c = int(np.count_nonzero(good))
         if c:
@@ -921,15 +1051,19 @@ def _grid_stats(np, mm, boxes: list[dict]) -> dict:
     # the grid into disjoint whole-pixel blocks), so this is a sum and not a union.
     asked = 0
     for b in boxes:
-        block = np.asarray(mm[b["j0"]:b["j1"], b["i0"]:b["i1"]])
+        block = np.asarray(mm[b["j0"] : b["j1"], b["i0"] : b["i1"]])
         asked += block.size
         corridor += int(np.count_nonzero(np.isfinite(block)))
-    return {"pixels": total, "valid_pixels": finite,
-            "corridor_pixels": asked, "corridor_valid_pixels": corridor,
-            "coverage_fraction": round(corridor / asked, 6) if asked else 0.0,
-            "area_fraction": round(finite / total, 6) if total else 0.0,
-            "elev_min_m": None if finite == 0 else round(lo, 3),
-            "elev_max_m": None if finite == 0 else round(hi, 3)}
+    return {
+        "pixels": total,
+        "valid_pixels": finite,
+        "corridor_pixels": asked,
+        "corridor_valid_pixels": corridor,
+        "coverage_fraction": round(corridor / asked, 6) if asked else 0.0,
+        "area_fraction": round(finite / total, 6) if total else 0.0,
+        "elev_min_m": None if finite == 0 else round(lo, 3),
+        "elev_max_m": None if finite == 0 else round(hi, 3),
+    }
 
 
 def _state_of(parts: dict, stats: dict) -> tuple[str, str]:
@@ -948,41 +1082,51 @@ def _state_of(parts: dict, stats: dict) -> tuple[str, str]:
     if not got:
         return "absent", (
             f"No LIDAR was stored for this area. "
-            + (f"{len(failed)} sub-request(s) failed and can be retried."
-               if failed else
-               f"Every sub-request answered, and none of them held any of the {vintage} "
-               f"survey — this ground is outside it.")
+            + (
+                f"{len(failed)} sub-request(s) failed and can be retried."
+                if failed
+                else f"Every sub-request answered, and none of them held any of the {vintage} "
+                f"survey — this ground is outside it."
+            )
             + " The map draws the satellite imagery unpainted here, which means "
-              "'not surveyed', NOT 'no low banks'.")
+            "'not surveyed', NOT 'no low banks'."
+        )
     # Said the same way in all three sentences below, because an operator reading
     # "94% surveyed" over a map that is half bare has been told two things that only
     # reconcile if somebody explains the corridor.
-    outside = ("" if stats["area_fraction"] >= 0.995 else
-               f" Ground outside the canal corridor was never requested, which is why "
-               f"only {stats['area_fraction'] * 100:.0f}% of the rectangle is painted "
-               f"at all.")
+    outside = (
+        ""
+        if stats["area_fraction"] >= 0.995
+        else f" Ground outside the canal corridor was never requested, which is why "
+        f"only {stats['area_fraction'] * 100:.0f}% of the rectangle is painted "
+        f"at all."
+    )
     if failed:
         return "partial", (
             f"{len(got)} of {len(parts)} sub-request(s) landed and {len(failed)} failed, "
             f"so this area's LIDAR is INCOMPLETE: {cov * 100:.1f}% of the corridor that "
             f"was asked for carries a {vintage} elevation. Unpainted ground on the canal "
             f"here may be unsurveyed or may simply be undownloaded — run the fetch again "
-            f"with internet to close the gap." + outside)
+            f"with internet to close the gap." + outside
+        )
     if cov < settings.lidar_min_coverage:
         return "partial", (
             f"Every sub-request answered, but only {cov * 100:.1f}% of the corridor "
             f"carries a {vintage} elevation; the rest is nodata in the survey itself. "
-            f"Nothing further will be downloaded — the gaps are in the source." + outside)
+            f"Nothing further will be downloaded — the gaps are in the source." + outside
+        )
     return "present", (
         f"{cov * 100:.1f}% of the canal corridor in this area carries a {vintage} "
         f"Environment Agency 1 m LIDAR elevation, from {len(got)} sub-request(s). "
         f"Elevations run {stats['elev_min_m']} to {stats['elev_max_m']} m above "
         f"Ordnance Datum. Bank height is a measurement; it is not a statement that a "
-        f"launch is possible." + outside)
+        f"launch is possible." + outside
+    )
 
 
-def _provenance(name: str, bbox: list[float], p: dict, parts, why: str, state: str,
-                wire_bytes: int = 0, stats: dict | None = None) -> dict:
+def _provenance(
+    name: str, bbox: list[float], p: dict, parts, why: str, state: str, wire_bytes: int = 0, stats: dict | None = None
+) -> dict:
     """Everything a reader needs to judge this grid a year from now, in one file.
 
     WHY EACH FIELD IS HERE. `fetched` because a card that has been right for a year has
@@ -1009,31 +1153,43 @@ def _provenance(name: str, bbox: list[float], p: dict, parts, why: str, state: s
             "attribution": settings.lidar_attribution,
             "subsetting_crs": settings.lidar_subset_crs,
             "format": settings.lidar_format,
-            "note": ("subsettingCrs is required: the coverage is natively EPSG:27700 "
-                     "and the service answers HTTP 500 without it. Compression is not "
-                     "requested because Pillow mis-decodes the compressed form."),
+            "note": (
+                "subsettingCrs is required: the coverage is natively EPSG:27700 "
+                "and the service answers HTTP 500 without it. Compression is not "
+                "requested because Pillow mis-decodes the compressed form."
+            ),
         },
-        "grid": {**p["grid"], "crs": "EPSG:4326",
-                 "pixel_size_m_nominal": p["grid"]["px_m"],
-                 "dtype": "float32", "nodata": "NaN",
-                 "file": dtm_path(name).name,
-                 "note": ("north-up; west/north are the OUTER edge of pixel (0,0). "
-                          "Elevations are metres above Ordnance Datum Newlyn. Pixels "
-                          "with no measurement are NaN, never a sentinel and never 0.")},
+        "grid": {
+            **p["grid"],
+            "crs": "EPSG:4326",
+            "pixel_size_m_nominal": p["grid"]["px_m"],
+            "dtype": "float32",
+            "nodata": "NaN",
+            "file": dtm_path(name).name,
+            "note": (
+                "north-up; west/north are the OUTER edge of pixel (0,0). "
+                "Elevations are metres above Ordnance Datum Newlyn. Pixels "
+                "with no measurement are NaN, never a sentinel and never 0."
+            ),
+        },
         "placement_error_m": round(p["grid"]["px_m"] / 2.0, 3),
-        "placement_note": ("sub-requests are placed by nearest source pixel, so a "
-                           "stored elevation is at most half a pixel from where it was "
-                           "measured; nothing is interpolated and no value is invented"),
+        "placement_note": (
+            "sub-requests are placed by nearest source pixel, so a "
+            "stored elevation is at most half a pixel from where it was "
+            "measured; nothing is interpolated and no value is invented"
+        ),
         "corridor": {
             "centreline_layer": settings.lidar_centreline_layer,
             "centreline_source": str(crt.national_dir() / f"{settings.lidar_centreline_layer}.geojson"),
             "centreline_features": p["centreline"]["features"],
             "fetch_margin_m": settings.lidar_fetch_margin_m,
             "sub_requests_off_corridor": p["skipped_off_corridor"],
-            "note": ("only ground within the fetch margin of a Canal & River Trust "
-                     "canal centreline was downloaded. Arms, basins and private cuts "
-                     "the Trust holds no centreline for are absent from this layer — a "
-                     "gap in the source, not in the ground"),
+            "note": (
+                "only ground within the fetch margin of a Canal & River Trust "
+                "canal centreline was downloaded. Arms, basins and private cuts "
+                "the Trust holds no centreline for are absent from this layer — a "
+                "gap in the source, not in the ground"
+            ),
         },
         "requests": {
             "planned": p["requests"],
@@ -1051,7 +1207,8 @@ def _provenance(name: str, bbox: list[float], p: dict, parts, why: str, state: s
             "asked for and carries a nodata rim it did not have to survey — measured "
             "at Camden, parts read 4.8% nodata while the area they filled came out "
             "99.998% covered. Reading a part figure as the area's holes would be "
-            "reading the padding as missing ground."),
+            "reading the padding as missing ground."
+        ),
         "parts": parts,
     }
 
@@ -1069,25 +1226,33 @@ def card(name: str) -> dict:
     prov = _read_json_quiet(provenance_path(name))
     libs = library_state()
     if prov is None:
-        return {"area": name, "state": "absent", "held": False,
-                "libraries": libs,
-                "why": (f"No LIDAR has been downloaded for the area '{name}'. The "
-                        f"satellite imagery is drawn unpainted, which means 'not "
-                        f"surveyed here', not 'no low banks here'."
-                        + ("" if libs["ok"] else " " + libs["why"]))}
-    path = dtm_path(name)
-    return {"area": name, "state": prov.get("state", "absent"),
-            "held": path.exists(),
-            "size": path.stat().st_size if path.exists() else 0,
-            "why": prov.get("why", ""),
-            "fetched": prov.get("fetched"),
-            "survey_vintage": prov.get("survey_vintage"),
-            "coverage": prov.get("coverage", {}),
-            "bbox": prov.get("bbox"),
-            "grid": prov.get("grid", {}),
-            "attribution": (prov.get("source") or {}).get("attribution"),
+        return {
+            "area": name,
+            "state": "absent",
+            "held": False,
             "libraries": libs,
-            "provenance": str(provenance_path(name))}
+            "why": (
+                f"No LIDAR has been downloaded for the area '{name}'. The "
+                f"satellite imagery is drawn unpainted, which means 'not "
+                f"surveyed here', not 'no low banks here'." + ("" if libs["ok"] else " " + libs["why"])
+            ),
+        }
+    path = dtm_path(name)
+    return {
+        "area": name,
+        "state": prov.get("state", "absent"),
+        "held": path.exists(),
+        "size": path.stat().st_size if path.exists() else 0,
+        "why": prov.get("why", ""),
+        "fetched": prov.get("fetched"),
+        "survey_vintage": prov.get("survey_vintage"),
+        "coverage": prov.get("coverage", {}),
+        "bbox": prov.get("bbox"),
+        "grid": prov.get("grid", {}),
+        "attribution": (prov.get("source") or {}).get("attribution"),
+        "libraries": libs,
+        "provenance": str(provenance_path(name)),
+    }
 
 
 def read_dtm(name: str, mmap: bool = True) -> dict:
@@ -1103,20 +1268,34 @@ def read_dtm(name: str, mmap: bool = True) -> dict:
     """
     libs = library_state()
     if not libs["ok"]:
-        return {"ok": False, "why": libs["why"], "grid": None, "geo": None,
-                "provenance": None}
+        return {"ok": False, "why": libs["why"], "grid": None, "geo": None, "provenance": None}
     import numpy as np
+
     prov = _read_json_quiet(provenance_path(name))
     path = dtm_path(name)
     if prov is None or not path.exists():
-        return {"ok": False, "grid": None, "geo": None, "provenance": prov,
-                "why": (f"no LIDAR grid is stored for the area '{name}' "
-                        f"({path} is not on this card)")}
+        return {
+            "ok": False,
+            "grid": None,
+            "geo": None,
+            "provenance": prov,
+            "why": (f"no LIDAR grid is stored for the area '{name}' " f"({path} is not on this card)"),
+        }
     try:
         grid = np.load(path, mmap_mode="r" if mmap else None)
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "grid": None, "geo": None, "provenance": prov,
-                "why": f"the stored elevation grid could not be read ({exc})"}
-    return {"ok": True, "why": prov.get("why", ""), "grid": grid,
-            "geo": prov.get("grid", {}), "provenance": prov,
-            "state": prov.get("state", "absent")}
+        return {
+            "ok": False,
+            "grid": None,
+            "geo": None,
+            "provenance": prov,
+            "why": f"the stored elevation grid could not be read ({exc})",
+        }
+    return {
+        "ok": True,
+        "why": prov.get("why", ""),
+        "grid": grid,
+        "geo": prov.get("grid", {}),
+        "provenance": prov,
+        "state": prov.get("state", "absent"),
+    }

@@ -45,6 +45,7 @@ skips with a loud reason rather than taking the whole module down when pydantic 
 not installed, because the pure filter maths is exactly what must stay checkable on
 a bench machine with nothing installed on it.
 """
+
 from __future__ import annotations
 
 import unittest
@@ -62,8 +63,9 @@ from nav.filters import (
 try:
     from nav.estimator import DeadReckonEstimator, FilteredEstimator
     from nav.models import Origin, SensorSample
+
     _NO_ESTIMATOR: str | None = None
-except Exception as exc:                                        # noqa: BLE001
+except Exception as exc:  # noqa: BLE001
     _NO_ESTIMATOR = f"nav.estimator not importable here ({type(exc).__name__}: {exc})"
 
 
@@ -210,13 +212,12 @@ class TestHeadingSlewCap(unittest.TestCase):
         f, _ = self._coast_then_trust()
         cap = HeadingFilter.SLEW_DPS * DT
         worst = 0.0
-        for i in range(101, 601):                    # 50 s of trusted, gyro silent
+        for i in range(101, 601):  # 50 s of trusted, gyro silent
             h_before, b_before = f.h, f.b
             h_after = f.update(_tick(i), 0.0, 0.0, mag_cal=3)
             predicted = h_before + (0.0 - b_before) * DT
             worst = max(worst, abs(wrap180(h_after - predicted)))
-        self.assertLessEqual(worst, cap + 1e-9,
-                             f"correction of {worst:.4f}° in one tick exceeds {cap:.4f}°")
+        self.assertLessEqual(worst, cap + 1e-9, f"correction of {worst:.4f}° in one tick exceeds {cap:.4f}°")
 
     def test_the_first_trusted_tick_does_not_snap(self) -> None:
         """The single tick that matters most, checked on its own: the instant trust
@@ -234,7 +235,7 @@ class TestHeadingSlewCap(unittest.TestCase):
         """The other half of the rule: capping must produce a slow walk home, not a
         permanent offset. A heading that lags forever is just a wrong heading."""
         f, _ = self._coast_then_trust()
-        for i in range(101, 501):                    # 40 s; 100° at 5 °/s needs 20 s
+        for i in range(101, 501):  # 40 s; 100° at 5 °/s needs 20 s
             f.update(_tick(i), 0.0, 0.0, mag_cal=3)
         self.assertLess(abs(wrap180(0.0 - f.h)), 2.0)
 
@@ -249,13 +250,14 @@ class TestHeadingBias(unittest.TestCase):
         the compass is distrusted precisely while the thrusters are running, i.e. while
         the sub is actually going somewhere. This is the test that says the filter can
         coast at all."""
-        true_bias = 1.5                      # °/s of pure offset on a stationary sub
+        true_bias = 1.5  # °/s of pure offset on a stationary sub
         f = HeadingFilter()
         f.update(0.0, 100.0, true_bias, mag_cal=3)
-        for i in range(1, 4001):             # 400 s; the slow mode's time constant ≈ 48 s
+        for i in range(1, 4001):  # 400 s; the slow mode's time constant ≈ 48 s
             f.update(_tick(i), 100.0, true_bias, mag_cal=3)
-            self.assertLessEqual(abs(f.b), HeadingFilter.B_MAX_DPS + 1e-12,
-                                 "the ±3 °/s clamp is an invariant, not a final state")
+            self.assertLessEqual(
+                abs(f.b), HeadingFilter.B_MAX_DPS + 1e-12, "the ±3 °/s clamp is an invariant, not a final state"
+            )
         self.assertAlmostEqual(f.b, true_bias, delta=0.05)
         # And the point of learning it: no standing heading error left behind.
         self.assertLess(abs(wrap180(100.0 - f.h)), 0.5)
@@ -287,11 +289,10 @@ class TestHeadingBias(unittest.TestCase):
         be a hardware failure. Feeding it to the estimator converts a one-off disturbance
         into a permanent lie the filter then coasts on."""
         f = HeadingFilter()
-        f.update(0.0, 100.0, 0.0, mag_cal=3)         # seeds h = 100
-        for i in range(1, 11):                        # compass jumps to 130 and stays
+        f.update(0.0, 100.0, 0.0, mag_cal=3)  # seeds h = 100
+        for i in range(1, 11):  # compass jumps to 130 and stays
             f.update(_tick(i), 130.0, 0.0, mag_cal=3)
-        self.assertGreaterEqual(abs(wrap180(130.0 - f.h)), 10.0,
-                                "setup failed: the innovation shrank below the gate")
+        self.assertGreaterEqual(abs(wrap180(130.0 - f.h)), 10.0, "setup failed: the innovation shrank below the gate")
         self.assertEqual(f.b, 0.0, "bias learned from an out-of-gate innovation")
 
     def test_bias_clamps_rather_than_absorbing_a_fault(self) -> None:
@@ -301,12 +302,13 @@ class TestHeadingBias(unittest.TestCase):
         goes gyro-only, which is the worst possible time to be carrying it."""
         f = HeadingFilter()
         f.update(0.0, 0.0, 0.0, mag_cal=3)
-        for i in range(1, 3001):                      # 300 s, compass turning at 4.9 °/s
+        for i in range(1, 3001):  # 300 s, compass turning at 4.9 °/s
             t = _tick(i)
             f.update(t, wrap360(4.9 * t), 0.0, mag_cal=3)
             self.assertLessEqual(abs(f.b), HeadingFilter.B_MAX_DPS + 1e-12)
-        self.assertAlmostEqual(abs(f.b), HeadingFilter.B_MAX_DPS, delta=1e-9,
-                               msg="setup failed: the clamp was never reached")
+        self.assertAlmostEqual(
+            abs(f.b), HeadingFilter.B_MAX_DPS, delta=1e-9, msg="setup failed: the clamp was never reached"
+        )
 
     def test_the_359_to_1_crossing_inside_the_filter(self) -> None:
         """wrap180 being right is not the same as it being USED. With h at 359° and the
@@ -351,8 +353,8 @@ class TestHeadingDtRules(unittest.TestCase):
         with no RTC that can be the whole dive, and it fails silently."""
         f = HeadingFilter()
         f.update(0.0, 100.0, 0.0, mag_cal=3)
-        f.update(9.0, 100.0, 0.0, mag_cal=3)         # a sample from the future
-        f.update(1.0, 100.0, 0.0, mag_cal=3)         # skipped, but must re-seat the clock
+        f.update(9.0, 100.0, 0.0, mag_cal=3)  # a sample from the future
+        f.update(1.0, 100.0, 0.0, mag_cal=3)  # skipped, but must re-seat the clock
         before = f.h
         after = f.update(1.1, 100.0, 30.0, mag_cal=0)
         self.assertNotAlmostEqual(after, before, msg="filter stayed wedged after a step")
@@ -390,15 +392,15 @@ class TestHeadingDtRules(unittest.TestCase):
         f = HeadingFilter()
         f.update(0.0, 100.0, 0.0, mag_cal=3)
         f.update(2.0, 100.0, 0.0, mag_cal=3)
-        h = f.update(2.1, 100.0, 30.0, mag_cal=0)   # untrusted: pure gyro integration
+        h = f.update(2.1, 100.0, 30.0, mag_cal=0)  # untrusted: pure gyro integration
         self.assertAlmostEqual(h, 103.0, places=6)
 
 
 class TestSpeedKF(unittest.TestCase):
     """§4b — the 1-D Kalman filter over [v, b_a]."""
 
-    LUT_LIE = 0.20          # what the speed model claims; deliberately wrong
-    TRUTH = 0.60            # what the paddlewheel measures
+    LUT_LIE = 0.20  # what the speed model claims; deliberately wrong
+    TRUTH = 0.60  # what the paddlewheel measures
 
     def _converged(self) -> SpeedKF:
         """A filter that has settled on a measured 0.60 m/s, for the tests that need to
@@ -425,7 +427,7 @@ class TestSpeedKF(unittest.TestCase):
         drives the track forward into the wall the sub is backing away from."""
         kf = SpeedKF(m_per_pulse=0.05, window_s=0.5)
         for _ in range(50):
-            kf.update(DT, 0.0, -0.6, self.TRUTH, -self.LUT_LIE)   # magnitude only
+            kf.update(DT, 0.0, -0.6, self.TRUTH, -self.LUT_LIE)  # magnitude only
         self.assertAlmostEqual(kf.v, -self.TRUTH, delta=0.02)
 
     def test_the_lut_is_a_weak_measurement_when_the_wheel_goes_stale(self) -> None:
@@ -436,7 +438,7 @@ class TestSpeedKF(unittest.TestCase):
         on_lut = self._converged()
         on_paddle = self._converged()
         start = on_lut.v
-        claim = 1.0                                   # the LUT suddenly claims 1 m/s
+        claim = 1.0  # the LUT suddenly claims 1 m/s
 
         v_lut = on_lut.update(DT, 0.0, 0.6, None, claim)
         v_paddle = on_paddle.update(DT, 0.0, 0.6, claim, claim)
@@ -446,8 +448,7 @@ class TestSpeedKF(unittest.TestCase):
         step_lut = abs(v_lut - start)
         step_paddle = abs(v_paddle - start)
         self.assertLess(step_lut, 0.05, "the estimate snapped towards the LUT")
-        self.assertLess(step_lut * 5.0, step_paddle,
-                        "the LUT moved the estimate as hard as a real measurement")
+        self.assertLess(step_lut * 5.0, step_paddle, "the LUT moved the estimate as hard as a real measurement")
 
         # A full second later it must still be nearer what was measured than what is
         # modelled — the prior leans, it does not overrule.
@@ -461,7 +462,7 @@ class TestSpeedKF(unittest.TestCase):
         Given long enough with no wheel, the model is all there is and it must be used."""
         kf = self._converged()
         claim = 1.0
-        for _ in range(200):                          # 20 s with a silent wheel
+        for _ in range(200):  # 20 s with a silent wheel
             kf.update(DT, 0.0, 0.6, None, claim)
         self.assertAlmostEqual(kf.v, claim, delta=0.15)
 
@@ -473,7 +474,7 @@ class TestSpeedKF(unittest.TestCase):
         while the operator is fiddling with the tether."""
         kf = self._converged()
         self.assertGreater(kf.v, 0.5, "setup failed: nothing to bring back to rest")
-        for _ in range(300):                          # 30 s stopped, wheel stalled
+        for _ in range(300):  # 30 s stopped, wheel stalled
             kf.update(DT, 0.30, 0.0, None, 0.0)
         self.assertLess(abs(kf.v), 0.02, "the estimate drifted while the sub sat still")
         # And the reason it held: the bias was identified rather than integrated.
@@ -491,23 +492,24 @@ class TestSpeedKF(unittest.TestCase):
         on_model = self._converged()
         start = at_rest.v
 
-        at_rest.update(DT, 0.0, 0.0, None, 0.0)       # |throttle| < 0.1 -> R = 0.05²
-        on_model.update(DT, 0.0, 0.5, None, 0.0)      # thrusting -> R = (0.3·0 + 0.1)²
-        self.assertGreater(start - at_rest.v, 2.0 * (start - on_model.v),
-                           "rest was believed no harder than the speed model")
+        at_rest.update(DT, 0.0, 0.0, None, 0.0)  # |throttle| < 0.1 -> R = 0.05²
+        on_model.update(DT, 0.0, 0.5, None, 0.0)  # thrusting -> R = (0.3·0 + 0.1)²
+        self.assertGreater(
+            start - at_rest.v, 2.0 * (start - on_model.v), "rest was believed no harder than the speed model"
+        )
 
     def test_rest_needs_the_throttle_below_a_tenth(self) -> None:
         """The boundary, |throttle| < 0.1. Above it a stale wheel means "too slow for the
         wheel to see", not "stopped" — the wheel stalls below ~0.1 m/s, so zero-locking a
         sub that is genuinely creeping forward would erase real, slow progress."""
         kf = self._converged()
-        for _ in range(100):                          # throttle exactly at the boundary
+        for _ in range(100):  # throttle exactly at the boundary
             kf.update(DT, 0.0, 0.1, None, 0.11)
         self.assertGreater(kf.v, 0.05, "throttle == 0.1 must not count as at rest")
         self.assertAlmostEqual(kf.v, 0.11, delta=0.05)
 
         creeping = self._converged()
-        for _ in range(100):                          # just inside: this IS rest
+        for _ in range(100):  # just inside: this IS rest
             creeping.update(DT, 0.0, 0.09, None, 0.10)
         self.assertLess(abs(creeping.v), 0.05)
 
@@ -531,15 +533,14 @@ class TestSnagDetector(unittest.TestCase):
     """§4c — thrust_level > 0.5 sustained > 2 s with no measured motion."""
 
     def test_fires_on_sustained_thrust_with_no_measured_speed(self) -> None:
-        """"The map marches forward while the sub is pinned on a shopping trolley." The
+        """ "The map marches forward while the sub is pinned on a shopping trolley." The
         dead reckoner integrates a speed model that has no idea the sub has stopped, so
         without this detector the operator drives a phantom for as long as their patience
         lasts and then goes looking for it in the wrong hundred metres of canal."""
         d = SnagDetector()
         self.assertFalse(d.update(_tick(0), 0.8, 0.8, 0.0))
-        for i in range(1, 21):                        # up to and including t = 2.0 s
-            self.assertFalse(d.update(_tick(i), 0.8, 0.8, 0.0),
-                             f"fired early, at t = {_tick(i)} s")
+        for i in range(1, 21):  # up to and including t = 2.0 s
+            self.assertFalse(d.update(_tick(i), 0.8, 0.8, 0.0), f"fired early, at t = {_tick(i)} s")
         self.assertTrue(d.update(_tick(21), 0.8, 0.8, 0.0), "did not fire past 2 s")
 
     def test_does_not_fire_on_a_brief_transient(self) -> None:
@@ -548,11 +549,10 @@ class TestSnagDetector(unittest.TestCase):
         is an alarm the operator learns to ignore, and then it is worth nothing on the day
         the sub really is caught."""
         d = SnagDetector()
-        for i in range(0, 16):                        # 1.5 s stuck — under the threshold
+        for i in range(0, 16):  # 1.5 s stuck — under the threshold
             self.assertFalse(d.update(_tick(i), 0.8, 0.8, 0.0))
-        for i in range(16, 46):                       # then the water starts moving again
-            self.assertFalse(d.update(_tick(i), 0.8, 0.8, 0.7),
-                             "a transient latched into a snag")
+        for i in range(16, 46):  # then the water starts moving again
+            self.assertFalse(d.update(_tick(i), 0.8, 0.8, 0.7), "a transient latched into a snag")
 
     def test_clears_once_the_sub_moves_again(self) -> None:
         """Snag is a live state, not an event log. If it latched, the operator would have
@@ -568,7 +568,7 @@ class TestSnagDetector(unittest.TestCase):
         """§4c says thrust_level > 0.5. Below that a stationary sub is just a sub being
         driven gently against a current — no evidence of anything being caught."""
         d = SnagDetector()
-        for i in range(0, 60):                        # 6 s at exactly the threshold
+        for i in range(0, 60):  # 6 s at exactly the threshold
             self.assertFalse(d.update(_tick(i), 0.5, 0.5, 0.0))
 
     def test_a_measured_creep_is_not_a_snag(self) -> None:
@@ -584,7 +584,7 @@ class TestSnagDetector(unittest.TestCase):
         one number that would confidently say "0.9 m/s, all fine" for a sub bolted to a
         trolley cannot reach it. Only a measurement, or its absence, is admissible."""
         d = SnagDetector()
-        d.update(_tick(0), 0.0, 0.0, 0.6)             # the wheel proves it exists
+        d.update(_tick(0), 0.0, 0.0, 0.6)  # the wheel proves it exists
         fired_at = None
         for i in range(1, 41):
             if d.update(_tick(i), 0.8, 0.8, None) and fired_at is None:
@@ -602,7 +602,7 @@ class TestSnagDetector(unittest.TestCase):
         not firing: a sub already stuck before the wheel has ever turned is missed until
         it moves once."""
         d = SnagDetector()
-        for i in range(0, 60):                        # 6 s of full thrust, no wheel fitted
+        for i in range(0, 60):  # 6 s of full thrust, no wheel fitted
             self.assertFalse(d.update(_tick(i), 0.8, 0.8, None))
 
 
@@ -621,8 +621,16 @@ class TestEstimatorWiring(unittest.TestCase):
         # The filter only reports gyro_only when it HAS a gyro to coast on, so every test
         # in here about the trust gate was quietly asserting against a vehicle with no
         # IMU fitted. A fixture that means "healthy sub" has to say so.
-        f = {"heading_deg": 0.0, "depth_m": 1.0, "throttle": 0.0, "gyro_z_dps": 0.0,
-             "left": 0.0, "right": 0.0, "mag_cal": 3, "armed": True}
+        f = {
+            "heading_deg": 0.0,
+            "depth_m": 1.0,
+            "throttle": 0.0,
+            "gyro_z_dps": 0.0,
+            "left": 0.0,
+            "right": 0.0,
+            "mag_cal": 3,
+            "armed": True,
+        }
         f.update(kw)
         return SensorSample(t=_tick(i), **f)
 
@@ -648,12 +656,10 @@ class TestEstimatorWiring(unittest.TestCase):
         distrusted or not — is all there is, and mag_cal is what carries the doubt."""
         est = FilteredEstimator(self._origin())
         ns = None
-        for i in range(40):                       # thrusting hard, so the compass is distrusted
-            ns = est.update(self._sample(i, throttle=1.0, left=0.9, right=0.9,
-                                         gyro_z_dps=None))
+        for i in range(40):  # thrusting hard, so the compass is distrusted
+            ns = est.update(self._sample(i, throttle=1.0, left=0.9, right=0.9, gyro_z_dps=None))
         self.assertFalse(ns.gyro_only, "no gyro cannot be a gyro-only coast")
-        self.assertIsNotNone(ns.heading_deg,
-                             "a live compass is still a bearing, even while distrusted")
+        self.assertIsNotNone(ns.heading_deg, "a live compass is still a bearing, even while distrusted")
 
     def test_the_snag_detector_runs_in_the_dead_reckoning_backend(self) -> None:
         """§4c: "runs in BOTH estimator modes — it is a safety signal, not an estimator
@@ -663,12 +669,10 @@ class TestEstimatorWiring(unittest.TestCase):
         est = DeadReckonEstimator(self._origin())
         ns = None
         for i in range(10):
-            ns = est.update(self._sample(i, throttle=0.2, left=0.2, right=0.2,
-                                         speed_ms_measured=0.25))
+            ns = est.update(self._sample(i, throttle=0.2, left=0.2, right=0.2, speed_ms_measured=0.25))
         self.assertFalse(ns.snagged)
         for i in range(10, 45):
-            ns = est.update(self._sample(i, throttle=0.9, left=0.9, right=0.9,
-                                         speed_ms_measured=0.0))
+            ns = est.update(self._sample(i, throttle=0.9, left=0.9, right=0.9, speed_ms_measured=0.0))
         self.assertTrue(ns.snagged, "the default backend missed a snag")
         self.assertLessEqual(ns.confidence, 0.4, "a snagged track must not read as healthy")
 
@@ -679,16 +683,14 @@ class TestEstimatorWiring(unittest.TestCase):
         be blind in the one mode it should be strongest, on the one failure it exists for."""
         est = FilteredEstimator(self._origin())
         ns = None
-        for i in range(10):                           # a healthy run, wheel reporting
-            ns = est.update(self._sample(i, throttle=0.5, left=0.5, right=0.5,
-                                         speed_ms_measured=0.55))
+        for i in range(10):  # a healthy run, wheel reporting
+            ns = est.update(self._sample(i, throttle=0.5, left=0.5, right=0.5, speed_ms_measured=0.55))
         self.assertEqual(ns.speed_src, "kf-paddle")
         self.assertFalse(ns.snagged)
-        for i in range(10, 55):                       # pinned: full thrust, wheel silent
+        for i in range(10, 55):  # pinned: full thrust, wheel silent
             ns = est.update(self._sample(i, throttle=0.9, left=0.9, right=0.9))
         self.assertEqual(ns.speed_src, "kf-lut")
-        self.assertGreater(ns.speed_ms, 0.3,
-                           "setup failed: the model was not claiming healthy motion")
+        self.assertGreater(ns.speed_ms, 0.3, "setup failed: the model was not claiming healthy motion")
         self.assertTrue(ns.snagged, "the model's own speed suppressed the snag alarm")
         self.assertLessEqual(ns.confidence, 0.4)
 

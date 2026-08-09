@@ -15,6 +15,7 @@ character ranges of each script that ran, and Source maps those ranges onto the
 lines of the file on disk. That half is deliberately arithmetic on a string rather
 than a second CDP domain — see start_coverage and Source for why.
 """
+
 from __future__ import annotations
 
 import base64
@@ -38,6 +39,7 @@ def devtools_port(profile_dir: str, timeout: float = 20.0) -> int:
     Windows, macOS and Linux alike.
     """
     import time
+
     f = os.path.join(profile_dir, "DevToolsActivePort")
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -54,6 +56,7 @@ def devtools_port(profile_dir: str, timeout: float = 20.0) -> int:
 def _page_ws_url(port: int, timeout: float = 15.0) -> str:
     """Find the page target. Chrome takes a moment to open the port after launch."""
     import time
+
     deadline = time.time() + timeout
     last = None
     while time.time() < deadline:
@@ -80,12 +83,13 @@ class WS:
         self.sock = socket.create_connection((host, int(port)), timeout=timeout)
         self.sock.settimeout(timeout)
         key = base64.b64encode(os.urandom(16)).decode()
-        req = (f"GET /{path} HTTP/1.1\r\nHost: {hostport}\r\nUpgrade: websocket\r\n"
-               f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
-               f"Sec-WebSocket-Version: 13\r\n\r\n")
+        req = (
+            f"GET /{path} HTTP/1.1\r\nHost: {hostport}\r\nUpgrade: websocket\r\n"
+            f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+            f"Sec-WebSocket-Version: 13\r\n\r\n"
+        )
         self.sock.sendall(req.encode())
-        expect = base64.b64encode(
-            sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+        expect = base64.b64encode(sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
         head = self._read_until(b"\r\n\r\n").decode("latin-1")
         if "101" not in head.split("\r\n")[0] or expect.lower() not in head.lower():
             raise RuntimeError("WebSocket handshake refused by Chrome")
@@ -111,9 +115,9 @@ class WS:
 
     def send(self, obj: dict) -> None:
         payload = json.dumps(obj).encode("utf-8")
-        header = bytearray([0x81])                  # FIN + text
+        header = bytearray([0x81])  # FIN + text
         n = len(payload)
-        mask_bit = 0x80                             # clients MUST mask
+        mask_bit = 0x80  # clients MUST mask
         if n < 126:
             header.append(mask_bit | n)
         elif n < (1 << 16):
@@ -134,13 +138,13 @@ class WS:
             b0, b1 = self._recv_exactly(2)
             fin = b0 & 0x80
             opcode = b0 & 0x0F
-            length = b1 & 0x7F                      # server frames are never masked
+            length = b1 & 0x7F  # server frames are never masked
             if length == 126:
                 length = struct.unpack(">H", self._recv_exactly(2))[0]
             elif length == 127:
                 length = struct.unpack(">Q", self._recv_exactly(8))[0]
             payload = self._recv_exactly(length)
-            if opcode == 0x9:                       # ping -> pong, or Chrome drops us
+            if opcode == 0x9:  # ping -> pong, or Chrome drops us
                 self.sock.sendall(b"\x8a\x80" + os.urandom(4))
                 continue
             if opcode == 0x8:
@@ -149,8 +153,7 @@ class WS:
             if fin:
                 return json.loads(data.decode("utf-8"))
 
-    def call(self, method: str, params: dict | None = None,
-             msg_id: int | None = None) -> dict:
+    def call(self, method: str, params: dict | None = None, msg_id: int | None = None) -> dict:
         # An id of our own when the caller does not care. Screenshots are one call and
         # can name their own number; a coverage session makes a dozen down one socket,
         # and reusing an id there means a reply that arrives late is read as the answer
@@ -161,7 +164,7 @@ class WS:
         self.send({"id": msg_id, "method": method, "params": params or {}})
         while True:
             msg = self.recv()
-            if msg.get("id") == msg_id:             # everything else is an event
+            if msg.get("id") == msg_id:  # everything else is an event
                 if "error" in msg:
                     raise RuntimeError(f"{method}: {msg['error']}")
                 return msg.get("result", {})
@@ -185,12 +188,14 @@ class WS:
 # gate that fails at random is one people learn to re-run until it passes. Freezing is
 # the honest fix; raising the tolerance past the noise would have blinded the check to
 # the very layout changes it exists to catch.
-_HIDE_LIVE = ("var s=document.createElement('style');"
-              "s.id='__test_layout';"
-              "s.textContent='#map-canvas,#maplibre-map,#video-layer{visibility:hidden!important}"
-              "*,*::before,*::after{animation:none!important;transition:none!important;"
-              "animation-play-state:paused!important}';"
-              "document.head.appendChild(s); true")
+_HIDE_LIVE = (
+    "var s=document.createElement('style');"
+    "s.id='__test_layout';"
+    "s.textContent='#map-canvas,#maplibre-map,#video-layer{visibility:hidden!important}"
+    "*,*::before,*::after{animation:none!important;transition:none!important;"
+    "animation-play-state:paused!important}';"
+    "document.head.appendChild(s); true"
+)
 
 
 def capture_png(port: int, hide_live: bool = False) -> bytes:
@@ -205,8 +210,7 @@ def capture_png(port: int, hide_live: bool = False) -> bytes:
     try:
         if hide_live:
             ws.call("Runtime.evaluate", {"expression": _HIDE_LIVE, "returnByValue": True}, msg_id=7)
-        res = ws.call("Page.captureScreenshot",
-                      {"format": "png", "captureBeyondViewport": False}, msg_id=8)
+        res = ws.call("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False}, msg_id=8)
         return base64.b64decode(res["data"])
     finally:
         ws.close()
@@ -215,6 +219,7 @@ def capture_png(port: int, hide_live: bool = False) -> bytes:
 # ---------------------------------------------------------------------------
 # COVERAGE — which lines of client/js a run actually executed
 # ---------------------------------------------------------------------------
+
 
 def start_coverage(port: int) -> WS:
     """Switch V8's precise coverage on, BEFORE the page under test has loaded.
@@ -270,16 +275,14 @@ def take_coverage(ws: WS) -> list[dict]:
     one covered and take the union of the lines: merging their function lists first
     would let one script's "this never ran" range overwrite the other's "it ran".
     """
-    return [e for e in ws.call("Profiler.takePreciseCoverage").get("result", [])
-            if e.get("url")]
+    return [e for e in ws.call("Profiler.takePreciseCoverage").get("result", []) if e.get("url")]
 
 
 _IDENT = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$")
 # After one of these a '/' opens a regular expression; after anything else (a name, a
 # number, a ')' or a ']') it is division. Getting this wrong is not fatal — see _scan.
 _BEFORE_REGEX = frozenset("(,=:[!&|?{};+-*%^~<>")
-_REGEX_WORDS = frozenset(
-    "return typeof instanceof in of new delete void case do else yield await throw".split())
+_REGEX_WORDS = frozenset("return typeof instanceof in of new delete void case do else yield await throw".split())
 
 
 def _scan(text: str) -> tuple[bytearray, list[int]]:
@@ -308,18 +311,18 @@ def _scan(text: str) -> tuple[bytearray, list[int]]:
     line_starts = [0]
     i, n = 0, len(text)
     state = "code"
-    quote = ""          # which quote character opened the current string
-    esc = False         # the previous character was a backslash
-    in_class = False    # inside [...] of a regular expression, where / is literal
+    quote = ""  # which quote character opened the current string
+    esc = False  # the previous character was a backslash
+    in_class = False  # inside [...] of a regular expression, where / is literal
     subs: list[int] = []  # brace depth inside each open ${ } of a template literal
-    prev = ""           # the last code character, for the regex/division decision
-    word = ""           # the identifier ending at it, if it is one
-    gap = False         # whitespace since that character
+    prev = ""  # the last code character, for the regex/division decision
+    word = ""  # the identifier ending at it, if it is one
+    gap = False  # whitespace since that character
 
     while i < n:
         ch = text[i]
         nxt = text[i + 1] if i + 1 < n else ""
-        here = state                       # the state this character is judged in
+        here = state  # the state this character is judged in
 
         if state == "code":
             if ch == "/" and nxt == "/":
@@ -364,7 +367,7 @@ def _scan(text: str) -> tuple[bytearray, list[int]]:
             elif ch == quote:
                 state = "code"
             elif ch == "\n":
-                state = "code"          # unterminated: a JS string cannot cross a line
+                state = "code"  # unterminated: a JS string cannot cross a line
         elif state == "template":
             if esc:
                 esc = False
@@ -391,18 +394,18 @@ def _scan(text: str) -> tuple[bytearray, list[int]]:
             elif ch == "/" and not in_class:
                 state = "code"
             elif ch == "\n":
-                state = "code"          # a regex cannot cross a line either
+                state = "code"  # a regex cannot cross a line either
 
         is_code = not ch.isspace() and here not in ("line", "block")
         v = 1 if is_code else 0
         mask.append(v)
         if ord(ch) > 0xFFFF:
-            mask.append(v)              # one Python character, two UTF-16 units
+            mask.append(v)  # one Python character, two UTF-16 units
         if ch == "\n":
             line_starts.append(len(mask))
 
         if here == "code" and ch.isspace():
-            gap = True                  # ends an identifier without forgetting it
+            gap = True  # ends an identifier without forgetting it
         elif is_code:
             if here == "code" and ch in _IDENT:
                 word = ch if (gap or prev not in _IDENT) else word + ch
@@ -422,10 +425,9 @@ class Source:
 
     def __init__(self, text: str):
         self._mask, self._starts = _scan(text)
-        self.units = len(self._mask)                # length in V8's own arithmetic
+        self.units = len(self._mask)  # length in V8's own arithmetic
         self.lines = len(self._starts)
-        self.code_lines = frozenset(
-            ln for ln in range(1, self.lines + 1) if 1 in self._line_slice(self._mask, ln))
+        self.code_lines = frozenset(ln for ln in range(1, self.lines + 1) if 1 in self._line_slice(self._mask, ln))
 
     def _line_slice(self, buf, ln: int):
         start = self._starts[ln - 1]
@@ -447,8 +449,9 @@ class Source:
         ascending, then longest first) lets each nested range correct its parent, which
         is exactly what "the function ran but this else-branch did not" means.
         """
-        spans = [(r["startOffset"], r["endOffset"], r.get("count", 0))
-                 for fn in functions for r in fn.get("ranges", ())]
+        spans = [
+            (r["startOffset"], r["endOffset"], r.get("count", 0)) for fn in functions for r in fn.get("ranges", ())
+        ]
         if not spans:
             return None
         if max(e for _, e, _ in spans) != self.units:

@@ -7,6 +7,7 @@ runs the safety watchdog, and broadcasts telemetry to every connected client.
 Run:  cd api && uvicorn main:app --host 0.0.0.0 --port 8000
       (or: python main.py)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,16 +23,17 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import sysinfo
-from rov_camera import get_camera, mjpeg_stream
+from blackbox import BlackBox
+from blackbox import build_router as build_blackbox_router
 from camera.app import create_camera_service
 from camera.service import build_router as build_camera_router
-from nav.app import create_nav_service
-from nav.service import build_router as build_nav_router
 from config import settings
 from hardware import get_hardware
+from nav.app import create_nav_service
+from nav.service import build_router as build_nav_router
 from protocol import COMMAND_NAMES, Ack, Alarm, Pong, Telemetry, parse_inbound
 from rov import RovState, cardinal
-from blackbox import BlackBox, build_router as build_blackbox_router
+from rov_camera import get_camera, mjpeg_stream
 
 logging.basicConfig(
     level=logging.INFO,
@@ -107,8 +109,11 @@ class ConnectionManager:
         if sub.dropped:
             # Not silent. A console that lost frames was shown a thinner picture than
             # the vehicle sent, and that belongs in the boat's log.
-            log.warning("client disconnected having dropped %d frame(s) it could not "
-                        "keep up with (%d total)", sub.dropped, len(self._subs))
+            log.warning(
+                "client disconnected having dropped %d frame(s) it could not " "keep up with (%d total)",
+                sub.dropped,
+                len(self._subs),
+            )
         else:
             log.info("client disconnected (%d total)", len(self._subs))
 
@@ -184,13 +189,13 @@ def battery_band(v: float | None) -> str:
     if v is None:
         return "unknown"
     try:
-        if v != v:                      # NaN — arithmetic on a failed read, not a reading
+        if v != v:  # NaN — arithmetic on a failed read, not a reading
             return "unknown"
         if v < settings.battery_crit_v:
             return "critical"
         if v < settings.battery_warn_v:
             return "warn"
-    except TypeError:                   # not a number at all; still not a crash
+    except TypeError:  # not a number at all; still not a crash
         return "unknown"
     return "ok"
 
@@ -236,9 +241,9 @@ class TelemetryJournal:
         self.period_s = period_s
         self.min_gap_s = min_gap_s
         self._pending: tuple | None = None
-        self._dirty = True          # the first tick always emits: a log needs a baseline
+        self._dirty = True  # the first tick always emits: a log needs a baseline
         self._changes = 0
-        self._last_emit = -1e9      # so both triggers are due immediately at startup
+        self._last_emit = -1e9  # so both triggers are due immediately at startup
 
     @staticmethod
     def _discrete(t: Telemetry, nav: dict | None) -> tuple:
@@ -248,12 +253,20 @@ class TelemetryJournal:
         # sensor_faults is SORTED into the key: the hardware layer is free to
         # report its chips in any order, and a reordering that emitted a "state
         # change" record would be the same noise tick_faults was kept out for.
-        return (t.armed, t.leak_state, t.leak_probe_fault, t.ballast_homed,
-                t.ballast_needs_rehome, t.speed_src, t.snagged, t.gyro_only,
-                t.mag_cal, battery_band(t.battery_v),
-                tuple(sorted(t.sensor_faults or ())),
-                None if nav is None else (nav["loop"], nav["answering"],
-                                          nav["reads_vehicle"], nav["used"]))
+        return (
+            t.armed,
+            t.leak_state,
+            t.leak_probe_fault,
+            t.ballast_homed,
+            t.ballast_needs_rehome,
+            t.speed_src,
+            t.snagged,
+            t.gyro_only,
+            t.mag_cal,
+            battery_band(t.battery_v),
+            tuple(sorted(t.sensor_faults or ())),
+            None if nav is None else (nav["loop"], nav["answering"], nav["reads_vehicle"], nav["used"]),
+        )
 
     def record(self, bb: BlackBox, tel: Telemetry, now: float, nav: dict | None = None) -> None:
         key = self._discrete(tel, nav)
@@ -267,21 +280,29 @@ class TelemetryJournal:
         elif since >= self.period_s:
             self._emit(bb, tel, "tlm", now, nav)
 
-    def _emit(self, bb: BlackBox, tel: Telemetry, event: str, now: float,
-              nav: dict | None = None) -> None:
+    def _emit(self, bb: BlackBox, tel: Telemetry, event: str, now: float, nav: dict | None = None) -> None:
         d = {
-            "seq": tel.seq, "armed": tel.armed, "mock": tel.mock,
-            "left": tel.left, "right": tel.right,
-            "depth": tel.depth, "pressure": tel.pressure, "heading": tel.heading,
+            "seq": tel.seq,
+            "armed": tel.armed,
+            "mock": tel.mock,
+            "left": tel.left,
+            "right": tel.right,
+            "depth": tel.depth,
+            "pressure": tel.pressure,
+            "heading": tel.heading,
             # None survives into the log as JSON null and is NEVER stripped or
             # defaulted: "the stepper was never homed" is a finding, and a replay
             # that silently read it as 0.0 would exonerate the exact fault that
             # left the sub on the bottom.
-            "ballast_level": tel.ballast_level, "ballast_target": tel.ballast_target,
-            "ballast_homed": tel.ballast_homed, "ballast_needs_rehome": tel.ballast_needs_rehome,
-            "leak": tel.leak, "leak_state": tel.leak_state,
+            "ballast_level": tel.ballast_level,
+            "ballast_target": tel.ballast_target,
+            "ballast_homed": tel.ballast_homed,
+            "ballast_needs_rehome": tel.ballast_needs_rehome,
+            "leak": tel.leak,
+            "leak_state": tel.leak_state,
             "leak_probe_fault": tel.leak_probe_fault,
-            "battery_v": tel.battery_v, "battery_band": battery_band(tel.battery_v),
+            "battery_v": tel.battery_v,
+            "battery_band": battery_band(tel.battery_v),
             "current_a": tel.current_a,
             # THE IMU'S OWN CHANNELS, ON THE HEARTBEAT AND DELIBERATELY NOT IN THE
             # DISCRETE KEY. They are continuous floats off a chip that answers at
@@ -294,27 +315,41 @@ class TelemetryJournal:
             # between "the compass died" and "the sub genuinely stopped turning".
             # They are already null whenever mag_cal and heading are, so a replay
             # reads one BNO085 death rather than six unrelated gauges stopping.
-            "gyro_z_dps": tel.gyro_z_dps, "accel_fwd_ms2": tel.accel_fwd_ms2,
-            "pitch_deg": tel.pitch_deg, "roll_deg": tel.roll_deg,
-            "speed_ms": tel.speed_ms, "speed_src": tel.speed_src,
-            "snagged": tel.snagged, "gyro_only": tel.gyro_only, "mag_cal": tel.mag_cal,
+            "gyro_z_dps": tel.gyro_z_dps,
+            "accel_fwd_ms2": tel.accel_fwd_ms2,
+            "pitch_deg": tel.pitch_deg,
+            "roll_deg": tel.roll_deg,
+            "speed_ms": tel.speed_ms,
+            "speed_src": tel.speed_src,
+            "snagged": tel.snagged,
+            "gyro_only": tel.gyro_only,
+            "mag_cal": tel.mag_cal,
             # WHICH CHIP, beside the nulls it caused. Without it a replay can see
             # that depth stopped and cannot see why — and "the MS5837 dropped off
             # the bus at 4.33 m" is the finding, while "depth went null" is only
             # the symptom. Copied to a list because the hardware hands back a tuple
             # and the journal is JSON.
             "sensor_faults": list(tel.sensor_faults or ()),
-            "magnet": tel.magnet, "light_green": tel.light_green, "light_white": tel.light_white,
-            "signal": tel.signal, "link_ms": tel.link_ms,
+            "magnet": tel.magnet,
+            "light_green": tel.light_green,
+            "light_white": tel.light_white,
+            "signal": tel.signal,
+            "link_ms": tel.link_ms,
         }
         if nav is not None:
             # nav_answering is navigation's own claim; nav_used is what this frame
             # actually took from it. They differ exactly when nav is answering
             # about something that is not this hull (a scripted source against a
             # real vehicle), and the gap between them is the finding.
-            d.update({"nav_loop": nav["loop"], "nav_answering": nav["answering"],
-                      "nav_used": nav["used"], "nav_reads_vehicle": nav["reads_vehicle"],
-                      "nav_faults": nav["tick_faults"]})
+            d.update(
+                {
+                    "nav_loop": nav["loop"],
+                    "nav_answering": nav["answering"],
+                    "nav_used": nav["used"],
+                    "nav_reads_vehicle": nav["reads_vehicle"],
+                    "nav_faults": nav["tick_faults"],
+                }
+            )
         if self._changes > 1:
             d["n_changes"] = self._changes
         bb.event(event, d)
@@ -397,8 +432,7 @@ def fill_nav_fields(app: FastAPI, tel: Telemetry) -> dict | None:
     # from that moment on "never-started" means navigation FAILED to start, which is
     # a fault and is warned about. Read with a default because tests/test_liveness.py
     # compiles this function out of the source and runs it against a bare app stub.
-    nav["starting"] = (nav["loop"] == "never-started"
-                       and not getattr(app.state, "subsystems_up", False))
+    nav["starting"] = nav["loop"] == "never-started" and not getattr(app.state, "subsystems_up", False)
     # Asked ONCE and acted on once. A second fresh_state() call could age out
     # between the two and leave the log claiming nav answered a frame it did not —
     # a small lie, but of precisely the kind being hunted here.
@@ -423,8 +457,7 @@ def fill_nav_fields(app: FastAPI, tel: Telemetry) -> dict | None:
         # ends, and each already travels under its own null. It also lands in the
         # blackbox (TelemetryJournal keys on speed_src), so a replay can see the
         # exact tick where the vehicle went from "no datum" to estimating.
-        if (nav["loop"] == "running" and not nav["has_origin"]
-                and nav["last_fault"] is None and not nav["starting"]):
+        if nav["loop"] == "running" and not nav["has_origin"] and nav["last_fault"] is None and not nav["starting"]:
             tel.speed_src = "no-origin"
         return nav
     # Nothing from the estimator is coerced on the way in. round(None) is a
@@ -527,40 +560,56 @@ def log_nav_change(nav: dict, ever_answered: bool) -> None:
     """
     if nav["used"]:
         if ever_answered:
-            log.info("navigation is answering again (loop=%s source=%s)",
-                     nav["loop"], nav["source"])
+            log.info("navigation is answering again (loop=%s source=%s)", nav["loop"], nav["source"])
         return
     if not nav["reads_vehicle"]:
         # Answering, but about a scripted path rather than this hull, so its
         # answers are deliberately kept out of the frame. Not a fault in
         # navigation and not something waiting for an origin — a configuration
         # that would put simulated numbers on a real vehicle's console.
-        log.warning("navigation is not reading THIS hull (source=%s simulated=%s) — its "
-                    "speed, snag and heading stay on /ws/nav and the frame keeps the raw "
-                    "compass. Set NAV_SENSORS=vehicle to bind it to the sub.",
-                    nav["source"], nav["simulated"])
+        log.warning(
+            "navigation is not reading THIS hull (source=%s simulated=%s) — its "
+            "speed, snag and heading stay on /ws/nav and the frame keeps the raw "
+            "compass. Set NAV_SENSORS=vehicle to bind it to the sub.",
+            nav["source"],
+            nav["simulated"],
+        )
         return
     starting = bool(nav.get("starting"))
-    stopped = not starting and (nav["loop"] != "running" or nav["last_fault"] is not None
-                                or ever_answered)
+    stopped = not starting and (nav["loop"] != "running" or nav["last_fault"] is not None or ever_answered)
     if stopped:
-        log.warning("navigation has STOPPED answering for this hull — speed, snag and "
-                    "heading-trust go to cannot-tell (loop=%s answering=%s reads_vehicle=%s "
-                    "source=%s faults=%d last_fault=%s end_reason=%s)",
-                    nav["loop"], nav["answering"], nav["reads_vehicle"], nav["source"],
-                    nav["tick_faults"], nav["last_fault"], nav["loop_end_reason"])
+        log.warning(
+            "navigation has STOPPED answering for this hull — speed, snag and "
+            "heading-trust go to cannot-tell (loop=%s answering=%s reads_vehicle=%s "
+            "source=%s faults=%d last_fault=%s end_reason=%s)",
+            nav["loop"],
+            nav["answering"],
+            nav["reads_vehicle"],
+            nav["source"],
+            nav["tick_faults"],
+            nav["last_fault"],
+            nav["loop_end_reason"],
+        )
     else:
         # The REASON is what makes this line worth printing, so it is named rather
         # than left to be inferred from loop= and origin=. The three quiet states are
         # not interchangeable: one resolves itself in milliseconds, one waits on the
         # operator setting a datum, and one is nav turning with nothing yet to say.
-        log.info("navigation has nothing to say yet — %s (loop=%s source=%s). Speed, "
-                 "snag and heading-trust read cannot-tell until it does.",
-                 "the service has not finished starting" if starting
-                 else "the loop is running and healthy, there is simply no origin to "
-                      "estimate from — set a fix" if not nav.get("has_origin")
-                 else "the loop is running and healthy and has not produced a state yet",
-                 nav["loop"], nav["source"])
+        log.info(
+            "navigation has nothing to say yet — %s (loop=%s source=%s). Speed, "
+            "snag and heading-trust read cannot-tell until it does.",
+            (
+                "the service has not finished starting"
+                if starting
+                else (
+                    "the loop is running and healthy, there is simply no origin to " "estimate from — set a fix"
+                    if not nav.get("has_origin")
+                    else "the loop is running and healthy and has not produced a state yet"
+                )
+            ),
+            nav["loop"],
+            nav["source"],
+        )
 
 
 async def _control_loop(app: FastAPI) -> None:
@@ -574,11 +623,11 @@ async def _control_loop(app: FastAPI) -> None:
     last_metrics = time.monotonic()
     last = time.monotonic()
     seq = 0
-    tx_from = None                    # telemetry seq-range accumulator (§4 — log ranges, not every frame)
-    last_nav_key = None               # nav's last reported state, for edge-logging below
-    nav_ever_answered = False         # has navigation EVER contributed to a frame this session
-    nav_fail_logged = -1e9            # last time the nav-stitch exception was logged (see below)
-    nav_fail_n = 0                    # how many it has collapsed since
+    tx_from = None  # telemetry seq-range accumulator (§4 — log ranges, not every frame)
+    last_nav_key = None  # nav's last reported state, for edge-logging below
+    nav_ever_answered = False  # has navigation EVER contributed to a frame this session
+    nav_fail_logged = -1e9  # last time the nav-stitch exception was logged (see below)
+    nav_fail_n = 0  # how many it has collapsed since
     log.info("control loop @ %.0f Hz (watchdog %.2fs)", settings.telemetry_hz, settings.watchdog_timeout_s)
     while True:
         now = time.monotonic()
@@ -623,9 +672,13 @@ async def _control_loop(app: FastAPI) -> None:
             # silently swallowed.
             nav_fail_n += 1
             if now - nav_fail_logged >= 10.0:
-                log.warning("nav fields could not be filled (%d time(s) since the last "
-                            "line) — speed, snag and heading-trust go to cannot-tell: %s",
-                            nav_fail_n, exc, exc_info=True)
+                log.warning(
+                    "nav fields could not be filled (%d time(s) since the last "
+                    "line) — speed, snag and heading-trust go to cannot-tell: %s",
+                    nav_fail_n,
+                    exc,
+                    exc_info=True,
+                )
                 nav_fail_logged, nav_fail_n = now, 0
             tel.snagged = None
             tel.gyro_only = None
@@ -649,8 +702,11 @@ async def _control_loop(app: FastAPI) -> None:
         # that ought to follow would never fire. It cannot double-log a healthy boot
         # either, because it is only ever true while loop is "never-started" (see
         # fill_nav_fields), so it goes false in the same transition that loop does.
-        nav_key = None if nav is None else (nav["loop"], nav["used"], nav["reads_vehicle"],
-                                            nav["last_fault"] is not None, nav["starting"])
+        nav_key = (
+            None
+            if nav is None
+            else (nav["loop"], nav["used"], nav["reads_vehicle"], nav["last_fault"] is not None, nav["starting"])
+        )
         if nav_key != last_nav_key:
             if nav is not None:
                 log_nav_change(nav, nav_ever_answered)
@@ -676,10 +732,11 @@ async def _control_loop(app: FastAPI) -> None:
         # Logged before broadcasting: an alarm raised into a dead socket still
         # happened, and the log is the only place that will remember it.
         for name in rov.leak_alarm_edges(tel.leak_state):
-            log.warning("ALARM %s (leak_state=%s, probe_fault=%s)",
-                        name, tel.leak_state, tel.leak_probe_fault)
-            bb.event("alarm", {"name": name, "leak_state": tel.leak_state,
-                               "probe_fault": tel.leak_probe_fault, "depth": tel.depth})
+            log.warning("ALARM %s (leak_state=%s, probe_fault=%s)", name, tel.leak_state, tel.leak_probe_fault)
+            bb.event(
+                "alarm",
+                {"name": name, "leak_state": tel.leak_state, "probe_fault": tel.leak_probe_fault, "depth": tel.depth},
+            )
             # UNDROPPABLE. Telemetry is a statement about now and the stale ones are
             # worth losing; an alarm is a statement that something HAPPENED, and a
             # console that is behind is exactly the one that has not heard yet.
@@ -713,7 +770,7 @@ async def lifespan(app: FastAPI):
     app.state.camera = get_camera()
     app.state.loop_task = asyncio.create_task(_control_loop(app))
     app.state.sys_probe = sysinfo.DeepProbe()
-    await app.state.sys_probe.start()    # slow health probes, off the hot path
+    await app.state.sys_probe.start()  # slow health probes, off the hot path
 
     # Subsystems start CONCURRENTLY and independently: a missing camera must not
     # delay the control plane coming up, and one failing start must not abort the
@@ -733,8 +790,9 @@ async def lifespan(app: FastAPI):
     # purpose (one failing start must not abort the others), so this flag is the only
     # thing downstream that knows the attempt has been made at all.
     app.state.subsystems_up = True
-    log.info("NEPTUNE API up — vehicle-hw=%s camera=%s",
-             "mock" if app.state.hw.is_mock else "real", app.state.camera.kind)
+    log.info(
+        "NEPTUNE API up — vehicle-hw=%s camera=%s", "mock" if app.state.hw.is_mock else "real", app.state.camera.kind
+    )
     try:
         yield
     finally:
@@ -784,12 +842,14 @@ app.add_middleware(
 @app.get("/healthz")
 @app.get("/api/healthz")
 def healthz() -> JSONResponse:
-    return JSONResponse({
-        "status": "ok",
-        "hardware": "mock" if app.state.hw.is_mock else "real",
-        "camera": app.state.camera.kind,
-        "clients": app.state.manager.count,
-    })
+    return JSONResponse(
+        {
+            "status": "ok",
+            "hardware": "mock" if app.state.hw.is_mock else "real",
+            "camera": app.state.camera.kind,
+            "clients": app.state.manager.count,
+        }
+    )
 
 
 @app.get("/api/system")
@@ -866,16 +926,19 @@ async def ws_control(ws: WebSocket) -> None:
                 verdict = None
                 if valid:
                     verdict = rov.apply_command(msg)
-                    bb.event("cmd_apply", {"name": msg.name, "value": msg.value,
-                                           "verdict": verdict}, c_id=c_id)
+                    bb.event("cmd_apply", {"name": msg.name, "value": msg.value, "verdict": verdict}, c_id=c_id)
                 ok = valid and (verdict is None or bool(verdict.get("ok", True)))
-                reason = ("unknown command" if not valid
-                          else None if verdict is None or verdict.get("ok", True)
-                          else str(verdict.get("why") or "refused by the vehicle"))
-                bb.event("cmd_ack_send", {"name": msg.name, "ok": ok, "reason": reason},
-                         c_id=c_id)
-                await ws.send_text(Ack(c_id=c_id, name=msg.name, ok=ok,
-                                       reason=reason).model_dump_json())
+                reason = (
+                    "unknown command"
+                    if not valid
+                    else (
+                        None
+                        if verdict is None or verdict.get("ok", True)
+                        else str(verdict.get("why") or "refused by the vehicle")
+                    )
+                )
+                bb.event("cmd_ack_send", {"name": msg.name, "ok": ok, "reason": reason}, c_id=c_id)
+                await ws.send_text(Ack(c_id=c_id, name=msg.name, ok=ok, reason=reason).model_dump_json())
             elif t == "ping":
                 # §2 SNTP: stamp receive (t2) and send (t3) in the Pi's monotonic ms
                 t2 = bb.now_ms()
@@ -920,10 +983,12 @@ async def ws_unrouted(ws: WebSocket, _unrouted: str) -> None:
         if len(_unrouted_ws_seen) > 32:
             _unrouted_ws_seen.clear()
         _unrouted_ws_seen[_unrouted] = now
-        log.warning("websocket upgrade to an unrouted path /%s — refused. The sockets "
-                    "this vehicle serves are /ws/control, /ws/nav and /ws/telemetry.",
-                    _unrouted)
-    await ws.close(code=1008)     # policy violation: there is nothing to talk to here
+        log.warning(
+            "websocket upgrade to an unrouted path /%s — refused. The sockets "
+            "this vehicle serves are /ws/control, /ws/nav and /ws/telemetry.",
+            _unrouted,
+        )
+    await ws.close(code=1008)  # policy violation: there is nothing to talk to here
 
 
 # Static client LAST so the API routes above win. html=True serves index.html at /.

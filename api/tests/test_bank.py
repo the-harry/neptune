@@ -81,6 +81,7 @@ WHAT IS DELIBERATELY NOT TESTED HERE. The acquisition half's network path — pl
 sub-requests, retries — belongs with nav/lidar.py's own suite. This file takes one
 decoded grid and one centreline and asks what the console ends up drawing.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -110,14 +111,14 @@ _MISSING = []
 for _imp, _pip in OPTIONAL:
     try:
         importlib.import_module(_imp)
-    except Exception:                      # noqa: BLE001 — any import failure counts
+    except Exception:  # noqa: BLE001 — any import failure counts
         _MISSING.append(_imp)
 NEED = ("No module named '%s'" % _MISSING[0]) if _MISSING else None
 
 try:
     from nav import bank, lidar
     from nav.config import settings
-except Exception as exc:                   # noqa: BLE001
+except Exception as exc:  # noqa: BLE001
     bank = lidar = settings = None
     IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 else:
@@ -160,15 +161,15 @@ else:
 # of the 2 m rule tests a comparison rather than a rounding.
 # ===========================================================================
 W, H = 340, 160
-LAT_C, LON_W = 52.4800, -1.9200          # a plausible bit of the Birmingham cut
+LAT_C, LON_W = 52.4800, -1.9200  # a plausible bit of the Birmingham cut
 CENTRE_ROW = 80
 
-LEVEL_A, LEVEL_B = 30.125, 27.125        # the two pounds, three metres apart
+LEVEL_A, LEVEL_B = 30.125, 27.125  # the two pounds, three metres apart
 LOCK_COL = 128
 
-WATER_DY = 12                            # the flat sheet runs to |dy| = 12
-NEAR_LO, NEAR_HI = 13, 22                # the near bench
-FAR_LO, FAR_HI = 24, 33                  # the far bench, still inside the 34 m corridor
+WATER_DY = 12  # the flat sheet runs to |dy| = 12
+NEAR_LO, NEAR_HI = 13, 22  # the near bench
+FAR_LO, FAR_HI = 24, 33  # the far bench, still inside the 34 m corridor
 
 # THE COVERED SECTION — eighty metres of cut with a building over it, which is what the
 # terrain model records instead of the water. EIGHTY AND NOT TEN, and the number is the
@@ -177,24 +178,24 @@ FAR_LO, FAR_HI = 24, 33                  # the far bench, still inside the 34 m 
 # nothing. A hole only appears in a corridor DETECTED from the sheet when the gap is
 # longer than the buffer can reach across, and canals run under wharves, warehouses and
 # tunnel mouths for a great deal more than eighty metres.
-COVERED = (180, 260)                     # [180, 260)
-COVER_BASE = LEVEL_B + 3.5               # where the roof starts, at the near end
-COVER_CAMBER = 0.06                      # m per row across the cut
-COVER_RAMP = 0.06                        # m per column along it
+COVERED = (180, 260)  # [180, 260)
+COVER_BASE = LEVEL_B + 3.5  # where the roof starts, at the near end
+COVER_CAMBER = 0.06  # m per row across the cut
+COVER_RAMP = 0.06  # m per column along it
 
-PLATEAU = (272, 308)                     # near bench and far bench at the SAME height,
-                                         # so the ground round the hole has no slope in
-                                         # it and the hillshade there has one answer
-HOLE_ROWS = (96, 107)                    # the nodata block, inside the plateau
+PLATEAU = (272, 308)  # near bench and far bench at the SAME height,
+# so the ground round the hole has no slope in
+# it and the hillshade there has one answer
+HOLE_ROWS = (96, 107)  # the nodata block, inside the plateau
 HOLE_COLS = (282, 298)
-WET_HOLE_ROWS = (78, 83)                 # a second hole, in the middle of the cut
+WET_HOLE_ROWS = (78, 83)  # a second hole, in the middle of the cut
 WET_HOLE_COLS = (44, 57)
 NODATA = -9999.0
 
 PROBE_A = (60, 80)
 PROBE_B = (136, 170)
-PROBE_A_OD = LEVEL_A + 1.25              # 31.375
-PROBE_B_OD = LEVEL_B + 3.50              # 30.625
+PROBE_A_OD = LEVEL_A + 1.25  # 31.375
+PROBE_B_OD = LEVEL_B + 3.50  # 30.625
 
 # The ladder through the rule, in columns. 1.9375 and 2.0625 are exact float32.
 LADDER = ((80, 90, 1.9375), (90, 100, 2.0), (100, 110, 2.0625), (110, 120, 1.75))
@@ -226,25 +227,37 @@ def level_of(col: int) -> float:
 
 def near_h(col: int) -> float:
     """Height of the near bench above the water beside it."""
-    if col < 40:   return 0.80 + (col / 39.0) * 0.70      # 0.80..1.50  amber, wide margin
-    if col < 60:   return 1.25
-    if col < 80:   return 1.25                            # PROBE A
+    if col < 40:
+        return 0.80 + (col / 39.0) * 0.70  # 0.80..1.50  amber, wide margin
+    if col < 60:
+        return 1.25
+    if col < 80:
+        return 1.25  # PROBE A
     for c0, c1, h in LADDER:
         if c0 <= col < c1:
             return h
-    if col < 128:  return 1.25
-    if col < 170:  return 3.50                            # PROBE B
-    if col < 180:  return 2.60 + (col - 170) * 0.03       # 2.60..2.87
-    if col < 272:  return 3.50                            # the roof sits over this
-    if col < 308:  return 3.50                            # the flat plateau
-    return 2.60 + (col - 308) * 0.012                     # 2.60..2.98
+    if col < 128:
+        return 1.25
+    if col < 170:
+        return 3.50  # PROBE B
+    if col < 180:
+        return 2.60 + (col - 170) * 0.03  # 2.60..2.87
+    if col < 272:
+        return 3.50  # the roof sits over this
+    if col < 308:
+        return 3.50  # the flat plateau
+    return 2.60 + (col - 308) * 0.012  # 2.60..2.98
 
 
 def far_h(col: int) -> float:
-    if col < 40:   return 2.60 + (col / 39.0) * 0.80      # 2.60..3.40  brown
-    if col < 128:  return 3.50
-    if col < 272:  return 5.00
-    if col < 308:  return 3.50                            # the plateau: near == far
+    if col < 40:
+        return 2.60 + (col / 39.0) * 0.80  # 2.60..3.40  brown
+    if col < 128:
+        return 3.50
+    if col < 272:
+        return 5.00
+    if col < 308:
+        return 3.50  # the plateau: near == far
     return 5.00 + (col - 308) * 0.015
 
 
@@ -282,12 +295,11 @@ def elevation():
     # of the sheet instead of buffering it from the vector.
     for col in range(*COVERED):
         for row in range(H):
-            z[row, col] = (COVER_BASE + COVER_CAMBER * abs(row - CENTRE_ROW)
-                           + COVER_RAMP * (col - COVERED[0]))
+            z[row, col] = COVER_BASE + COVER_CAMBER * abs(row - CENTRE_ROW) + COVER_RAMP * (col - COVERED[0])
 
     z = z.astype(np.float32)
-    z[HOLE_ROWS[0]:HOLE_ROWS[1], HOLE_COLS[0]:HOLE_COLS[1]] = NODATA
-    z[WET_HOLE_ROWS[0]:WET_HOLE_ROWS[1], WET_HOLE_COLS[0]:WET_HOLE_COLS[1]] = NODATA
+    z[HOLE_ROWS[0] : HOLE_ROWS[1], HOLE_COLS[0] : HOLE_COLS[1]] = NODATA
+    z[WET_HOLE_ROWS[0] : WET_HOLE_ROWS[1], WET_HOLE_COLS[0] : WET_HOLE_COLS[1]] = NODATA
     return z
 
 
@@ -297,6 +309,7 @@ def grid_z():
     and everything downstream reads NaN and propagates the absence. Handing the raw
     -9999 to bank.classify would be testing a pipeline nobody has."""
     import numpy as np
+
     z = elevation()
     z[z <= NODATA + 1.0] = np.float32("nan")
     return z
@@ -313,9 +326,9 @@ def truth():
     col_i = np.broadcast_to(cols, (H, W))
 
     hole = np.zeros((H, W), dtype=bool)
-    hole[HOLE_ROWS[0]:HOLE_ROWS[1], HOLE_COLS[0]:HOLE_COLS[1]] = True
+    hole[HOLE_ROWS[0] : HOLE_ROWS[1], HOLE_COLS[0] : HOLE_COLS[1]] = True
     wet_hole = np.zeros((H, W), dtype=bool)
-    wet_hole[WET_HOLE_ROWS[0]:WET_HOLE_ROWS[1], WET_HOLE_COLS[0]:WET_HOLE_COLS[1]] = True
+    wet_hole[WET_HOLE_ROWS[0] : WET_HOLE_ROWS[1], WET_HOLE_COLS[0] : WET_HOLE_COLS[1]] = True
     deck = (col_i >= COVERED[0]) & (col_i < COVERED[1])
 
     # COLUMNS LEFT OUT OF THE PER-PIXEL COMPARISON, each for a stated reason and none
@@ -329,8 +342,11 @@ def truth():
 
     return {
         "dy": dy,
-        "hole": hole, "wet_hole": wet_hole, "nodata": hole | wet_hole,
-        "deck": deck, "quiet": quiet,
+        "hole": hole,
+        "wet_hole": wet_hole,
+        "nodata": hole | wet_hole,
+        "deck": deck,
+        "quiet": quiet,
         # The flat sheet, and it is asserted WHOLE. |dy| <= 11 rather than 12 leaves one
         # pixel for the distance transform to disagree about at the buffer's edge.
         "water": (dy <= 11) & ~deck & ~wet_hole,
@@ -370,18 +386,26 @@ def make_grid(z):
     import numpy as np
 
     phi = math.radians(LAT_C)
-    m_lat = (111132.92 - 559.82 * math.cos(2 * phi) + 1.175 * math.cos(4 * phi)
-             - 0.0023 * math.cos(6 * phi))
-    m_lon = (111412.84 * math.cos(phi) - 93.5 * math.cos(3 * phi)
-             + 0.118 * math.cos(5 * phi))
+    m_lat = 111132.92 - 559.82 * math.cos(2 * phi) + 1.175 * math.cos(4 * phi) - 0.0023 * math.cos(6 * phi)
+    m_lon = 111412.84 * math.cos(phi) - 93.5 * math.cos(3 * phi) + 0.118 * math.cos(5 * phi)
     px_lon, px_lat = 1.0 / m_lon, 1.0 / m_lat
     north = LAT_C + px_lat * (H / 2.0)
-    return bank.Grid(z=z, valid=np.isfinite(z), west=LON_W, north=north,
-                     px_lon=px_lon, px_lat=px_lat,
-                     px_x_m=px_lon * m_lon, px_y_m=px_lat * m_lat,
-                     provenance={"fetched": "2026-08-01T00:00:00Z",
-                                 "survey_vintage": settings.lidar_survey_vintage,
-                                 "state": "present", "why": "the synthetic fixture"})
+    return bank.Grid(
+        z=z,
+        valid=np.isfinite(z),
+        west=LON_W,
+        north=north,
+        px_lon=px_lon,
+        px_lat=px_lat,
+        px_x_m=px_lon * m_lon,
+        px_y_m=px_lat * m_lat,
+        provenance={
+            "fetched": "2026-08-01T00:00:00Z",
+            "survey_vintage": settings.lidar_survey_vintage,
+            "state": "present",
+            "why": "the synthetic fixture",
+        },
+    )
 
 
 def centreline(grid):
@@ -391,8 +415,7 @@ def centreline(grid):
     whose line stopped at the first and last column would let a rounded end cap clip the
     outermost columns and call it geometry."""
     lat = grid.north - (CENTRE_ROW + 0.5) * grid.px_lat
-    return [[[grid.west - 20 * grid.px_lon, lat],
-             [grid.west + (W + 20) * grid.px_lon, lat]]]
+    return [[[grid.west - 20 * grid.px_lon, lat], [grid.west + (W + 20) * grid.px_lon, lat]]]
 
 
 def geotiff_bytes(z, nodata=NODATA):
@@ -407,11 +430,14 @@ def geotiff_bytes(z, nodata=NODATA):
     m_lat = 111132.92 - 559.82 * math.cos(2 * phi)
     m_lon = 111412.84 * math.cos(phi) - 93.5 * math.cos(3 * phi)
     info = TiffImagePlugin.ImageFileDirectory_v2()
-    info[42113] = str(nodata); info.tagtype[42113] = 2            # GDAL_NODATA
-    info[33550] = (1.0 / m_lon, 1.0 / m_lat, 0.0); info.tagtype[33550] = 12
+    info[42113] = str(nodata)
+    info.tagtype[42113] = 2  # GDAL_NODATA
+    info[33550] = (1.0 / m_lon, 1.0 / m_lat, 0.0)
+    info.tagtype[33550] = 12
     info[33922] = (0.0, 0.0, 0.0, LON_W, LAT_C + H / (2.0 * m_lat), 0.0)
     info.tagtype[33922] = 12
-    info[34735] = (1, 1, 0, 1, 2048, 0, 1, 4326); info.tagtype[34735] = 3
+    info[34735] = (1, 1, 0, 1, 2048, 0, 1, 4326)
+    info.tagtype[34735] = 3
     buf = io.BytesIO()
     Image.fromarray(z).save(buf, format="TIFF", tiffinfo=info, compression=None)
     return buf.getvalue()
@@ -420,10 +446,12 @@ def geotiff_bytes(z, nodata=NODATA):
 def _no_global_datum() -> str:
     hi = PROBE_A_OD - float(settings.lidar_launch_max_height_m)
     lo = PROBE_B_OD - float(settings.lidar_launch_max_height_m)
-    return (f"PROBE A ({PROBE_A_OD:.3f} m OD) is amber only for a datum above "
-            f"{hi:.3f} m; PROBE B ({PROBE_B_OD:.3f} m OD) is brown only for a datum at "
-            f"or below {lo:.3f} m. No single number satisfies both, so a global water "
-            f"level cannot produce this map however it is chosen.")
+    return (
+        f"PROBE A ({PROBE_A_OD:.3f} m OD) is amber only for a datum above "
+        f"{hi:.3f} m; PROBE B ({PROBE_B_OD:.3f} m OD) is brown only for a datum at "
+        f"or below {lo:.3f} m. No single number satisfies both, so a global water "
+        f"level cannot produce this map however it is chosen."
+    )
 
 
 # ===========================================================================
@@ -458,8 +486,11 @@ def world():
     # api holds the same object and a suite that left it re-tuned would change the
     # layer for every check after it.
     flat_settings = dataclasses.replace(
-        settings, lidar_hillshade_z_factor=0.0,        # shade == 1.0 everywhere
-        lidar_contour_alpha=0.0, lidar_contour_width_px=0.0)
+        settings,
+        lidar_hillshade_z_factor=0.0,  # shade == 1.0 everywhere
+        lidar_contour_alpha=0.0,
+        lidar_contour_width_px=0.0,
+    )
 
     real_dir, real_settings = lidar.area_lidar_dir, bank.settings
     lidar.area_lidar_dir = lambda name: tmp / f"{name}.lidar"
@@ -473,16 +504,26 @@ def world():
     finally:
         lidar.area_lidar_dir, bank.settings = real_dir, real_settings
 
-    _WORLD = {"tmp": tmp, "z": z, "grid": grid, "lines": lines,
-              "raster": raster, "plain": plain, "t": truth(),
-              "want": expected_class(z, truth()),
-              "tiles": tiles, "plain_tiles": plain_tiles,
-              "shipped": shipped, "flat": flat, "dir": lidar.area_lidar_dir}
+    _WORLD = {
+        "tmp": tmp,
+        "z": z,
+        "grid": grid,
+        "lines": lines,
+        "raster": raster,
+        "plain": plain,
+        "t": truth(),
+        "want": expected_class(z, truth()),
+        "tiles": tiles,
+        "plain_tiles": plain_tiles,
+        "shipped": shipped,
+        "flat": flat,
+        "dir": lidar.area_lidar_dir,
+    }
     return _WORLD
 
 
 ZMIN, ZMAX = 13, 18
-UPSAMPLE_Z = 18          # asserted below to be an upsampling zoom, never assumed
+UPSAMPLE_Z = 18  # asserted below to be an upsampling zoom, never assumed
 
 
 def zoom_split(grid):
@@ -496,8 +537,7 @@ def zoom_split(grid):
     pyramid checks."""
     up, down = [], []
     for z in range(ZMIN, ZMAX + 1):
-        (up if 360.0 / (float(1 << z) * bank.BANK_TILE_SIZE) <= abs(grid.px_lon)
-         else down).append(z)
+        (up if 360.0 / (float(1 << z) * bank.BANK_TILE_SIZE) <= abs(grid.px_lon) else down).append(z)
     return up, down
 
 
@@ -519,11 +559,9 @@ def _read_pyramid(name):
         return out
     con = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
     try:
-        for z, tx, tms_y, blob in con.execute(
-                "SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles"):
+        for z, tx, tms_y, blob in con.execute("SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles"):
             y = (1 << z) - 1 - tms_y
-            out[(int(z), int(tx), int(y))] = np.asarray(
-                Image.open(io.BytesIO(bytes(blob))).convert("RGBA"))
+            out[(int(z), int(tx), int(y))] = np.asarray(Image.open(io.BytesIO(bytes(blob))).convert("RGBA"))
     finally:
         con.close()
     return out
@@ -540,7 +578,8 @@ def tile_pixel_of(grid, row, col, z):
     n = 1 << (z + 8)
     tx = int((lon + 180.0) / 360.0 * n)
     ty = int((1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n)
-    tx = max(0, min(n - 1, tx)); ty = max(0, min(n - 1, ty))
+    tx = max(0, min(n - 1, tx))
+    ty = max(0, min(n - 1, ty))
     return z, tx >> 8, ty >> 8, ty & 255, tx & 255
 
 
@@ -556,8 +595,7 @@ def grid_pixel_of(grid, z, x, y, py, px):
     lon = ((x * 256 + px + 0.5) / n) * 360.0 - 180.0
     wy = (y * 256 + py + 0.5) / n
     lat = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * wy))))
-    return (int(round((grid.north - lat) / grid.px_lat - 0.5)),
-            int(round((lon - grid.west) / grid.px_lon - 0.5)))
+    return (int(round((grid.north - lat) / grid.px_lat - 0.5)), int(round((lon - grid.west) / grid.px_lon - 0.5)))
 
 
 def alpha_at(tiles, grid, row, col, z):
@@ -594,7 +632,8 @@ class BankTestCase(unittest.TestCase):
             raise AssertionError(
                 "tests/test_bank.py reached the network. This half of the layer reads a "
                 "grid off the disk and does arithmetic — nothing in it may resolve a "
-                "hostname, and no check here may either.")
+                "hostname, and no check here may either."
+            )
 
         socket.socket.connect = blocked
         socket.create_connection = blocked
@@ -603,14 +642,16 @@ class BankTestCase(unittest.TestCase):
             return
         try:
             cls.w = world()
-        except Exception as exc:            # noqa: BLE001 — reported per check below
+        except Exception as exc:  # noqa: BLE001 — reported per check below
             # Caught rather than let out of setUpClass: unittest folds a setUpClass
             # explosion into ONE error for the whole class, and a round that verified
             # nothing would read as a single failure instead of as the absence it is.
             import traceback
-            cls.fail_reason = (f"the fixture could not be built or classified: "
-                               f"{type(exc).__name__}: {exc}\n"
-                               + "".join(traceback.format_tb(exc.__traceback__)[-3:]))
+
+            cls.fail_reason = (
+                f"the fixture could not be built or classified: "
+                f"{type(exc).__name__}: {exc}\n" + "".join(traceback.format_tb(exc.__traceback__)[-3:])
+            )
 
     @classmethod
     def tearDownClass(cls):
@@ -628,9 +669,11 @@ class BankTestCase(unittest.TestCase):
         if NEED:
             self.skipTest(NEED)
         if IMPORT_ERROR:
-            self.fail(f"nav/bank.py or nav/lidar.py could not be imported: "
-                      f"{IMPORT_ERROR}. That is not a missing package, it is a missing "
-                      f"module of this api, and nothing about the layer was exercised.")
+            self.fail(
+                f"nav/bank.py or nav/lidar.py could not be imported: "
+                f"{IMPORT_ERROR}. That is not a missing package, it is a missing "
+                f"module of this api, and nothing about the layer was exercised."
+            )
         if self.fail_reason:
             self.fail(self.fail_reason)
 
@@ -649,11 +692,13 @@ class BankTestCase(unittest.TestCase):
 
     def first(self, mask, bad):
         import numpy as np
+
         rs, cs = np.nonzero(mask & bad)
         return [(int(r), int(c)) for r, c in zip(rs[:8], cs[:8])] or "(none)"
 
     def cols(self, lo, hi):
         import numpy as np
+
         m = np.zeros((H, W), dtype=bool)
         m[:, lo:hi] = True
         return m
@@ -673,36 +718,50 @@ class TheFixtureIsWhatItClaims(BankTestCase):
 
     def test_the_centreline_burns_onto_the_row_it_was_aimed_at(self):
         import numpy as np
+
         line = bank._rasterise_centreline(np, self.grid, self.w["lines"])
         rows = sorted({int(r) for r in np.nonzero(line)[0]})
-        self.assertEqual(rows, [CENTRE_ROW],
-                         f"the centreline rasterised onto rows {rows}, not row "
-                         f"{CENTRE_ROW}; every distance in this file is measured from "
-                         f"it and would be off by that many metres")
-        self.assertEqual(int(line.sum()), W,
-                         f"{int(line.sum())} centreline pixels over {W} columns — a "
-                         f"gap in the burnt line gives the distance transform a hole "
-                         f"to grow through")
+        self.assertEqual(
+            rows,
+            [CENTRE_ROW],
+            f"the centreline rasterised onto rows {rows}, not row "
+            f"{CENTRE_ROW}; every distance in this file is measured from "
+            f"it and would be off by that many metres",
+        )
+        self.assertEqual(
+            int(line.sum()),
+            W,
+            f"{int(line.sum())} centreline pixels over {W} columns — a "
+            f"gap in the burnt line gives the distance transform a hole "
+            f"to grow through",
+        )
 
     def test_the_second_pound_holds_no_amber_at_all(self):
         """THE CONSTRUCTED CASE the downsampling checks rely on: 128 m of brown bank
         running straight into transparent water, with no amber anywhere in it."""
         rhs = self.w["plain"].classes[:, LOCK_COL:]
         n = int((rhs == bank.BANK_CLASS_LOW).sum())
-        self.assertEqual(n, 0,
-                         f"{n} amber pixels were classified over pound B at native "
-                         f"resolution. Every bank there is 2.6 m or more above its own "
-                         f"water; if amber is appearing, the downsampling checks below "
-                         f"are testing nothing.")
-        self.assertGreater(int((rhs == bank.BANK_CLASS_HIGH).sum()), 1500,
-                           "and there has to be plenty of brown there for a blend to "
-                           "have anything to blend")
+        self.assertEqual(
+            n,
+            0,
+            f"{n} amber pixels were classified over pound B at native "
+            f"resolution. Every bank there is 2.6 m or more above its own "
+            f"water; if amber is appearing, the downsampling checks below "
+            f"are testing nothing.",
+        )
+        self.assertGreater(
+            int((rhs == bank.BANK_CLASS_HIGH).sum()),
+            1500,
+            "and there has to be plenty of brown there for a blend to " "have anything to blend",
+        )
 
     def test_the_first_pound_holds_plenty_of_amber(self):
         lhs = self.w["plain"].classes[:, :LOCK_COL]
-        self.assertGreater(int((lhs == bank.BANK_CLASS_LOW).sum()), 1000,
-                           "pound A has to hold real amber or 'no amber anywhere' is "
-                           "the trivially true answer")
+        self.assertGreater(
+            int((lhs == bank.BANK_CLASS_LOW).sum()),
+            1000,
+            "pound A has to hold real amber or 'no amber anywhere' is " "the trivially true answer",
+        )
 
     def test_the_tile_pixel_arithmetic_agrees_with_the_modules_own(self):
         """This suite indexes tile pixels with deg2num at z+8. If that identity does not
@@ -711,11 +770,11 @@ class TheFixtureIsWhatItClaims(BankTestCase):
         for row, col, z in ((0, 0, 18), (80, 128, 18), (159, 255, 17), (40, 60, 13)):
             lon, lat = g.lonlat(row, col)
             zz, x, y, py, px = tile_pixel_of(g, row, col, z)
-            self.assertEqual((x, y), bank.deg2num(lat, lon, z),
-                             f"tile of grid ({row},{col}) at z{z}")
+            self.assertEqual((x, y), bank.deg2num(lat, lon, z), f"tile of grid ({row},{col}) at z{z}")
             fx, fy = bank.deg2num(lat, lon, z + 8)
-            self.assertEqual((fx >> 8, fy >> 8, fy & 255, fx & 255), (x, y, py, px),
-                             f"pixel of grid ({row},{col}) at z{z}")
+            self.assertEqual(
+                (fx >> 8, fy >> 8, fy & 255, fx & 255), (x, y, py, px), f"pixel of grid ({row},{col}) at z{z}"
+            )
 
     def test_the_zoom_this_suite_reads_pixels_at_really_is_the_nearest_one(self):
         """Several checks read one tile pixel per grid pixel at z18 and expect the
@@ -723,19 +782,24 @@ class TheFixtureIsWhatItClaims(BankTestCase):
         NEAREST regime; at a downsampling zoom the same read is a coverage average and
         the checks would be asking a question with no answer."""
         up, down = zoom_split(self.grid)
-        self.assertIn(UPSAMPLE_Z, up,
-                      f"z{UPSAMPLE_Z} downsamples this grid (upsampling zooms: {up}); "
-                      f"every per-pixel read in this file is at that zoom")
-        self.assertTrue(down, f"nothing in z{ZMIN}..{ZMAX} downsamples this grid, so "
-                              f"the whole pyramid class is testing one regime")
+        self.assertIn(
+            UPSAMPLE_Z,
+            up,
+            f"z{UPSAMPLE_Z} downsamples this grid (upsampling zooms: {up}); "
+            f"every per-pixel read in this file is at that zoom",
+        )
+        self.assertTrue(
+            down,
+            f"nothing in z{ZMIN}..{ZMAX} downsamples this grid, so " f"the whole pyramid class is testing one regime",
+        )
 
     def test_the_pyramid_was_actually_written(self):
         got = self.w["tiles"]
-        self.assertGreater(got["tiles"], 0,
-                           f"write_pyramid stored no tiles at all: {got}")
-        self.assertTrue(self.w["shipped"],
-                        "no tile came back out of the archive; every pixel check below "
-                        "would pass on an empty dictionary")
+        self.assertGreater(got["tiles"], 0, f"write_pyramid stored no tiles at all: {got}")
+        self.assertTrue(
+            self.w["shipped"],
+            "no tile came back out of the archive; every pixel check below " "would pass on an empty dictionary",
+        )
 
 
 # ===========================================================================
@@ -744,20 +808,22 @@ class TheFixtureIsWhatItClaims(BankTestCase):
 class TheTwoMetreRule(BankTestCase):
 
     def test_a_bank_just_under_the_rule_is_amber(self):
-        band = self.t["near_in"] & self.cols(80, 90)     # 1.9375 m, exact in float32
+        band = self.t["near_in"] & self.cols(80, 90)  # 1.9375 m, exact in float32
         bad = band & (self.cls_ != bank.BANK_CLASS_LOW)
-        self.assertFalse(bad.any(),
-                         f"1.9375 m above its own water is under the "
-                         f"{settings.lidar_launch_max_height_m:g} m rule and must be "
-                         f"AMBER; {int(bad.sum())} of {int(band.sum())} pixels were "
-                         f"not, first at {self.first(band, bad)}")
+        self.assertFalse(
+            bad.any(),
+            f"1.9375 m above its own water is under the "
+            f"{settings.lidar_launch_max_height_m:g} m rule and must be "
+            f"AMBER; {int(bad.sum())} of {int(band.sum())} pixels were "
+            f"not, first at {self.first(band, bad)}",
+        )
 
     def test_a_bank_exactly_on_the_rule_is_brown_and_the_edge_is_declared(self):
         """`<` and `<=` are one character apart and make two different maps. The rule
         the console explains is "LESS THAN 2 m is amber", so exactly 2.00 is brown.
         The ladder either side of the edge passes under both readings; this is the
         check that does not."""
-        band = self.t["near_in"] & self.cols(90, 100)    # exactly 2.0, exact in float32
+        band = self.t["near_in"] & self.cols(90, 100)  # exactly 2.0, exact in float32
         amber = band & (self.cls_ == bank.BANK_CLASS_LOW)
         self.assertFalse(
             amber.any(),
@@ -765,25 +831,30 @@ class TheTwoMetreRule(BankTestCase):
             f"its own water came back AMBER at {int(amber.sum())} of {int(band.sum())} "
             f"pixels ({self.first(band, amber)}). settings.lidar_launch_max_height_m is "
             f"the height amber stops at, and `height <= threshold` puts the edge on the "
-            f"wrong side of itself.")
+            f"wrong side of itself.",
+        )
         bad = band & (self.cls_ != bank.BANK_CLASS_HIGH)
-        self.assertFalse(bad.any(),
-                         f"exactly on the rule must be BROWN; {int(bad.sum())} pixels "
-                         f"were neither, at {self.first(band, bad)}")
+        self.assertFalse(
+            bad.any(),
+            f"exactly on the rule must be BROWN; {int(bad.sum())} pixels " f"were neither, at {self.first(band, bad)}",
+        )
 
     def test_a_bank_just_over_the_rule_is_brown(self):
-        band = self.t["near_in"] & self.cols(100, 110)   # 2.0625 m, exact in float32
+        band = self.t["near_in"] & self.cols(100, 110)  # 2.0625 m, exact in float32
         bad = band & (self.cls_ != bank.BANK_CLASS_HIGH)
-        self.assertFalse(bad.any(),
-                         f"2.0625 m is over the rule and must be BROWN; "
-                         f"{int(bad.sum())} of {int(band.sum())} pixels were not, "
-                         f"first at {self.first(band, bad)}")
+        self.assertFalse(
+            bad.any(),
+            f"2.0625 m is over the rule and must be BROWN; "
+            f"{int(bad.sum())} of {int(band.sum())} pixels were not, "
+            f"first at {self.first(band, bad)}",
+        )
 
     def test_the_split_lands_on_the_rule_everywhere_and_not_only_at_the_edge(self):
         """The whole classified corridor at once, against the fixture's own truth. A
         layer that got the edge right and the middle wrong passes all three checks
         above and fails here."""
         import numpy as np
+
         got, want = self.cls_, self.w["want"]
         band = self.t["near_in"] | self.t["far_in"]
         bad = band & (got != want)
@@ -792,9 +863,12 @@ class TheTwoMetreRule(BankTestCase):
             sample = "; ".join(
                 f"({int(r)},{int(c)}) z={float(self.w['z'][r, c]):.4f} "
                 f"water={level_of(int(c)):.4f} want={int(want[r, c])} got={int(got[r, c])}"
-                for r, c in list(zip(rs, cs))[:6])
-            self.fail(f"{int(bad.sum())} of {int(band.sum())} classified pixels "
-                      f"disagree with the rule applied to their own water: {sample}")
+                for r, c in list(zip(rs, cs))[:6]
+            )
+            self.fail(
+                f"{int(bad.sum())} of {int(band.sum())} classified pixels "
+                f"disagree with the rule applied to their own water: {sample}"
+            )
 
     def test_ground_outside_the_corridor_is_never_classified(self):
         """There is real, high, perfectly good ground out there. It is not beside this
@@ -802,11 +876,13 @@ class TheTwoMetreRule(BankTestCase):
         'the bank is 4 m high' into a claim about a field."""
         out = self.t["outside"]
         bad = out & (self.cls_ != bank.BANK_CLASS_OUTSIDE)
-        self.assertFalse(bad.any(),
-                         f"{int(bad.sum())} of {int(out.sum())} pixels more than 36 m "
-                         f"from the centreline were classified anyway (the corridor is "
-                         f"{settings.lidar_water_buffer_m + settings.lidar_band_buffer_m:g} m), "
-                         f"first at {self.first(out, bad)}")
+        self.assertFalse(
+            bad.any(),
+            f"{int(bad.sum())} of {int(out.sum())} pixels more than 36 m "
+            f"from the centreline were classified anyway (the corridor is "
+            f"{settings.lidar_water_buffer_m + settings.lidar_band_buffer_m:g} m), "
+            f"first at {self.first(out, bad)}",
+        )
 
 
 # ===========================================================================
@@ -816,16 +892,17 @@ class EveryPoundIsItsOwnDatum(BankTestCase):
     """The lock-step fixture, which is what the whole file is built round."""
 
     def test_two_separate_water_levels_are_detected_and_not_one_average(self):
-        levels = sorted(round(float(r["level_m_od"]), 2)
-                        for r in self.w["raster"].levels)
+        levels = sorted(round(float(r["level_m_od"]), 2) for r in self.w["raster"].levels)
         self.assertEqual(
-            len(levels), 2,
+            len(levels),
+            2,
             f"the fixture holds two pounds, {LEVEL_A:.3f} m and {LEVEL_B:.3f} m OD, "
             f"with a lock between them; detect_pound_levels reported {levels}. One "
             f"level means the staircase was flattened. Three or more means something "
             f"that is not water was read as a pound — and the only other structure "
             f"here is a ROOF over the cut, which does not change the level of the "
-            f"water either side of it.")
+            f"water either side of it.",
+        )
         self.assertAlmostEqual(levels[0], LEVEL_B, places=1, msg=f"levels {levels}")
         self.assertAlmostEqual(levels[1], LEVEL_A, places=1, msg=f"levels {levels}")
 
@@ -849,29 +926,34 @@ class EveryPoundIsItsOwnDatum(BankTestCase):
             badA.any(),
             f"PROBE A stands at {PROBE_A_OD:.3f} m OD, {PROBE_A_OD - LEVEL_A:.3f} m "
             f"above pound A, and must be AMBER; {int(badA.sum())} of {int(A.sum())} "
-            f"pixels were not, first at {self.first(A, badA)}. {note}")
+            f"pixels were not, first at {self.first(A, badA)}. {note}",
+        )
         self.assertFalse(
             badB.any(),
             f"PROBE B stands at {PROBE_B_OD:.3f} m OD, {PROBE_B_OD - LEVEL_B:.3f} m "
             f"above pound B, and must be BROWN; {int(badB.sum())} of {int(B.sum())} "
-            f"pixels were not, first at {self.first(B, badB)}. {note}")
+            f"pixels were not, first at {self.first(B, badB)}. {note}",
+        )
 
     def test_the_higher_ground_is_the_amber_one_which_is_the_whole_point(self):
         """Stated on its own because it is the sentence that sounds wrong until you
         remember the staircase: PROBE A is 0.75 m higher above Ordnance Datum than
         PROBE B and is the safer of the two."""
         import numpy as np
+
         got = self.cls_
         ra, ca = np.nonzero(self.t["near_in"] & self.cols(*PROBE_A))
         rb, cb = np.nonzero(self.t["near_in"] & self.cols(*PROBE_B))
         a, b = int(got[ra[0], ca[0]]), int(got[rb[0], cb[0]])
         self.assertGreater(PROBE_A_OD, PROBE_B_OD, "the fixture itself is wrong")
         self.assertEqual(
-            (a, b), (int(bank.BANK_CLASS_LOW), int(bank.BANK_CLASS_HIGH)),
+            (a, b),
+            (int(bank.BANK_CLASS_LOW), int(bank.BANK_CLASS_HIGH)),
             f"the higher ground ({PROBE_A_OD:.3f} m OD) came back class {a} and the "
             f"lower ({PROBE_B_OD:.3f} m OD) came back class {b}. Sorted by height "
             f"above Ordnance Datum that reads backwards, which is exactly right: "
-            f"height above OD says nothing at all here. {_no_global_datum()}")
+            f"height above OD says nothing at all here. {_no_global_datum()}",
+        )
 
 
 # ===========================================================================
@@ -884,9 +966,11 @@ class WaterIsNeverPainted(BankTestCase):
     def test_every_pixel_of_the_sheet_is_classed_as_water(self):
         water = self.t["water"]
         bad = water & (self.cls_ != bank.BANK_CLASS_WATER)
-        self.assertFalse(bad.any(),
-                         f"{int(bad.sum())} of {int(water.sum())} water pixels were "
-                         f"classed as something else, first at {self.first(water, bad)}")
+        self.assertFalse(
+            bad.any(),
+            f"{int(bad.sum())} of {int(water.sum())} water pixels were "
+            f"classed as something else, first at {self.first(water, bad)}",
+        )
 
     def test_no_tile_paints_a_single_pixel_of_water(self):
         """On the PNGs the console draws, at the zoom where one tile pixel is finer
@@ -895,6 +979,7 @@ class WaterIsNeverPainted(BankTestCase):
         water's edge — invisible in a spot check, and exactly what dilating a bank
         mask over the channel leaves behind."""
         import numpy as np
+
         g, tiles = self.grid, self.w["shipped"]
         water = self.t["water"]
         rs, cs = np.nonzero(water)
@@ -906,23 +991,26 @@ class WaterIsNeverPainted(BankTestCase):
                 if a > worst:
                     worst, where = a, (r, c)
         self.assertEqual(
-            n_bad, 0,
+            n_bad,
+            0,
             f"{n_bad} of {int(water.sum())} water pixels carry paint at z{UPSAMPLE_Z} "
             f"— worst alpha {worst}/255 at grid pixel {where}. Paint in the middle of "
             f"the cut is a claim about the channel, and nothing here has ever measured "
-            f"the channel.")
+            f"the channel.",
+        )
 
     def test_a_hole_in_the_survey_in_the_middle_of_the_cut_is_not_a_bank(self):
         """Where the LIDAR simply missed the water — a specular dropout, which is what
         water usually gives a laser — the answer is still 'the middle of the cut', not
         'ground at 0 m above the water'."""
         wet = self.t["wet_hole"]
-        painted = wet & ((self.cls_ == bank.BANK_CLASS_LOW) |
-                         (self.cls_ == bank.BANK_CLASS_HIGH))
-        self.assertFalse(painted.any(),
-                         f"{int(painted.sum())} of {int(wet.sum())} unsurveyed pixels "
-                         f"in the middle of the channel were classified as bank, first "
-                         f"at {self.first(wet, painted)}")
+        painted = wet & ((self.cls_ == bank.BANK_CLASS_LOW) | (self.cls_ == bank.BANK_CLASS_HIGH))
+        self.assertFalse(
+            painted.any(),
+            f"{int(painted.sum())} of {int(wet.sum())} unsurveyed pixels "
+            f"in the middle of the channel were classified as bank, first "
+            f"at {self.first(wet, painted)}",
+        )
 
     def test_nothing_outside_the_two_painted_classes_reaches_a_tile(self):
         """The upsampling branch is nearest-neighbour on the class raster, so every
@@ -930,6 +1018,7 @@ class WaterIsNeverPainted(BankTestCase):
         one declared opacity. A partial alpha up there would mean something was blended
         at a zoom where nothing may be."""
         import numpy as np
+
         full = int(round(bank.BANK_PAINT_ALPHA * 255))
         seen = set()
         for (z, _x, _y), img in self.w["shipped"].items():
@@ -938,10 +1027,12 @@ class WaterIsNeverPainted(BankTestCase):
             seen.update(int(v) for v in np.unique(img[:, :, 3]))
         self.assertTrue(seen, f"no z{UPSAMPLE_Z} tile in the archive")
         self.assertLessEqual(
-            seen, {0, full},
+            seen,
+            {0, full},
             f"z{UPSAMPLE_Z} tiles carry alphas {sorted(seen)}; at that zoom one tile "
             f"pixel is finer than one grid pixel and the only honest answers are 0 and "
-            f"{full} (BANK_PAINT_ALPHA {bank.BANK_PAINT_ALPHA})")
+            f"{full} (BANK_PAINT_ALPHA {bank.BANK_PAINT_ALPHA})",
+        )
 
 
 # ===========================================================================
@@ -953,63 +1044,70 @@ class TheCorridorComesFromTheVector(BankTestCase):
 
     def test_the_corridor_is_as_wide_as_it_says_and_no_wider(self):
         import numpy as np
+
         inside = self.t["dy"] <= 32
         got = self.cls_ != bank.BANK_CLASS_OUTSIDE
         miss = inside & ~got & ~self.t["nodata"]
-        self.assertFalse(miss.any(),
-                         f"{int(miss.sum())} surveyed pixels within 32 m of the "
-                         f"centreline are outside the corridor, first at "
-                         f"{self.first(inside, ~got & ~self.t['nodata'])}")
+        self.assertFalse(
+            miss.any(),
+            f"{int(miss.sum())} surveyed pixels within 32 m of the "
+            f"centreline are outside the corridor, first at "
+            f"{self.first(inside, ~got & ~self.t['nodata'])}",
+        )
 
     def test_not_one_column_of_the_canal_loses_its_bank(self):
         """A corridor detected from the flat sheet has a ten-metre hole under the
         covered section. A corridor buffered from the vector does not know the roof
         is there."""
         import numpy as np
-        painted = ((self.cls_ == bank.BANK_CLASS_LOW) |
-                   (self.cls_ == bank.BANK_CLASS_HIGH))
+
+        painted = (self.cls_ == bank.BANK_CLASS_LOW) | (self.cls_ == bank.BANK_CLASS_HIGH)
         per_col = painted.sum(axis=0)
         thin = np.nonzero(per_col < 20)[0]
         self.assertEqual(
-            thin.size, 0,
+            thin.size,
+            0,
             f"{thin.size} of {W} columns carry fewer than 20 painted pixels — "
             f"narrowest is column {int(np.argmin(per_col))} with "
             f"{int(per_col.min())}. Columns {COVERED[0]}..{COVERED[1] - 1} are the "
             f"covered section; a hole there is a corridor grown out of the water "
             f"sheet rather "
-            f"than buffered from the centreline. Thin columns: {thin[:16].tolist()}")
+            f"than buffered from the centreline. Thin columns: {thin[:16].tolist()}",
+        )
 
     def test_the_bank_beside_the_covered_section_is_drawn_on_the_actual_tiles(self):
         """Continuity of a mask is not the deliverable — continuity of the PICTURE is.
         An operator walking a covered stretch is precisely who needs to know what the bank
         does on either side of it."""
         import numpy as np
+
         g, tiles = self.grid, self.w["shipped"]
-        painted = ((self.cls_ == bank.BANK_CLASS_LOW) |
-                   (self.cls_ == bank.BANK_CLASS_HIGH))
+        painted = (self.cls_ == bank.BANK_CLASS_LOW) | (self.cls_ == bank.BANK_CLASS_HIGH)
         blank = []
         for c in range(COVERED[0], COVERED[1]):
             rows = np.nonzero(painted[:, c])[0]
-            drawn = sum(1 for r in rows.tolist()
-                        if alpha_at(tiles, g, int(r), c, UPSAMPLE_Z) > 0)
+            drawn = sum(1 for r in rows.tolist() if alpha_at(tiles, g, int(r), c, UPSAMPLE_Z) > 0)
             if drawn == 0:
                 blank.append((c, int(rows.size)))
-        self.assertFalse(blank,
-                         f"columns under the roof with classified bank and NO paint "
-                         f"on any tile: {blank}. The map goes blank exactly where "
-                         f"somebody is standing.")
+        self.assertFalse(
+            blank,
+            f"columns under the roof with classified bank and NO paint "
+            f"on any tile: {blank}. The map goes blank exactly where "
+            f"somebody is standing.",
+        )
 
     def test_the_water_under_the_roof_is_still_the_middle_of_the_cut(self):
         """The survey sees the deck, not the water. The channel does not stop being
         the channel because something was built over it, and the layer must not start
         painting the middle of the cut there."""
         mid = (self.t["dy"] <= 11) & self.t["deck"]
-        bad = mid & ((self.cls_ == bank.BANK_CLASS_LOW) |
-                     (self.cls_ == bank.BANK_CLASS_HIGH))
-        self.assertFalse(bad.any(),
-                         f"{int(bad.sum())} of {int(mid.sum())} pixels in the channel "
-                         f"under the roof were painted as bank, first at "
-                         f"{self.first(mid, bad)}")
+        bad = mid & ((self.cls_ == bank.BANK_CLASS_LOW) | (self.cls_ == bank.BANK_CLASS_HIGH))
+        self.assertFalse(
+            bad.any(),
+            f"{int(bad.sum())} of {int(mid.sum())} pixels in the channel "
+            f"under the roof were painted as bank, first at "
+            f"{self.first(mid, bad)}",
+        )
 
 
 # ===========================================================================
@@ -1023,32 +1121,43 @@ class NodataNeverReachesTheArithmetic(BankTestCase):
         """nav/lidar.py owns the decode, and it is the ONLY place the sentinel may be
         recognised — everything after it reads NaN and propagates the absence."""
         import numpy as np
+
         got = lidar.decode_dtm(geotiff_bytes(elevation()))
         self.assertTrue(got.get("ok"), f"the fixture GeoTIFF was refused: {got.get('why')}")
         grid = got["grid"]
         nod = self.t["nodata"]
-        self.assertTrue(np.isnan(grid[nod]).all(),
-                        f"{int((~np.isnan(grid[nod])).sum())} of {int(nod.sum())} "
-                        f"nodata cells came through as numbers")
-        self.assertFalse(np.isnan(grid[~nod]).any(),
-                         f"{int(np.isnan(grid[~nod]).sum())} surveyed cells were masked "
-                         f"out — masking too much is the same defect wearing the other "
-                         f"sign, and it reads on the console as PARTIAL coverage")
-        self.assertEqual(int(got["nodata_pixels"]), int(nod.sum()),
-                         f"nodata_pixels {got['nodata_pixels']} against "
-                         f"{int(nod.sum())} in the fixture")
+        self.assertTrue(
+            np.isnan(grid[nod]).all(),
+            f"{int((~np.isnan(grid[nod])).sum())} of {int(nod.sum())} " f"nodata cells came through as numbers",
+        )
+        self.assertFalse(
+            np.isnan(grid[~nod]).any(),
+            f"{int(np.isnan(grid[~nod]).sum())} surveyed cells were masked "
+            f"out — masking too much is the same defect wearing the other "
+            f"sign, and it reads on the console as PARTIAL coverage",
+        )
+        self.assertEqual(
+            int(got["nodata_pixels"]),
+            int(nod.sum()),
+            f"nodata_pixels {got['nodata_pixels']} against " f"{int(nod.sum())} in the fixture",
+        )
 
     def test_the_sentinel_never_reaches_the_elevation_range(self):
         import numpy as np
+
         got = lidar.decode_dtm(geotiff_bytes(elevation()))
         real = elevation()[~self.t["nodata"]]
         self.assertAlmostEqual(
-            float(got["elev_min"]), float(real.min()), places=2,
+            float(got["elev_min"]),
+            float(real.min()),
+            places=2,
             msg=f"elev_min came back {got['elev_min']}; the lowest SURVEYED cell is "
-                f"{float(real.min()):.3f} m, and anything near {NODATA} is the "
-                f"sentinel arriving in the statistics")
-        self.assertAlmostEqual(float(got["elev_max"]), float(real.max()), places=2,
-                               msg=f"elev_max came back {got['elev_max']}")
+            f"{float(real.min()):.3f} m, and anything near {NODATA} is the "
+            f"sentinel arriving in the statistics",
+        )
+        self.assertAlmostEqual(
+            float(got["elev_max"]), float(real.max()), places=2, msg=f"elev_max came back {got['elev_max']}"
+        )
 
     def test_the_sentinel_never_reaches_the_pound_histogram(self):
         """detect_pound_levels histograms the flat near-centreline elevations. One
@@ -1059,30 +1168,39 @@ class NodataNeverReachesTheArithmetic(BankTestCase):
         self.assertTrue(
             all(l > 0.0 for l in levels),
             f"a detected water level is at or below zero: {levels}. There is a nodata "
-            f"hole in the middle of this fixture's channel and its value is {NODATA}.")
+            f"hole in the middle of this fixture's channel and its value is {NODATA}.",
+        )
 
     def test_the_hole_is_not_classified_and_not_painted(self):
         import numpy as np
+
         g, tiles = self.grid, self.w["shipped"]
         hole = self.t["hole"]
         bad = hole & (self.cls_ != bank.BANK_CLASS_OUTSIDE)
-        self.assertFalse(bad.any(),
-                         f"{int(bad.sum())} of {int(hole.sum())} unsurveyed cells were "
-                         f"classified, first at {self.first(hole, bad)}")
+        self.assertFalse(
+            bad.any(),
+            f"{int(bad.sum())} of {int(hole.sum())} unsurveyed cells were "
+            f"classified, first at {self.first(hole, bad)}",
+        )
         rs, cs = np.nonzero(hole)
-        lit = [(int(r), int(c)) for r, c in zip(rs.tolist(), cs.tolist())
-               if alpha_at(tiles, g, int(r), int(c), UPSAMPLE_Z) > 0]
-        self.assertFalse(lit, f"{len(lit)} unsurveyed cells carry paint on a tile: "
-                              f"{lit[:8]}")
+        lit = [
+            (int(r), int(c))
+            for r, c in zip(rs.tolist(), cs.tolist())
+            if alpha_at(tiles, g, int(r), int(c), UPSAMPLE_Z) > 0
+        ]
+        self.assertFalse(lit, f"{len(lit)} unsurveyed cells carry paint on a tile: " f"{lit[:8]}")
 
     def test_the_hillshade_is_finite_everywhere_it_is_defined(self):
         import numpy as np
+
         hs = np.asarray(self.w["raster"].shade, dtype=np.float64)
         valid = np.asarray(self.grid.valid, dtype=bool)
         bad = valid & ~np.isfinite(hs)
-        self.assertFalse(bad.any(),
-                         f"{int(bad.sum())} surveyed cells have a non-finite hillshade, "
-                         f"first at {self.first(valid, ~np.isfinite(hs))}")
+        self.assertFalse(
+            bad.any(),
+            f"{int(bad.sum())} surveyed cells have a non-finite hillshade, "
+            f"first at {self.first(valid, ~np.isfinite(hs))}",
+        )
 
     def test_the_hole_casts_no_wall_around_itself(self):
         """THE CHECK THIS CLASS EXISTS FOR, and the one that is easiest to get wrong
@@ -1099,30 +1217,34 @@ class NodataNeverReachesTheArithmetic(BankTestCase):
         at the same height for thirty-six columns — so every cell touching it is on
         ground with no slope at all and there is exactly one right answer."""
         import numpy as np
+
         hs = np.asarray(self.w["raster"].shade, dtype=np.float64)
         valid = np.asarray(self.grid.valid, dtype=bool)
 
         r0, r1 = HOLE_ROWS
         c0, c1 = HOLE_COLS
         ring = np.zeros((H, W), dtype=bool)
-        ring[r0 - 1:r1 + 1, c0 - 1:c1 + 1] = True
-        ring[r0:r1, c0:c1] = False                     # the hole itself
+        ring[r0 - 1 : r1 + 1, c0 - 1 : c1 + 1] = True
+        ring[r0:r1, c0:c1] = False  # the hole itself
         ring &= valid
 
-        ref = np.zeros((H, W), dtype=bool)             # flat plateau, well clear of it
-        ref[r0:r1, PLATEAU[0] + 3:PLATEAU[0] + 8] = True
+        ref = np.zeros((H, W), dtype=bool)  # flat plateau, well clear of it
+        ref[r0:r1, PLATEAU[0] + 3 : PLATEAU[0] + 8] = True
 
         spread = float(hs[valid].max() - hs[valid].min())
-        self.assertGreater(spread, 0.05,
-                           "the hillshade is flat everywhere — there is real relief in "
-                           "this fixture and none of it arrived")
+        self.assertGreater(
+            spread,
+            0.05,
+            "the hillshade is flat everywhere — there is real relief in " "this fixture and none of it arrived",
+        )
         base = float(hs[ref].mean())
         dev = np.abs(hs - base)
         worst = float(dev[ring].max())
         tol = 0.02 * spread
         rs, cs = np.nonzero(ring & (dev > tol))
         self.assertLessEqual(
-            worst, tol,
+            worst,
+            tol,
             f"the ring of SURVEYED cells around the nodata hole differs from the flat "
             f"plateau it is cut into by up to {worst:.4g}, against {tol:.4g} (2% of the "
             f"hillshade's own full spread, {spread:.4g}). Flat plateau reads "
@@ -1130,7 +1252,8 @@ class NodataNeverReachesTheArithmetic(BankTestCase):
             f"cells are outside, first at "
             f"{[(int(r), int(c)) for r, c in zip(rs[:6], cs[:6])]}. Every one of those "
             f"cells is on ground with no slope. A rim there is the {NODATA} hole "
-            f"reaching np.gradient through whatever the array was filled with.")
+            f"reaching np.gradient through whatever the array was filled with.",
+        )
 
 
 # ===========================================================================
@@ -1157,26 +1280,31 @@ class DownsamplingInventsNothing(BankTestCase):
     def test_the_two_colours_can_be_told_apart_by_somebody_in_sunlight(self):
         d = math.dist(self.amber, self.brown)
         self.assertGreater(
-            d, 60.0,
+            d,
+            60.0,
             f"amber {self.amber} and brown {self.brown} are {d:.1f} apart in RGB. They "
             f"carry the only distinction this layer makes, on a handheld held in "
-            f"sunlight, over satellite imagery.")
+            f"sunlight, over satellite imagery.",
+        )
 
     def test_the_plain_render_classifies_exactly_as_the_shipped_one_does(self):
         import numpy as np
+
         a, b = self.w["raster"].classes, self.w["plain"].classes
         self.assertTrue(
             np.array_equal(a, b),
             f"{int((a != b).sum())} pixels are classified differently with the relief "
             f"turned off. The hillshade is a multiplier applied after the class is "
             f"chosen; if it can change the class, the whole colour argument below is "
-            f"testing a different map from the one that ships.")
+            f"testing a different map from the one that ships.",
+        )
 
     def test_every_painted_pixel_is_exactly_one_of_the_two_colours(self):
         """No blend, at any zoom. A pixel of some third colour is two classes averaged,
         and a colour between amber and brown means neither of the two things this layer
         says."""
         import numpy as np
+
         bad = {}
         for (z, x, y), img in self.w["flat"].items():
             lit = img[:, :, 3] > 0
@@ -1191,11 +1319,13 @@ class DownsamplingInventsNothing(BankTestCase):
             bad,
             f"colours that are neither amber {self.amber} nor brown {self.brown} "
             f"reached a tile: {dict(sorted(bad.items()))}. Every one of them is a "
-            f"class that does not exist.")
+            f"class that does not exist.",
+        )
 
     def _amber_pixels(self, z):
         """Every (x, y, py, px) painted the amber colour on a level-z tile."""
         import numpy as np
+
         want = np.array(self.amber, dtype=np.uint8)
         out = []
         for (tz, x, y), img in self.w["flat"].items():
@@ -1211,20 +1341,21 @@ class DownsamplingInventsNothing(BankTestCase):
         screen requires amber in the survey under it. Averaging RGBA is what breaks it —
         half-covered brown is a lighter brown, and a lighter brown is amber."""
         import numpy as np
+
         g = self.grid
         _up, down = zoom_split(g)
         self.assertTrue(down, "no zoom in the pyramid actually downsamples the grid")
         rs, cs = np.nonzero(self.w["plain"].classes == bank.BANK_CLASS_LOW)
         for z in down:
-            has_amber = {tile_pixel_of(g, r, c, z)[1:]
-                         for r, c in zip(rs.tolist(), cs.tolist())}
+            has_amber = {tile_pixel_of(g, r, c, z)[1:] for r, c in zip(rs.tolist(), cs.tolist())}
             bad = [p for p in self._amber_pixels(z) if p not in has_amber]
             self.assertFalse(
                 bad,
                 f"z{z}: {len(bad)} tile pixel(s) came back AMBER with no amber-classed "
                 f"grid pixel underneath them. First few (x,y,row,col): {bad[:8]}. An "
                 f"aggregate that invents a class invents the one sentence this layer "
-                f"is for.")
+                f"is for.",
+            )
 
     def test_no_zoomed_in_pixel_is_amber_unless_the_grid_pixel_it_sits_on_is(self):
         """The other regime, and the other direction. Zoomed in, a tile pixel takes the
@@ -1238,15 +1369,14 @@ class DownsamplingInventsNothing(BankTestCase):
             bad = []
             for x, y, py, px in self._amber_pixels(z):
                 r, c = grid_pixel_of(g, z, x, y, py, px)
-                if not (0 <= r < H and 0 <= c < W) or \
-                        cls[r, c] != bank.BANK_CLASS_LOW:
-                    bad.append((x, y, py, px, r, c,
-                                int(cls[r, c]) if 0 <= r < H and 0 <= c < W else "off"))
+                if not (0 <= r < H and 0 <= c < W) or cls[r, c] != bank.BANK_CLASS_LOW:
+                    bad.append((x, y, py, px, r, c, int(cls[r, c]) if 0 <= r < H and 0 <= c < W else "off"))
             self.assertFalse(
                 bad,
                 f"z{z}: {len(bad)} tile pixel(s) are amber over a grid pixel that is "
                 f"not. First few (x,y,tile row,tile col,grid row,grid col,class): "
-                f"{bad[:8]}")
+                f"{bad[:8]}",
+            )
 
     def test_the_second_pound_is_never_amber_at_any_zoom(self):
         """THE CONSTRUCTED CASE, stated separately from the general rule so that a
@@ -1270,21 +1400,21 @@ class DownsamplingInventsNothing(BankTestCase):
             f"{len(bad)} tile pixel(s) lying wholly east of the lock came back amber; "
             f"the first few are {bad[:6]}. There is no amber anywhere in that pound at "
             f"native resolution — brown bank runs straight into transparent water, and "
-            f"averaging the two is exactly what makes a lighter brown that reads amber.")
+            f"averaging the two is exactly what makes a lighter brown that reads amber.",
+        )
 
     def test_a_zoomed_out_pixel_with_nothing_painted_under_it_stays_transparent(self):
         """Alpha is coverage when zoomed out — a tile pixel that is half water comes
         out half transparent, which is honest. Zero painted grid pixels under it means
         zero alpha, which is the part that has to be exact."""
         import numpy as np
+
         g = self.grid
         _up, down = zoom_split(g)
-        painted = ((self.w["plain"].classes == bank.BANK_CLASS_LOW) |
-                   (self.w["plain"].classes == bank.BANK_CLASS_HIGH))
+        painted = (self.w["plain"].classes == bank.BANK_CLASS_LOW) | (self.w["plain"].classes == bank.BANK_CLASS_HIGH)
         rs, cs = np.nonzero(painted)
         for z in down:
-            covered = {tile_pixel_of(g, r, c, z)[1:]
-                       for r, c in zip(rs.tolist(), cs.tolist())}
+            covered = {tile_pixel_of(g, r, c, z)[1:] for r, c in zip(rs.tolist(), cs.tolist())}
             bad = []
             for (tz, x, y), img in self.w["flat"].items():
                 if tz != z:
@@ -1295,7 +1425,8 @@ class DownsamplingInventsNothing(BankTestCase):
             self.assertFalse(
                 bad,
                 f"z{z}: {len(bad)} tile pixel(s) are painted with no painted grid pixel "
-                f"under them at all: {bad[:8]}")
+                f"under them at all: {bad[:8]}",
+            )
 
 
 # ===========================================================================
@@ -1332,34 +1463,44 @@ class Provenance(BankTestCase):
 
     def test_the_survey_vintage_is_recorded_as_2022(self):
         v = str(((self.prov.get("source") or {}).get("survey_vintage")) or "")
-        self.assertEqual(v, "2022",
-                         f"the provenance records survey_vintage {v!r}; the terrain "
-                         f"model behind this layer is the 2022 one and the console "
-                         f"quotes it to the operator")
-        self.assertEqual(str(settings.lidar_survey_vintage), "2022",
-                         f"settings.lidar_survey_vintage is "
-                         f"{settings.lidar_survey_vintage!r}")
+        self.assertEqual(
+            v,
+            "2022",
+            f"the provenance records survey_vintage {v!r}; the terrain "
+            f"model behind this layer is the 2022 one and the console "
+            f"quotes it to the operator",
+        )
+        self.assertEqual(
+            str(settings.lidar_survey_vintage),
+            "2022",
+            f"settings.lidar_survey_vintage is " f"{settings.lidar_survey_vintage!r}",
+        )
 
     def test_the_vintage_is_a_fact_about_the_survey_and_not_a_clock(self):
         """`time.gmtime().tm_year` is the wrong kind of right: it agrees with the
         survey in 2022 and lies every year after, which is every year this vehicle
         will fly."""
         now = time.gmtime().tm_year
-        self.assertNotEqual(now, 2022,
-                            "this check can only bite outside 2022; if the bench clock "
-                            "really says 2022, read the vintage by hand")
+        self.assertNotEqual(
+            now,
+            2022,
+            "this check can only bite outside 2022; if the bench clock " "really says 2022, read the vintage by hand",
+        )
         blob = json.dumps(self.prov, default=str)
-        self.assertIn("2022", blob,
-                      f"nothing in the provenance record mentions 2022 at all")
-        self.assertIn("2022", str(self.prov.get("vintage_warning") or ""),
-                      f"the vintage warning does not name the year: "
-                      f"{self.prov.get('vintage_warning')!r}")
+        self.assertIn("2022", blob, f"nothing in the provenance record mentions 2022 at all")
+        self.assertIn(
+            "2022",
+            str(self.prov.get("vintage_warning") or ""),
+            f"the vintage warning does not name the year: " f"{self.prov.get('vintage_warning')!r}",
+        )
 
     def test_the_record_says_in_words_that_the_bank_may_have_moved_since(self):
         s = str(self.prov.get("vintage_warning") or "")
-        self.assertGreater(len(s), 60,
-                           f"vintage_warning is {s!r} — a date with no sentence beside "
-                           f"it is a number nobody reads as a warning")
+        self.assertGreater(
+            len(s),
+            60,
+            f"vintage_warning is {s!r} — a date with no sentence beside " f"it is a number nobody reads as a warning",
+        )
 
     def test_the_record_says_what_amber_does_not_mean(self):
         """The one sentence that stops this layer being read as permission. It is a
@@ -1374,24 +1515,31 @@ class Provenance(BankTestCase):
     def test_the_record_says_that_unpainted_ground_was_not_looked_at(self):
         s = str(self.prov.get("what_is_missing") or "").lower()
         self.assertTrue(s, "the provenance does not say what is NOT in this layer")
-        self.assertIn("centreline", s,
-                      f"the corridor is buffered from the Trust's centreline and the "
-                      f"record has to say so, because everything off it is unpainted "
-                      f"and unpainted is not a survey result: {s[:200]!r}")
+        self.assertIn(
+            "centreline",
+            s,
+            f"the corridor is buffered from the Trust's centreline and the "
+            f"record has to say so, because everything off it is unpainted "
+            f"and unpainted is not a survey result: {s[:200]!r}",
+        )
 
     def test_the_card_reads_back_what_was_written(self):
-        self.assertEqual(self.card.get("state"), self.prov.get("state"),
-                         f"card() says {self.card.get('state')!r}, the record says "
-                         f"{self.prov.get('state')!r}")
-        self.assertTrue(self.card.get("painted"),
-                        f"tiles were written and card() reports painted="
-                        f"{self.card.get('painted')!r}")
+        self.assertEqual(
+            self.card.get("state"),
+            self.prov.get("state"),
+            f"card() says {self.card.get('state')!r}, the record says " f"{self.prov.get('state')!r}",
+        )
+        self.assertTrue(
+            self.card.get("painted"), f"tiles were written and card() reports painted=" f"{self.card.get('painted')!r}"
+        )
 
     def test_the_pound_labels_carry_the_vintage_too(self):
         self.assertIsNotNone(self.pounds, "no pound label file was written")
-        self.assertEqual(str(self.pounds.get("survey_vintage")), "2022",
-                         f"the labels record vintage "
-                         f"{self.pounds.get('survey_vintage')!r}")
+        self.assertEqual(
+            str(self.pounds.get("survey_vintage")),
+            "2022",
+            f"the labels record vintage " f"{self.pounds.get('survey_vintage')!r}",
+        )
 
     def test_an_area_with_no_layer_reports_absent_and_says_why(self):
         """ABSENT and EMPTY are opposite claims. Bare satellite over a canal looks
@@ -1404,9 +1552,10 @@ class Provenance(BankTestCase):
             lidar.area_lidar_dir = real
         self.assertEqual(got.get("state"), "absent", f"card() returned {got!r}")
         why = str(got.get("why") or "").lower()
-        self.assertTrue(len(why) > 40 and ("not" in why),
-                        f"the absent card gives no sentence an operator can act on: "
-                        f"{got.get('why')!r}")
+        self.assertTrue(
+            len(why) > 40 and ("not" in why),
+            f"the absent card gives no sentence an operator can act on: " f"{got.get('why')!r}",
+        )
 
 
 # ===========================================================================
@@ -1479,6 +1628,7 @@ class ABrokenArchiveDoesNotClaimPaint(BankTestCase):
     @staticmethod
     def _count(path) -> int:
         import sqlite3
+
         con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
             return int(con.execute("SELECT count(*) FROM tiles").fetchone()[0])
@@ -1498,50 +1648,60 @@ class ABrokenArchiveDoesNotClaimPaint(BankTestCase):
         thing that actually has to hold: every tile the record claims is in the archive.
         """
         n = self._count(self.tiles)
-        self.assertGreater(n, 0, "the fixture archive holds no tiles, so nothing below "
-                                 "can distinguish a broken card from this one")
-        self.assertIn(self.control.get("state"), ("present", "partial"),
-                      f"the intact fixture card reports "
-                      f"{self.control.get('state')!r} — it is already in a state the "
-                      f"mutations below are supposed to produce")
-        self.assertTrue(self.control.get("painted"),
-                        "the intact fixture card reports painted=False")
-        self.assertEqual(self.control.get("tiles_held"), n,
-                         f"card() counts {self.control.get('tiles_held')!r} tiles in an "
-                         f"archive holding {n}")
-        self.assertEqual(self.control.get("tiles_held"),
-                         self.control.get("tiles_claimed"),
-                         f"the INTACT fixture is already short of its own record "
-                         f"({self.control.get('tiles_held')!r} held, "
-                         f"{self.control.get('tiles_claimed')!r} claimed), so a check "
-                         f"that a short archive gets reported cannot bite here")
+        self.assertGreater(
+            n, 0, "the fixture archive holds no tiles, so nothing below " "can distinguish a broken card from this one"
+        )
+        self.assertIn(
+            self.control.get("state"),
+            ("present", "partial"),
+            f"the intact fixture card reports "
+            f"{self.control.get('state')!r} — it is already in a state the "
+            f"mutations below are supposed to produce",
+        )
+        self.assertTrue(self.control.get("painted"), "the intact fixture card reports painted=False")
+        self.assertEqual(
+            self.control.get("tiles_held"),
+            n,
+            f"card() counts {self.control.get('tiles_held')!r} tiles in an " f"archive holding {n}",
+        )
+        self.assertEqual(
+            self.control.get("tiles_held"),
+            self.control.get("tiles_claimed"),
+            f"the INTACT fixture is already short of its own record "
+            f"({self.control.get('tiles_held')!r} held, "
+            f"{self.control.get('tiles_claimed')!r} claimed), so a check "
+            f"that a short archive gets reported cannot bite here",
+        )
 
     def test_an_emptied_archive_is_not_reported_as_present(self):
         """The defect as found: the record claims every tile, the archive serves none."""
+
         def empty(path):
             import sqlite3
+
             con = sqlite3.connect(path)
             con.execute("DELETE FROM tiles")
             con.commit()
             con.close()
 
         got = self._card_after(empty)
-        self.assertEqual(got.get("state"), "unreadable",
-                         f"an archive holding ZERO tiles reports "
-                         f"{got.get('state')!r}. The operator is shown bare satellite "
-                         f"under a row claiming the banks are painted: "
-                         f"{str(got.get('why'))[:200]!r}")
-        self.assertFalse(got.get("painted"),
-                         "an archive holding zero tiles still reports painted=True")
-        self.assertEqual(got.get("tiles_held"), 0,
-                         f"card() reports tiles_held={got.get('tiles_held')!r} for an "
-                         f"emptied archive")
+        self.assertEqual(
+            got.get("state"),
+            "unreadable",
+            f"an archive holding ZERO tiles reports "
+            f"{got.get('state')!r}. The operator is shown bare satellite "
+            f"under a row claiming the banks are painted: "
+            f"{str(got.get('why'))[:200]!r}",
+        )
+        self.assertFalse(got.get("painted"), "an archive holding zero tiles still reports painted=True")
+        self.assertEqual(
+            got.get("tiles_held"), 0, f"card() reports tiles_held={got.get('tiles_held')!r} for an " f"emptied archive"
+        )
         why = str(got.get("why") or "").lower()
-        self.assertNotIn("every pixel", why,
-                         f"the broken card still carries the whole-corridor sentence: "
-                         f"{got.get('why')!r}")
-        self.assertTrue(len(why) > 60,
-                        f"the broken card gives no sentence to act on: {why!r}")
+        self.assertNotIn(
+            "every pixel", why, f"the broken card still carries the whole-corridor sentence: " f"{got.get('why')!r}"
+        )
+        self.assertTrue(len(why) > 60, f"the broken card gives no sentence to act on: {why!r}")
 
     def test_a_short_archive_says_how_short(self):
         """Half the tiles is not none of them and not all of them. Reported as PRESENT
@@ -1550,6 +1710,7 @@ class ABrokenArchiveDoesNotClaimPaint(BankTestCase):
 
         def truncate(path):
             import sqlite3
+
             con = sqlite3.connect(path)
             con.execute("DELETE FROM tiles WHERE rowid > ?", (keep,))
             con.commit()
@@ -1557,44 +1718,59 @@ class ABrokenArchiveDoesNotClaimPaint(BankTestCase):
 
         got = self._card_after(truncate)
         claimed = self.control.get("tiles_claimed")
-        self.assertEqual(got.get("state"), "partial",
-                         f"an archive holding {keep} of {claimed} tiles reports "
-                         f"{got.get('state')!r}")
-        self.assertEqual(got.get("tiles_held"), keep,
-                         f"card() reports tiles_held={got.get('tiles_held')!r} for an "
-                         f"archive holding {keep}")
+        self.assertEqual(
+            got.get("state"),
+            "partial",
+            f"an archive holding {keep} of {claimed} tiles reports " f"{got.get('state')!r}",
+        )
+        self.assertEqual(
+            got.get("tiles_held"),
+            keep,
+            f"card() reports tiles_held={got.get('tiles_held')!r} for an " f"archive holding {keep}",
+        )
         # NOT just "the state moved": this fixture is ALREADY partial on coverage
         # grounds, so a state check alone would pass without card() having noticed the
         # missing tiles at all. The sentence has to carry both numbers, and it has to be
         # a different sentence from the one the intact card gives.
         why = str(got.get("why") or "")
-        self.assertIn(str(keep), why,
-                      f"the partial card does not say how many tiles survive, so there "
-                      f"is no telling a nearly-whole card from an almost-empty one: "
-                      f"{why!r}")
-        self.assertIn(str(claimed), why,
-                      f"the partial card does not say how many tiles were expected, so "
-                      f"{keep} is a number with nothing to compare it against: {why!r}")
-        self.assertNotEqual(why, str(self.control.get("why") or ""),
-                            "a short archive gives the same sentence as a whole one, so "
-                            "the lost tiles are not being reported at all")
+        self.assertIn(
+            str(keep),
+            why,
+            f"the partial card does not say how many tiles survive, so there "
+            f"is no telling a nearly-whole card from an almost-empty one: "
+            f"{why!r}",
+        )
+        self.assertIn(
+            str(claimed),
+            why,
+            f"the partial card does not say how many tiles were expected, so "
+            f"{keep} is a number with nothing to compare it against: {why!r}",
+        )
+        self.assertNotEqual(
+            why,
+            str(self.control.get("why") or ""),
+            "a short archive gives the same sentence as a whole one, so "
+            "the lost tiles are not being reported at all",
+        )
 
     def test_an_archive_that_is_not_a_database_is_not_reported_as_present(self):
         """The file is the right name and the right place and is not a database at all.
         card() has to answer this WITHOUT numpy, because it is the call the console makes
         to find out why the layer is missing."""
-        got = self._card_after(
-            lambda path: path.write_bytes(b"not a database, just bytes of the right name"))
-        self.assertEqual(got.get("state"), "unreadable",
-                         f"an archive that will not open reports "
-                         f"{got.get('state')!r}: {str(got.get('why'))[:200]!r}")
-        self.assertFalse(got.get("painted"),
-                         "an unopenable archive still reports painted=True")
-        self.assertIsNone(got.get("tiles_held"),
-                          f"an archive that will not answer reports "
-                          f"tiles_held={got.get('tiles_held')!r}. None and 0 are "
-                          f"different claims: one is a broken file, the other is a file "
-                          f"that answered honestly that it holds nothing")
+        got = self._card_after(lambda path: path.write_bytes(b"not a database, just bytes of the right name"))
+        self.assertEqual(
+            got.get("state"),
+            "unreadable",
+            f"an archive that will not open reports " f"{got.get('state')!r}: {str(got.get('why'))[:200]!r}",
+        )
+        self.assertFalse(got.get("painted"), "an unopenable archive still reports painted=True")
+        self.assertIsNone(
+            got.get("tiles_held"),
+            f"an archive that will not answer reports "
+            f"tiles_held={got.get('tiles_held')!r}. None and 0 are "
+            f"different claims: one is a broken file, the other is a file "
+            f"that answered honestly that it holds nothing",
+        )
 
     def test_the_intact_archive_survives_the_mutations(self):
         """The class restores the archive between checks; if it did not, whichever
@@ -1605,11 +1781,12 @@ class ABrokenArchiveDoesNotClaimPaint(BankTestCase):
             got = bank.card("broken-cut")
         finally:
             lidar.area_lidar_dir = real
-        self.assertEqual(got.get("state"), self.control.get("state"),
-                         f"after mutation the intact archive reports "
-                         f"{got.get('state')!r}, was {self.control.get('state')!r}")
-        self.assertEqual(self.tiles.read_bytes(), self.gold,
-                         "the archive bytes were not restored")
+        self.assertEqual(
+            got.get("state"),
+            self.control.get("state"),
+            f"after mutation the intact archive reports " f"{got.get('state')!r}, was {self.control.get('state')!r}",
+        )
+        self.assertEqual(self.tiles.read_bytes(), self.gold, "the archive bytes were not restored")
 
 
 # ===========================================================================
@@ -1632,7 +1809,7 @@ class AMissingLibraryIsNotADeadConsole(unittest.TestCase):
     Nothing here touches the fixture, because the machine this is really about has none
     of the libraries needed to build one."""
 
-    CHILD = textwrap.dedent(r'''
+    CHILD = textwrap.dedent(r"""
         import json, socket, sys
 
         BLOCK = sys.argv[1]
@@ -1693,7 +1870,7 @@ class AMissingLibraryIsNotADeadConsole(unittest.TestCase):
             out["classify_is_bank_unavailable"] = isinstance(
                 exc, getattr(bank, "BankUnavailable", ()))
         print(json.dumps(out))
-    ''')
+    """)
 
     @classmethod
     def setUpClass(cls):
@@ -1708,74 +1885,91 @@ class AMissingLibraryIsNotADeadConsole(unittest.TestCase):
     def run_without(self, module: str, script=None) -> dict:
         env = dict(os.environ)
         env["PYTHONPATH"] = str(API) + os.pathsep + env.get("PYTHONPATH", "")
-        p = subprocess.run([sys.executable, str(script or self.script), module],
-                           cwd=str(API), env=env, capture_output=True, text=True,
-                           timeout=180)
+        p = subprocess.run(
+            [sys.executable, str(script or self.script), module],
+            cwd=str(API),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
         lines = (p.stdout or "").strip().splitlines()
         try:
             return json.loads(lines[-1])
         except (ValueError, IndexError):
-            self.fail(f"the child interpreter with {module} blocked printed nothing "
-                      f"readable.\nexit {p.returncode}\nstdout: {p.stdout[-2000:]}\n"
-                      f"stderr: {p.stderr[-2000:]}")
+            self.fail(
+                f"the child interpreter with {module} blocked printed nothing "
+                f"readable.\nexit {p.returncode}\nstdout: {p.stdout[-2000:]}\n"
+                f"stderr: {p.stderr[-2000:]}"
+            )
 
     def test_the_blocker_really_blocks(self):
         """A control. If sys.meta_path can be got round, every check in this class is
         green because it tested an interpreter that had numpy after all."""
         probe = self.tmp / "probe.py"
-        probe.write_text(
-            self.CHILD.replace("from nav import bank, lidar", "import numpy as bank"),
-            encoding="utf-8")
+        probe.write_text(self.CHILD.replace("from nav import bank, lidar", "import numpy as bank"), encoding="utf-8")
         got = self.run_without("numpy", probe)
         self.assertNotEqual(
-            got.get("import"), "ok",
+            got.get("import"),
+            "ok",
             "numpy imported in a child where it was supposed to be blocked — the "
-            "simulation is not simulating anything")
+            "simulation is not simulating anything",
+        )
 
     def _check(self, imp: str, pips: tuple) -> None:
         got = self.run_without(imp)
         self.assertEqual(
-            got.get("import"), "ok",
+            got.get("import"),
+            "ok",
             f"`from nav import bank, lidar` RAISED in an interpreter with {imp} absent: "
             f"{got.get('import')}. That is a missing optional library taking the console "
             f"down — the same failure as a module that dies because a sensor is "
             f"unplugged. Import numpy/scipy/Pillow inside the functions that need them, "
-            f"where the absence can be caught and reported.")
-        self.assertNotIn("bank_raised", got,
-                         f"bank.library_state() raised with {imp} absent: "
-                         f"{got.get('bank_raised')} — it is the one call whose entire "
-                         f"job is to survive this")
+            f"where the absence can be caught and reported.",
+        )
+        self.assertNotIn(
+            "bank_raised",
+            got,
+            f"bank.library_state() raised with {imp} absent: "
+            f"{got.get('bank_raised')} — it is the one call whose entire "
+            f"job is to survive this",
+        )
         st = got.get("bank") or {}
-        self.assertIs(st.get("ok"), False,
-                      f"with {imp} absent, bank.library_state() reports ok="
-                      f"{st.get('ok')!r}")
+        self.assertIs(st.get("ok"), False, f"with {imp} absent, bank.library_state() reports ok=" f"{st.get('ok')!r}")
 
         named = " ".join(st.get("missing") or []).lower()
         self.assertTrue(
             any(p in named for p in pips),
             f"library_state()['missing'] is {st.get('missing')!r} with {imp} absent; it "
             f"has to name the package — one of {list(pips)} — because 'a library is "
-            f"missing' sends nobody anywhere")
+            f"missing' sends nobody anywhere",
+        )
 
-        why = (st.get("why") or "")
+        why = st.get("why") or ""
         self.assertGreater(
-            len(why), 40,
+            len(why),
+            40,
             f"'why' is {why!r} — the rule is a SENTENCE naming exactly what is absent, "
-            f"in the same voice every other absence on this console is reported in")
-        self.assertTrue(
-            any(p in why.lower() for p in pips),
-            f"the sentence does not name what is absent: {why!r}")
+            f"in the same voice every other absence on this console is reported in",
+        )
+        self.assertTrue(any(p in why.lower() for p in pips), f"the sentence does not name what is absent: {why!r}")
         install = (st.get("install") or "") + " " + why
         self.assertIn(
-            "pip install", install.lower(),
+            "pip install",
+            install.lower(),
             f"nothing in the report says how to fix it: install={st.get('install')!r}. "
-            f"'Unavailable' with no remedy is a dead end on a handheld at a canal.")
+            f"'Unavailable' with no remedy is a dead end on a handheld at a canal.",
+        )
         self.assertTrue(
             any(p in install.lower() for p in pips),
             f"the install line does not name the package to install: "
             f"{st.get('install')!r}"
-            + ("  (PIL installs as `Pillow`; `pip install PIL` fetches a package that "
-               "has not existed since 2011)" if imp == "PIL" else ""))
+            + (
+                "  (PIL installs as `Pillow`; `pip install PIL` fetches a package that " "has not existed since 2011)"
+                if imp == "PIL"
+                else ""
+            ),
+        )
 
     def test_the_layer_reports_itself_unavailable_without_numpy(self):
         self._check("numpy", ("numpy",))
@@ -1792,15 +1986,20 @@ class AMissingLibraryIsNotADeadConsole(unittest.TestCase):
         all it has to be the thing that says why."""
         for imp in ("numpy", "scipy", "PIL"):
             got = self.run_without(imp)
-            self.assertNotIn("card_raised", got,
-                             f"bank.card() raised with {imp} absent: "
-                             f"{got.get('card_raised')}. The console calls it to find "
-                             f"out WHY the layer is missing; a status call that needs "
-                             f"the missing library is silent in exactly the case it "
-                             f"exists for.")
-            self.assertEqual(got.get("card_state"), "absent",
-                             f"with {imp} absent, card() for an area that was never "
-                             f"built says {got.get('card_state')!r}")
+            self.assertNotIn(
+                "card_raised",
+                got,
+                f"bank.card() raised with {imp} absent: "
+                f"{got.get('card_raised')}. The console calls it to find "
+                f"out WHY the layer is missing; a status call that needs "
+                f"the missing library is silent in exactly the case it "
+                f"exists for.",
+            )
+            self.assertEqual(
+                got.get("card_state"),
+                "absent",
+                f"with {imp} absent, card() for an area that was never " f"built says {got.get('card_state')!r}",
+            )
 
     def test_classifying_without_a_library_raises_something_the_api_can_catch(self):
         """An endpoint has to turn this into a sentence for the panel. A bare
@@ -1810,31 +2009,38 @@ class AMissingLibraryIsNotADeadConsole(unittest.TestCase):
         for imp in ("numpy", "scipy", "PIL"):
             got = self.run_without(imp)
             self.assertNotEqual(
-                got.get("classify"), "returned",
+                got.get("classify"),
+                "returned",
                 f"classify() returned a raster with {imp} absent — whatever it built, "
-                f"it did not build it with {imp}")
+                f"it did not build it with {imp}",
+            )
             self.assertTrue(
                 got.get("classify_is_bank_unavailable"),
                 f"with {imp} absent, classify() raised {got.get('classify')} "
                 f"({got.get('classify_msg')!r}) rather than bank.BankUnavailable. The "
-                f"api needs one named exception it can turn into the panel's sentence.")
+                f"api needs one named exception it can turn into the panel's sentence.",
+            )
             self.assertTrue(
-                any(p in (got.get("classify_msg") or "").lower()
-                    for p in ({"PIL": ("pillow", "pil")}.get(imp, (imp.lower(),)))),
-                f"the exception message does not name {imp}: "
-                f"{got.get('classify_msg')!r}")
+                any(
+                    p in (got.get("classify_msg") or "").lower()
+                    for p in ({"PIL": ("pillow", "pil")}.get(imp, (imp.lower(),)))
+                ),
+                f"the exception message does not name {imp}: " f"{got.get('classify_msg')!r}",
+            )
 
     def test_with_everything_present_both_halves_say_so(self):
         if NEED or bank is None:
             self.skipTest(NEED or IMPORT_ERROR)
         for half, mod in (("bank", bank), ("lidar", lidar)):
             st = mod.library_state()
-            self.assertIs(st.get("ok"), True,
-                          f"every library is installed in this interpreter and "
-                          f"{half}.library_state() still says {st!r}")
-            self.assertFalse(list(st.get("missing") or []),
-                             f"nothing is missing, but {half} lists "
-                             f"{st.get('missing')!r}")
+            self.assertIs(
+                st.get("ok"),
+                True,
+                f"every library is installed in this interpreter and " f"{half}.library_state() still says {st!r}",
+            )
+            self.assertFalse(
+                list(st.get("missing") or []), f"nothing is missing, but {half} lists " f"{st.get('missing')!r}"
+            )
 
 
 def tearDownModule():

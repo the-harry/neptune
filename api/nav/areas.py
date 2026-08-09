@@ -19,6 +19,7 @@ JSON write; it is safe on the bank with no DNS. What it produces is a PLAN with 
 size on it — the fetch that fills it in is somebody else's job, needs internet,
 and is the same bootstrap-time act it always was.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,9 +34,10 @@ import time
 import unicodedata
 from pathlib import Path
 
-from . import satellite as satmod   # tile arithmetic only (count_tiles/estimate) — importing
-                                    # it touches no network; every URL in it is used lazily
+from . import satellite as satmod  # tile arithmetic only (count_tiles/estimate) — importing
 from .config import EARTH_R, settings
+
+# it touches no network; every URL in it is used lazily
 
 log = logging.getLogger("neptune.nav.areas")
 
@@ -59,6 +61,7 @@ def estimate_size_mb(bbox: list[float], maxzoom: int) -> float:
     """Rough estimate (§6.4: show size before download). Each zoom ~doubles size."""
     minlon, minlat, maxlon, maxlat = bbox
     import math
+
     span = abs(maxlon - minlon) * abs(maxlat - minlat) * math.cos(math.radians((minlat + maxlat) / 2))
     # empirical-ish: ~0.5 MB per deg² at z14, doubling per level above 14
     base = span * 0.5 * (2 ** max(0, maxzoom - 14))
@@ -97,17 +100,20 @@ def _derive_state(d: dict, archive: Path | None) -> tuple[str, str]:
         age = _age_s(d.get("state_at"))
         if age is not None and age <= settings.area_state_stale_s:
             return "downloading", d.get("state_why") or "a download is running for this area"
-        stalled = f"has reported nothing for {int(age)}s" if age is not None \
-            else "carries no progress timestamp"
-        return "failed", (f"a download was started for this area and {stalled} — it stopped "
-                          f"without finishing, so whatever is on the card is PARTIAL. Run it "
-                          f"again while there is internet")
+        stalled = f"has reported nothing for {int(age)}s" if age is not None else "carries no progress timestamp"
+        return "failed", (
+            f"a download was started for this area and {stalled} — it stopped "
+            f"without finishing, so whatever is on the card is PARTIAL. Run it "
+            f"again while there is internet"
+        )
     if recorded == "failed":
         return "failed", d.get("state_why") or "the last download for this area failed"
     if archive is None:
-        return "absent", (d.get("state_why") or
-                          "this area has been defined but nothing has been downloaded into it "
-                          "yet — it needs internet once, before the water")
+        return "absent", (
+            d.get("state_why")
+            or "this area has been defined but nothing has been downloaded into it "
+            "yet — it needs internet once, before the water"
+        )
     if recorded == "absent":
         # TILES ON THE CARD AND THE RECORD STILL SAYS ABSENT. That is not a
         # contradiction, it is an area that GREW: create_area() unions a wider bbox
@@ -116,8 +122,7 @@ def _derive_state(d: dict, archive: Path | None) -> tuple[str, str]:
         # present-versus-gone, but it cannot see the shape of what is missing, and
         # an area whose box outruns its imagery must never read as complete —
         # `present` and `size` still travel beside this, so nothing is hidden either.
-        return "absent", (d.get("state_why") or
-                          "this area holds imagery for part of its box only")
+        return "absent", (d.get("state_why") or "this area holds imagery for part of its box only")
     return "present", d.get("state_why") or "the tile archive is on the card"
 
 
@@ -130,8 +135,8 @@ def list_areas() -> list[dict]:
         except Exception:  # noqa: BLE001
             continue
         name = meta.stem
-        mb = settings.areas_dir / f"{name}.mbtiles"       # satellite raster (§3, default)
-        pm = settings.areas_dir / f"{name}.pmtiles"       # legacy vector
+        mb = settings.areas_dir / f"{name}.mbtiles"  # satellite raster (§3, default)
+        pm = settings.areas_dir / f"{name}.pmtiles"  # legacy vector
         archive = mb if mb.exists() else (pm if pm.exists() else None)
         d["name"] = name
         d["size"] = archive.stat().st_size if archive else 0
@@ -166,16 +171,23 @@ async def extract_area(name: str, bbox: list[float], maxzoom: int, progress) -> 
     if est > settings.area_size_cap_mb:
         raise ValueError(f"estimated {est} MB exceeds cap {settings.area_size_cap_mb} MB")
     if not pmtiles_available():
-        raise RuntimeError("pmtiles unavailable (bootstrap-only: needs the pmtiles binary + a source URL "
-                           "+ internet). Run area extraction before going isolated.")
+        raise RuntimeError(
+            "pmtiles unavailable (bootstrap-only: needs the pmtiles binary + a source URL "
+            "+ internet). Run area extraction before going isolated."
+        )
 
     out = settings.areas_dir / f"{name}.pmtiles"
     minlon, minlat, maxlon, maxlat = bbox
-    cmd = [settings.pmtiles_bin, "extract", settings.pmtiles_source, str(out),
-           f"--bbox={minlon},{minlat},{maxlon},{maxlat}", f"--maxzoom={maxzoom}"]
+    cmd = [
+        settings.pmtiles_bin,
+        "extract",
+        settings.pmtiles_source,
+        str(out),
+        f"--bbox={minlon},{minlat},{maxlon},{maxlat}",
+        f"--maxzoom={maxzoom}",
+    ]
     await progress({"name": name, "state": "starting", "cmd": " ".join(cmd), "est_mb": est})
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
     assert proc.stdout is not None
     async for raw in proc.stdout:
         line = raw.decode(errors="replace").strip()
@@ -223,7 +235,7 @@ def _atomic_write_json(path: Path, data: dict) -> None:
         # exists for, and it must not leave the half-written file where the whole one was.
         try:
             tmp.unlink(missing_ok=True)
-        except OSError:                 # nothing to add to whatever is already raising
+        except OSError:  # nothing to add to whatever is already raising
             pass
         raise
 
@@ -326,8 +338,9 @@ def bbox_for_point(lat: float, lon: float, radius_m: float) -> list[float]:
         # zero-initialised struct all report 0,0 — which is open ocean in the Gulf
         # of Guinea. Creating an area there costs a thousand tiles of empty sea and,
         # worse, hands the console a launch point it will happily draw a track from.
-        raise ValueError("launch point 0,0 is the null fix, not a place — set a real "
-                         "position before creating an area")
+        raise ValueError(
+            "launch point 0,0 is the null fix, not a place — set a real " "position before creating an area"
+        )
 
     dlat = radius_m / _M_PER_DEG_LAT
     # cos() of a canal latitude is never near zero; the floor only stops a nonsense
@@ -339,8 +352,10 @@ def bbox_for_point(lat: float, lon: float, radius_m: float) -> list[float]:
         # Crossing the antimeridian needs two boxes and nothing downstream can hold
         # one: tiles_for_bbox() walks x from min to max and crt.py's validator demands
         # w < e, so half the area would silently never be fetched.
-        raise ValueError("an area that crosses the antimeridian cannot be expressed as one "
-                         "bbox; nothing downstream would download the far half")
+        raise ValueError(
+            "an area that crosses the antimeridian cannot be expressed as one "
+            "bbox; nothing downstream would download the far half"
+        )
     return [round(w, 7), round(s, 7), round(e, 7), round(n, 7)]
 
 
@@ -353,20 +368,20 @@ def _coverage_m(bbox: list[float], lat: float, lon: float) -> float:
     """
     w, s, e, n = bbox
     coslat = math.cos(math.radians(lat))
-    return min((lat - s) * _M_PER_DEG_LAT,
-               (n - lat) * _M_PER_DEG_LAT,
-               (lon - w) * _M_PER_DEG_LAT * coslat,
-               (e - lon) * _M_PER_DEG_LAT * coslat)
+    return min(
+        (lat - s) * _M_PER_DEG_LAT,
+        (n - lat) * _M_PER_DEG_LAT,
+        (lon - w) * _M_PER_DEG_LAT * coslat,
+        (e - lon) * _M_PER_DEG_LAT * coslat,
+    )
 
 
 def _contains_bbox(outer: list[float], inner: list[float]) -> bool:
-    return (outer[0] <= inner[0] and outer[1] <= inner[1]
-            and outer[2] >= inner[2] and outer[3] >= inner[3])
+    return outer[0] <= inner[0] and outer[1] <= inner[1] and outer[2] >= inner[2] and outer[3] >= inner[3]
 
 
 def _union_bbox(a: list[float], b: list[float]) -> list[float]:
-    return [round(min(a[0], b[0]), 7), round(min(a[1], b[1]), 7),
-            round(max(a[2], b[2]), 7), round(max(a[3], b[3]), 7)]
+    return [round(min(a[0], b[0]), 7), round(min(a[1], b[1]), 7), round(max(a[2], b[2]), 7), round(max(a[3], b[3]), 7)]
 
 
 def _centre(bbox: list[float]) -> tuple[float, float]:
@@ -379,9 +394,9 @@ def _centre(bbox: list[float]) -> tuple[float, float]:
 # a Windows box: data/areas/con.json cannot be created there and the failure is a bare
 # OSError with nothing in it about names. A canal called "Aux" is unlikely; a
 # bootstrap that dies on one is not worth the cost of finding out.
-_RESERVED = frozenset(["con", "prn", "aux", "nul"]
-                      + [f"com{i}" for i in range(1, 10)]
-                      + [f"lpt{i}" for i in range(1, 10)])
+_RESERVED = frozenset(
+    ["con", "prn", "aux", "nul"] + [f"com{i}" for i in range(1, 10)] + [f"lpt{i}" for i in range(1, 10)]
+)
 
 
 def slugify(text: str, limit: int = 40) -> str:
@@ -508,8 +523,10 @@ def _over_cap(est: dict, vector_mb: float, caps: dict) -> str | None:
     number nothing else in the repo respects.
     """
     if est["tiles"] > caps["tiles"]:
-        return (f"{est['tiles']} tiles, past the {caps['tiles']} the polite downloader will "
-                f"fetch in one go (about {est['mb']} MB)")
+        return (
+            f"{est['tiles']} tiles, past the {caps['tiles']} the polite downloader will "
+            f"fetch in one go (about {est['mb']} MB)"
+        )
     if est["mb"] > caps["mb"]:
         return f"about {est['mb']} MB of imagery, past the {caps['mb']:.0f} MB cap"
     if vector_mb > caps["mb"]:
@@ -517,11 +534,19 @@ def _over_cap(est: dict, vector_mb: float, caps: dict) -> str | None:
     return None
 
 
-def plan_area(lat: float | None = None, lon: float | None = None, *,
-              radius_m: float | None = None, bbox: list[float] | None = None,
-              name: str | None = None, label: str | None = None,
-              detail: str = "standard", zmin: int | None = None, zmax: int | None = None,
-              reuse: bool = True) -> dict:
+def plan_area(
+    lat: float | None = None,
+    lon: float | None = None,
+    *,
+    radius_m: float | None = None,
+    bbox: list[float] | None = None,
+    name: str | None = None,
+    label: str | None = None,
+    detail: str = "standard",
+    zmin: int | None = None,
+    zmax: int | None = None,
+    reuse: bool = True,
+) -> dict:
     """What create_area() WOULD do, with a size on it and nothing written.
 
     This is the "say what the cap is and make it visible" half: the console can put
@@ -550,13 +575,18 @@ def plan_area(lat: float | None = None, lon: float | None = None, *,
     zmin = settings.sat_min_zoom if zmin is None else int(zmin)
     zmax = zooms_for(detail)[1] if zmax is None else int(zmax)
     radius = settings.area_radius_m if radius_m is None else float(radius_m)
-    caps = {"radius_m": settings.area_max_radius_m,
-            "tiles": settings.sat_tile_cap,
-            "mb": settings.area_size_cap_mb}
+    caps = {"radius_m": settings.area_max_radius_m, "tiles": settings.sat_tile_cap, "mb": settings.area_size_cap_mb}
 
     def _result(action, **kw):
-        return {"action": action, "ok": action != "refuse", "zmin": zmin, "zmax": zmax,
-                "caps": caps, "label": label, **kw}
+        return {
+            "action": action,
+            "ok": action != "refuse",
+            "zmin": zmin,
+            "zmax": zmax,
+            "caps": caps,
+            "label": label,
+            **kw,
+        }
 
     # ---- the box being asked for
     if bbox is not None:
@@ -569,11 +599,19 @@ def plan_area(lat: float | None = None, lon: float | None = None, *,
             # REFUSE, DO NOT CLAMP. Quietly downloading something smaller than what was
             # asked for is how an operator ends up with a map that stops mid-pound, with
             # nothing on screen to say where it will stop.
-            return _result("refuse", name=None, bbox=None, requested_bbox=None,
-                           est_tiles=0, est_mb=0.0,
-                           why=(f"a {radius:.0f} m radius is past the {settings.area_max_radius_m:.0f} m "
-                                f"cap on an automatically created area — raise NAV_AREA_MAX_RADIUS_M "
-                                f"if you mean it, or draw the box by hand"))
+            return _result(
+                "refuse",
+                name=None,
+                bbox=None,
+                requested_bbox=None,
+                est_tiles=0,
+                est_mb=0.0,
+                why=(
+                    f"a {radius:.0f} m radius is past the {settings.area_max_radius_m:.0f} m "
+                    f"cap on an automatically created area — raise NAV_AREA_MAX_RADIUS_M "
+                    f"if you mean it, or draw the box by hand"
+                ),
+            )
         requested = bbox_for_point(lat, lon, radius)
         point = (float(lat), float(lon))
 
@@ -595,12 +633,23 @@ def plan_area(lat: float | None = None, lon: float | None = None, *,
             inner = [a for a in existing if _contains_bbox(a["bbox"], requested)]
             hit = sorted(inner, key=lambda a: (a["name"] != wanted, a["name"]))[0] if inner else None
         if hit is not None:
-            why = (f"{hit['name']} already covers this launch point with "
-                   f"{_coverage_m(hit['bbox'], point[0], point[1]):.0f} m of map around it"
-                   if point is not None else f"{hit['name']} already contains this box")
-            return _result("reuse", name=hit["name"], bbox=hit["bbox"], requested_bbox=requested,
-                           state=hit.get("state"), present=hit.get("present"),
-                           est_tiles=0, est_mb=0.0, why=why)
+            why = (
+                f"{hit['name']} already covers this launch point with "
+                f"{_coverage_m(hit['bbox'], point[0], point[1]):.0f} m of map around it"
+                if point is not None
+                else f"{hit['name']} already contains this box"
+            )
+            return _result(
+                "reuse",
+                name=hit["name"],
+                bbox=hit["bbox"],
+                requested_bbox=requested,
+                state=hit.get("state"),
+                present=hit.get("present"),
+                est_tiles=0,
+                est_mb=0.0,
+                why=why,
+            )
 
     # ---- does one reach it without covering it? then GROW that one, never overlap it
     #
@@ -615,9 +664,11 @@ def plan_area(lat: float | None = None, lon: float | None = None, *,
     # candidates always resolve the same way twice running.
     probe = point if point is not None else _centre(requested)
     touching = [a for a in existing if _coverage_m(a["bbox"], probe[0], probe[1]) >= 0] if reuse else []
-    target = sorted(touching, key=lambda a: (a["name"] != wanted,
-                                             -_coverage_m(a["bbox"], probe[0], probe[1]),
-                                             a["name"]))[0] if touching else None
+    target = (
+        sorted(touching, key=lambda a: (a["name"] != wanted, -_coverage_m(a["bbox"], probe[0], probe[1]), a["name"]))[0]
+        if touching
+        else None
+    )
 
     if target is not None:
         final = _union_bbox(target["bbox"], requested)
@@ -625,16 +676,34 @@ def plan_area(lat: float | None = None, lon: float | None = None, *,
         vec = estimate_size_mb(final, zmax)
         over = _over_cap(est, vec, caps)
         if over:
-            return _result("refuse", name=target["name"], bbox=target["bbox"],
-                           requested_bbox=requested, est_tiles=est["tiles"], est_mb=est["mb"],
-                           why=(f"extending {target['name']} to reach this launch point would make "
-                                f"it {over} — {target['name']} is untouched and still holds "
-                                f"everything it held"))
-        return _result("extend", name=target["name"], bbox=final, previous_bbox=target["bbox"],
-                       requested_bbox=requested, est_tiles=est["tiles"], est_mb=est["mb"],
-                       vector_est_mb=vec, state=target.get("state"),
-                       why=(f"{target['name']} reaches this launch point but only just, so it grows "
-                            f"to {est['mb']} MB of imagery; nothing it already holds is removed"))
+            return _result(
+                "refuse",
+                name=target["name"],
+                bbox=target["bbox"],
+                requested_bbox=requested,
+                est_tiles=est["tiles"],
+                est_mb=est["mb"],
+                why=(
+                    f"extending {target['name']} to reach this launch point would make "
+                    f"it {over} — {target['name']} is untouched and still holds "
+                    f"everything it held"
+                ),
+            )
+        return _result(
+            "extend",
+            name=target["name"],
+            bbox=final,
+            previous_bbox=target["bbox"],
+            requested_bbox=requested,
+            est_tiles=est["tiles"],
+            est_mb=est["mb"],
+            vector_est_mb=vec,
+            state=target.get("state"),
+            why=(
+                f"{target['name']} reaches this launch point but only just, so it grows "
+                f"to {est['mb']} MB of imagery; nothing it already holds is removed"
+            ),
+        )
 
     # ---- a new one
     est = satmod.estimate(requested, zmin, zmax)
@@ -642,22 +711,44 @@ def plan_area(lat: float | None = None, lon: float | None = None, *,
     chosen = wanted or default_area_name(label)
     over = _over_cap(est, vec, caps)
     if over:
-        return _result("refuse", name=None, bbox=None, requested_bbox=requested,
-                       est_tiles=est["tiles"], est_mb=est["mb"],
-                       why=f"this area would be {over} — nothing was created")
-    return _result("create", name=_unique_name(chosen), bbox=requested, requested_bbox=requested,
-                   est_tiles=est["tiles"], est_mb=est["mb"], vector_est_mb=vec,
-                   origin=({"lat": point[0], "lon": point[1], "radius_m": radius}
-                           if point is not None else None),
-                   why=(f"{est['tiles']} tiles, about {est['mb']} MB at zoom {zmin}-{zmax} "
-                        f"(cap {caps['tiles']} tiles / {caps['mb']:.0f} MB)"))
+        return _result(
+            "refuse",
+            name=None,
+            bbox=None,
+            requested_bbox=requested,
+            est_tiles=est["tiles"],
+            est_mb=est["mb"],
+            why=f"this area would be {over} — nothing was created",
+        )
+    return _result(
+        "create",
+        name=_unique_name(chosen),
+        bbox=requested,
+        requested_bbox=requested,
+        est_tiles=est["tiles"],
+        est_mb=est["mb"],
+        vector_est_mb=vec,
+        origin=({"lat": point[0], "lon": point[1], "radius_m": radius} if point is not None else None),
+        why=(
+            f"{est['tiles']} tiles, about {est['mb']} MB at zoom {zmin}-{zmax} "
+            f"(cap {caps['tiles']} tiles / {caps['mb']:.0f} MB)"
+        ),
+    )
 
 
-def create_area(lat: float | None = None, lon: float | None = None, *,
-                radius_m: float | None = None, bbox: list[float] | None = None,
-                name: str | None = None, label: str | None = None,
-                detail: str = "standard", zmin: int | None = None, zmax: int | None = None,
-                reuse: bool = True) -> dict:
+def create_area(
+    lat: float | None = None,
+    lon: float | None = None,
+    *,
+    radius_m: float | None = None,
+    bbox: list[float] | None = None,
+    name: str | None = None,
+    label: str | None = None,
+    detail: str = "standard",
+    zmin: int | None = None,
+    zmax: int | None = None,
+    reuse: bool = True,
+) -> dict:
     """Define an offline area from a launch point (+ radius) or from an explicit bbox.
 
     Writes areas/<name>.json in exactly the shape list_areas() reads and satellite.py
@@ -677,8 +768,9 @@ def create_area(lat: float | None = None, lon: float | None = None, *,
     Raises ValueError when the input is not a place, or when the result would be too
     big; call plan_area() first if you would rather show the refusal than raise it.
     """
-    plan = plan_area(lat, lon, radius_m=radius_m, bbox=bbox, name=name, label=label,
-                     detail=detail, zmin=zmin, zmax=zmax, reuse=reuse)
+    plan = plan_area(
+        lat, lon, radius_m=radius_m, bbox=bbox, name=name, label=label, detail=detail, zmin=zmin, zmax=zmax, reuse=reuse
+    )
     if plan["action"] == "refuse":
         raise ValueError(plan["why"])
 
@@ -694,23 +786,28 @@ def create_area(lat: float | None = None, lon: float | None = None, *,
         return {**plan, "created": False}
 
     if plan["action"] == "extend":
-        merged = _merge_meta(plan["name"], {
-            "bbox": plan["bbox"],
-            "extended_at": now,
-            "extended_from": plan["previous_bbox"],
-            # A GROWN AREA IS AN INCOMPLETE AREA and must say so, even when it was
-            # complete a moment ago. Its box now reaches water its imagery does not,
-            # and leaving "present" on it is precisely the "looks finished, is not"
-            # failure this field was added to end — the pre-dive gate would go green
-            # over a map that stops short of where the sub is going in. The tiles it
-            # already holds are untouched and `present`/`size` still report them; what
-            # changes is the claim about completeness, which is now false.
-            "state": "absent",
-            "state_at": now,
-            "state_why": (f"this area was grown to reach a new launch point and holds imagery "
-                          f"for the previous box {plan['previous_bbox']} only — the new margin "
-                          f"has not been downloaded"),
-        })
+        merged = _merge_meta(
+            plan["name"],
+            {
+                "bbox": plan["bbox"],
+                "extended_at": now,
+                "extended_from": plan["previous_bbox"],
+                # A GROWN AREA IS AN INCOMPLETE AREA and must say so, even when it was
+                # complete a moment ago. Its box now reaches water its imagery does not,
+                # and leaving "present" on it is precisely the "looks finished, is not"
+                # failure this field was added to end — the pre-dive gate would go green
+                # over a map that stops short of where the sub is going in. The tiles it
+                # already holds are untouched and `present`/`size` still report them; what
+                # changes is the claim about completeness, which is now false.
+                "state": "absent",
+                "state_at": now,
+                "state_why": (
+                    f"this area was grown to reach a new launch point and holds imagery "
+                    f"for the previous box {plan['previous_bbox']} only — the new margin "
+                    f"has not been downloaded"
+                ),
+            },
+        )
         if merged is None:
             raise ValueError(f"area {plan['name']} vanished between planning and writing")
         log.info("area %s extended %s -> %s", plan["name"], plan["previous_bbox"], plan["bbox"])
@@ -721,7 +818,7 @@ def create_area(lat: float | None = None, lon: float | None = None, *,
         "bbox": plan["bbox"],
         "minzoom": plan["zmin"],
         "maxzoom": plan["zmax"],
-        "format": "mbtiles",                    # the default archive (§3); satellite.py fills it in
+        "format": "mbtiles",  # the default archive (§3); satellite.py fills it in
         "attribution": settings.sat_attribution,
         "created": now,
         "created_by": "launch-point" if plan.get("origin") else "bbox",
@@ -735,15 +832,14 @@ def create_area(lat: float | None = None, lon: float | None = None, *,
         "state_why": "defined from a launch point; no imagery has been downloaded into it yet",
     }
     if plan.get("origin"):
-        meta["origin"] = plan["origin"]         # where the operator actually stood
+        meta["origin"] = plan["origin"]  # where the operator actually stood
     if label:
-        meta["label"] = label                   # human title; the name never changes, this may
+        meta["label"] = label  # human title; the name never changes, this may
     target = _meta_path(plan["name"])
     if target.exists():
         # _unique_name() said this was free, so something wrote it in between. The file
         # on disk wins: an area is somebody's downloaded data and this is a plan.
         raise ValueError(f"{target.name} appeared while it was being planned")
     _atomic_write_json(target, meta)
-    log.info("area %s created %s (%s tiles, ~%s MB)",
-             plan["name"], plan["bbox"], plan["est_tiles"], plan["est_mb"])
+    log.info("area %s created %s (%s tiles, ~%s MB)", plan["name"], plan["bbox"], plan["est_tiles"], plan["est_mb"])
     return {**plan, "created": True, "meta": meta}

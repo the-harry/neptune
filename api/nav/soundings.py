@@ -98,6 +98,7 @@ WIRING (for whoever owns nav/cli.py)
     read from the area file that BOOTSTRAP downloaded, and a missing one is reported
     ABSENT rather than fetched. It is safe to run canal-side with no internet.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -130,20 +131,26 @@ SCHEMA = "neptune.soundings/1"
 # is how two files start disagreeing about what they are showing.
 QUANTITY = "lower_bound_m"
 
-MEANS = ("Each cell holds the DEEPEST depth the sub itself reached while the journal "
-         "showed it resting on something solid. The bed is AT LEAST this deep and may "
-         "be deeper: the pressure port sits above the keel, the sub may have landed on "
-         "silt or debris, and nothing aboard measures the bed directly. This is a lower "
-         "bound on bed depth, not a measurement of it, and it must never be drawn as one.")
+MEANS = (
+    "Each cell holds the DEEPEST depth the sub itself reached while the journal "
+    "showed it resting on something solid. The bed is AT LEAST this deep and may "
+    "be deeper: the pressure port sits above the keel, the sub may have landed on "
+    "silt or debris, and nothing aboard measures the bed directly. This is a lower "
+    "bound on bed depth, not a measurement of it, and it must never be drawn as one."
+)
 
-UNSURVEYED = ("Cells absent from this file are UNSURVEYED — the sub has never left "
-              "bottom evidence there. Absent is not shallow, and it is not zero. A "
-              "renderer must draw absence as absence.")
+UNSURVEYED = (
+    "Cells absent from this file are UNSURVEYED — the sub has never left "
+    "bottom evidence there. Absent is not shallow, and it is not zero. A "
+    "renderer must draw absence as absence."
+)
 
-DATUM = ("the water surface as it was on the day of each dive. Canal levels move with "
-         "rainfall and lock use, so there is no vertical datum here and two dives a "
-         "month apart can disagree by a hand's width. Each cell records which dive its "
-         "deepest sounding came from, and when.")
+DATUM = (
+    "the water surface as it was on the day of each dive. Canal levels move with "
+    "rainfall and lock use, so there is no vertical datum here and two dives a "
+    "month apart can disagree by a hand's width. Each cell records which dive its "
+    "deepest sounding came from, and when."
+)
 
 # ---- what counts as a touchdown ------------------------------------------------
 # 5-10 m along the channel. 8 m is a little over four sub-lengths and comfortably
@@ -211,8 +218,9 @@ class Centreline:
     measured through it is a distance nothing travelled. Every cell index in the
     store is a distance along one specific line, so the lines cannot be merged.
     """
+
     name: str
-    source: str                                   # the file it was read from
+    source: str  # the file it was read from
     lines_lonlat: list[list[tuple[float, float]]]
     lines_local: list[list[tuple[float, float]]]  # metres about (ref_lat, ref_lon)
     ref_lat: float
@@ -222,9 +230,13 @@ class Centreline:
     length_m: float
 
     def meta(self) -> dict:
-        return {"fingerprint": self.fingerprint, "lines": len(self.lines_lonlat),
-                "points": self.n_points, "length_m": round(self.length_m, 1),
-                "source": self.source}
+        return {
+            "fingerprint": self.fingerprint,
+            "lines": len(self.lines_lonlat),
+            "points": self.n_points,
+            "length_m": round(self.length_m, 1),
+            "source": self.source,
+        }
 
 
 def _lines_from_geojson(gj: dict) -> list[list[tuple[float, float]]]:
@@ -263,20 +275,24 @@ def load_centreline(path: Path, name: str | None = None) -> tuple[Centreline | N
     path = Path(path)
     name = name or path.stem
     if not path.exists():
-        return None, (f"the waterway centreline for '{name}' is ABSENT: {path} does not "
-                      f"exist. It is downloaded at BOOTSTRAP with the area (there is no "
-                      f"internet canal-side, and nothing here will try). Without a channel "
-                      f"axis there is no distance-along to bin soundings by, so none are "
-                      f"derivable — which is not the same as this canal having no soundings.")
+        return None, (
+            f"the waterway centreline for '{name}' is ABSENT: {path} does not "
+            f"exist. It is downloaded at BOOTSTRAP with the area (there is no "
+            f"internet canal-side, and nothing here will try). Without a channel "
+            f"axis there is no distance-along to bin soundings by, so none are "
+            f"derivable — which is not the same as this canal having no soundings."
+        )
     try:
         gj = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 — a corrupt file must not look like an empty one
         return None, f"the centreline file {path} is present but unreadable ({exc})"
     lines = _lines_from_geojson(gj)
     if not lines:
-        return None, (f"{path} holds no LineString or MultiLineString — it is present but "
-                      f"carries no channel axis, so it cannot say where along the canal "
-                      f"anything is")
+        return None, (
+            f"{path} holds no LineString or MultiLineString — it is present but "
+            f"carries no channel axis, so it cannot say where along the canal "
+            f"anything is"
+        )
 
     ref_lon, ref_lat = lines[0][0]
     lines_local, length, npts = [], 0.0, 0
@@ -284,8 +300,7 @@ def load_centreline(path: Path, name: str | None = None) -> tuple[Centreline | N
         loc = [to_local(lat, lon, ref_lat, ref_lon) for (lon, lat) in ln]
         lines_local.append(loc)
         npts += len(loc)
-        length += sum(math.hypot(loc[i][0] - loc[i - 1][0], loc[i][1] - loc[i - 1][1])
-                      for i in range(1, len(loc)))
+        length += sum(math.hypot(loc[i][0] - loc[i - 1][0], loc[i][1] - loc[i - 1][1]) for i in range(1, len(loc)))
 
     # The fingerprint is what stops two different centrelines being accumulated into
     # one store. Cell 47 means "376-384 m along line 0 OF THIS GEOMETRY"; re-download
@@ -297,9 +312,20 @@ def load_centreline(path: Path, name: str | None = None) -> tuple[Centreline | N
         h.update(b"|")
         for lon, lat in ln:
             h.update(f"{lon:.7f},{lat:.7f};".encode())
-    return Centreline(name=name, source=str(path), lines_lonlat=lines,
-                      lines_local=lines_local, ref_lat=ref_lat, ref_lon=ref_lon,
-                      fingerprint=h.hexdigest()[:16], n_points=npts, length_m=length), None
+    return (
+        Centreline(
+            name=name,
+            source=str(path),
+            lines_lonlat=lines,
+            lines_local=lines_local,
+            ref_lat=ref_lat,
+            ref_lon=ref_lon,
+            fingerprint=h.hexdigest()[:16],
+            n_points=npts,
+            length_m=length,
+        ),
+        None,
+    )
 
 
 def snap_to_axis(cl: Centreline, lat: float, lon: float):
@@ -350,6 +376,7 @@ def _point_at_along(cl: Centreline, line_i: int, along_m: float) -> tuple[float,
 @dataclass
 class ContactTally:
     """Why each candidate stretch was or was not a touchdown. Printed, never hidden."""
+
     flat_runs: int = 0
     too_short: int = 0
     no_fill: int = 0
@@ -416,8 +443,7 @@ def _descended_into(samples, run) -> bool:
     mean 'something stopped it'.
     """
     t0, d0 = run[0]["t"], run[0]["depth_m"]
-    prior = [s["depth_m"] for s in samples
-             if s.get("depth_m") is not None and t0 - DESCENT_LOOKBACK_S <= s["t"] < t0]
+    prior = [s["depth_m"] for s in samples if s.get("depth_m") is not None and t0 - DESCENT_LOOKBACK_S <= s["t"] < t0]
     return bool(prior) and (d0 - min(prior)) >= MIN_DESCENT_M
 
 
@@ -465,59 +491,79 @@ def _why_no_contact(samples, tally: ContactTally) -> str:
 
     dstate = _column_state(samples, "depth_m")
     if dstate == "absent":
-        return ("this journal has no depth_m column at all — it predates depth logging, "
-                "so there is no depth in it to be a sounding (the MS5837 may well have "
-                "been fitted and fine; nothing here recorded it)")
+        return (
+            "this journal has no depth_m column at all — it predates depth logging, "
+            "so there is no depth in it to be a sounding (the MS5837 may well have "
+            "been fitted and fine; nothing here recorded it)"
+        )
     if dstate == "silent":
-        return ("the depth_m column is present and null on every sample — the pressure "
-                "sensor never answered once in this dive, so nothing here measured a "
-                "depth and no sounding can come out of it")
+        return (
+            "the depth_m column is present and null on every sample — the pressure "
+            "sensor never answered once in this dive, so nothing here measured a "
+            "depth and no sounding can come out of it"
+        )
 
     bstate = _column_state(samples, "ballast")
     if bstate == "absent":
-        return ("this journal has no ballast column at all — it carries the estimator's "
-                "conclusions but not the raw control channels (divelog.py only writes "
-                "them when a SensorSample is logged beside the NavState), so it predates "
-                "or was written without them. Its depths are real and are not lost; there "
-                "is simply nothing in it that can tell the sub landing on the bed from the "
-                "sub hanging at neutral buoyancy, and those are the two readings a flat "
-                "depth has")
+        return (
+            "this journal has no ballast column at all — it carries the estimator's "
+            "conclusions but not the raw control channels (divelog.py only writes "
+            "them when a SensorSample is logged beside the NavState), so it predates "
+            "or was written without them. Its depths are real and are not lost; there "
+            "is simply nothing in it that can tell the sub landing on the bed from the "
+            "sub hanging at neutral buoyancy, and those are the two readings a flat "
+            "depth has"
+        )
     if bstate == "silent":
-        return ("the ballast column is present and null on every sample — the stepper was "
-                "never homed, so the syringe had no position to report all dive (there is "
-                "no position sensor on it). Bottom contact is recognised by the sub "
-                "stopping WHILE STILL TAKING ON WATER, and this dive has no record of "
-                "water going in. Run ballast_home() before the next dive")
+        return (
+            "the ballast column is present and null on every sample — the stepper was "
+            "never homed, so the syringe had no position to report all dive (there is "
+            "no position sensor on it). Bottom contact is recognised by the sub "
+            "stopping WHILE STILL TAKING ON WATER, and this dive has no record of "
+            "water going in. Run ballast_home() before the next dive"
+        )
 
     if tally.flat_runs == 0:
-        return ("the depth never held still for long enough in this dive — the sub was "
-                "moving vertically throughout, so it was never resting on anything")
+        return (
+            "the depth never held still for long enough in this dive — the sub was "
+            "moving vertically throughout, so it was never resting on anything"
+        )
     # Each rung below is a stretch that ALMOST qualified, and each names a different
     # next move. They are tested for being non-zero rather than for adding up to the
     # total: a tally that happens to balance is not a diagnosis, and an arithmetic
     # coincidence must never be allowed to print "the sub stopped 0 times".
     if tally.no_fill:
-        return (f"the depth went flat {tally.no_fill} time(s), and not once while the "
-                f"syringe was still filling. A depth that simply goes flat is the settled "
-                f"hold nav/calibrate.py fits the ballast curve to — it is neutral buoyancy, "
-                f"and neutral buoyancy happens at any depth. To leave bottom evidence, "
-                f"arrive on the bed with the fill still running rather than filling, "
-                f"waiting, and sinking after the syringe is done")
+        return (
+            f"the depth went flat {tally.no_fill} time(s), and not once while the "
+            f"syringe was still filling. A depth that simply goes flat is the settled "
+            f"hold nav/calibrate.py fits the ballast curve to — it is neutral buoyancy, "
+            f"and neutral buoyancy happens at any depth. To leave bottom evidence, "
+            f"arrive on the bed with the fill still running rather than filling, "
+            f"waiting, and sinking after the syringe is done"
+        )
     if tally.too_shallow:
-        return (f"{tally.too_shallow} stretch(es) held still under a filling syringe, but "
-                f"all of them shallower than {MIN_SOUNDING_DEPTH_M} m — that is the sub "
-                f"floating while it takes on water, not the sub landing on anything")
+        return (
+            f"{tally.too_shallow} stretch(es) held still under a filling syringe, but "
+            f"all of them shallower than {MIN_SOUNDING_DEPTH_M} m — that is the sub "
+            f"floating while it takes on water, not the sub landing on anything"
+        )
     if tally.no_descent:
-        return (f"{tally.no_descent} stretch(es) held still under a filling syringe, but "
-                f"with no descent recorded in the {DESCENT_LOOKBACK_S:.0f} s before them. "
-                f"Something stopping is only evidence when it was going somewhere; this "
-                f"journal may simply start with the sub already down")
+        return (
+            f"{tally.no_descent} stretch(es) held still under a filling syringe, but "
+            f"with no descent recorded in the {DESCENT_LOOKBACK_S:.0f} s before them. "
+            f"Something stopping is only evidence when it was going somewhere; this "
+            f"journal may simply start with the sub already down"
+        )
     if tally.too_short:
-        return (f"the depth held still {tally.too_short} time(s), every one of them for "
-                f"less than {MIN_CONTACT_S:.0f} s. A hold that brief is not distinguishable "
-                f"from a sub sinking slowly through the {DEPTH_FLAT_M} m band this calls flat")
-    return (f"no stretch of this dive shows the sub stopping while the syringe was still "
-            f"filling ({tally.flat_runs} flat stretch(es) examined)")
+        return (
+            f"the depth held still {tally.too_short} time(s), every one of them for "
+            f"less than {MIN_CONTACT_S:.0f} s. A hold that brief is not distinguishable "
+            f"from a sub sinking slowly through the {DEPTH_FLAT_M} m band this calls flat"
+        )
+    return (
+        f"no stretch of this dive shows the sub stopping while the syringe was still "
+        f"filling ({tally.flat_runs} flat stretch(es) examined)"
+    )
 
 
 # ==========================================================================
@@ -545,8 +591,7 @@ def _adjustment_for(journal: Path) -> tuple[tuple[float, float, float], str]:
     try:
         pr = json.loads(sib.read_text(encoding="utf-8")).get("properties", {})
         a = pr.get("adjustment") or {}
-        adj = (float(a.get("dx_m", 0.0)), float(a.get("dy_m", 0.0)),
-               float(a.get("rotation_deg", 0.0)))
+        adj = (float(a.get("dx_m", 0.0)), float(a.get("dy_m", 0.0)), float(a.get("rotation_deg", 0.0)))
     except Exception as exc:  # noqa: BLE001
         return (0.0, 0.0, 0.0), f"sibling .geojson unreadable ({exc}) — raw track used"
     if adj == (0.0, 0.0, 0.0):
@@ -562,8 +607,9 @@ def _apply_adjustment(x: float, y: float, adj) -> tuple[float, float]:
     return dx + x * c - y * s, dy + x * s + y * c
 
 
-def extract_dive(journal: Path, cl: Centreline, cell_m: float = CELL_M_DEFAULT,
-                 max_offline_m: float = MAX_OFFLINE_M) -> tuple[dict | None, str | None]:
+def extract_dive(
+    journal: Path, cl: Centreline, cell_m: float = CELL_M_DEFAULT, max_offline_m: float = MAX_OFFLINE_M
+) -> tuple[dict | None, str | None]:
     """One dive journal -> per-cell lower bounds. (result, None) or (None, why).
 
     Pure: reads the journal (and its sibling .geojson) and returns a dict. Writing
@@ -577,14 +623,18 @@ def extract_dive(journal: Path, cl: Centreline, cell_m: float = CELL_M_DEFAULT,
     # the header, or one truncated to nothing, has no origin EITHER, and "no origin
     # was set" would send someone to check a procedure that was followed.
     if not samples:
-        return None, (f"{journal.name} contains no samples — either the dive never logged "
-                      f"one, or the file was truncated before the first")
+        return None, (
+            f"{journal.name} contains no samples — either the dive never logged "
+            f"one, or the file was truncated before the first"
+        )
 
     origin = (header or {}).get("origin")
     if not origin or origin.get("lat") is None or origin.get("lon") is None:
-        return None, (f"{journal.name} has no origin in its header — x/y in it are metres "
-                      f"from a datum this file does not carry, so nothing in it can be put "
-                      f"on the canal. The dive was logged before an origin was set")
+        return None, (
+            f"{journal.name} has no origin in its header — x/y in it are metres "
+            f"from a datum this file does not carry, so nothing in it can be put "
+            f"on the canal. The dive was logged before an origin was set"
+        )
 
     # What each channel could supply, recorded even when the dive DOES yield soundings.
     # calibrate.py prints its gaps above the numbers for this reason: a survey fitted
@@ -603,7 +653,7 @@ def extract_dive(journal: Path, cl: Centreline, cell_m: float = CELL_M_DEFAULT,
     confs: list[float] = []
     snapped_n = 0
     for run in runs:
-        seen_here: set[str] = set()          # a run counts once per cell, as one touchdown
+        seen_here: set[str] = set()  # a run counts once per cell, as one touchdown
         for s in run:
             x, y = s.get("x"), s.get("y")
             if x is None or y is None:
@@ -650,16 +700,27 @@ def extract_dive(journal: Path, cl: Centreline, cell_m: float = CELL_M_DEFAULT,
                 # The cell as a piece of the channel, not a dot on it: three points
                 # along the axis, so a renderer draws the stretch that was surveyed
                 # rather than a marker somebody has to guess the extent of.
-                geom = [[round(lon_, 7), round(lat_, 7)] for lat_, lon_ in
-                        (_point_at_along(cl, line_i, d) for d in (lo_m, (lo_m + hi_m) / 2.0, hi_m))]
+                geom = [
+                    [round(lon_, 7), round(lat_, 7)]
+                    for lat_, lon_ in (_point_at_along(cl, line_i, d) for d in (lo_m, (lo_m + hi_m) / 2.0, hi_m))
+                ]
                 c = cells[key] = {
-                    "line": line_i, "cell": idx,
-                    "from_m": round(lo_m, 1), "to_m": round(hi_m, 1),
-                    "lat": round(clat, 7), "lon": round(clon, 7), "geom": geom,
-                    QUANTITY: depth, "bound": "lower",
-                    "samples": 0, "contacts": 0,
-                    "confidence_min": None, "confidence_sum": 0.0, "confidence_n": 0,
-                    "offset_m_max": 0.0, "t_deepest": s["t"],
+                    "line": line_i,
+                    "cell": idx,
+                    "from_m": round(lo_m, 1),
+                    "to_m": round(hi_m, 1),
+                    "lat": round(clat, 7),
+                    "lon": round(clon, 7),
+                    "geom": geom,
+                    QUANTITY: depth,
+                    "bound": "lower",
+                    "samples": 0,
+                    "contacts": 0,
+                    "confidence_min": None,
+                    "confidence_sum": 0.0,
+                    "confidence_n": 0,
+                    "offset_m_max": 0.0,
+                    "t_deepest": s["t"],
                     "confidence_at_deepest": conf,
                 }
             c["samples"] += 1
@@ -667,8 +728,9 @@ def extract_dive(journal: Path, cl: Centreline, cell_m: float = CELL_M_DEFAULT,
             if conf is not None:
                 c["confidence_sum"] += float(conf)
                 c["confidence_n"] += 1
-                c["confidence_min"] = (float(conf) if c["confidence_min"] is None
-                                       else min(c["confidence_min"], float(conf)))
+                c["confidence_min"] = (
+                    float(conf) if c["confidence_min"] is None else min(c["confidence_min"], float(conf))
+                )
             # MAX, not mean: the deepest thing the sub reached in this cell is the
             # most this cell knows, and averaging it with a shallower landing throws
             # away a bound already in hand.
@@ -683,20 +745,26 @@ def extract_dive(journal: Path, cl: Centreline, cell_m: float = CELL_M_DEFAULT,
     if not cells:
         bits = []
         if tally.held_position:
-            bits.append(f"{tally.held_position} while the compass was dead and the position "
-                        f"was being HELD (no_heading), so their coordinates are wherever the "
-                        f"track stopped rather than where the sub landed")
+            bits.append(
+                f"{tally.held_position} while the compass was dead and the position "
+                f"was being HELD (no_heading), so their coordinates are wherever the "
+                f"track stopped rather than where the sub landed"
+            )
         if tally.off_channel:
-            bits.append(f"{tally.off_channel} more than {max_offline_m:.0f} m from the "
-                        f"'{cl.name}' centreline (worst {tally.worst_off_m:.0f} m) — that is "
-                        f"not this channel, and binning them along it would file real "
-                        f"soundings under the wrong stretch of canal")
+            bits.append(
+                f"{tally.off_channel} more than {max_offline_m:.0f} m from the "
+                f"'{cl.name}' centreline (worst {tally.worst_off_m:.0f} m) — that is "
+                f"not this channel, and binning them along it would file real "
+                f"soundings under the wrong stretch of canal"
+            )
         if tally.no_position:
             bits.append(f"{tally.no_position} with no usable position at all")
         why = "; ".join(bits) or "no reason recorded"
-        return None, (f"{tally.contact_samples} sample(s) DID show bottom contact, and every "
-                      f"one was discarded for position: {why}. The depths are real; this "
-                      f"journal cannot say where they were taken")
+        return None, (
+            f"{tally.contact_samples} sample(s) DID show bottom contact, and every "
+            f"one was discarded for position: {why}. The depths are real; this "
+            f"journal cannot say where they were taken"
+        )
 
     for c in cells.values():
         c[QUANTITY] = round(c[QUANTITY], 2)
@@ -713,10 +781,8 @@ def extract_dive(journal: Path, cl: Centreline, cell_m: float = CELL_M_DEFAULT,
         "area": cl.name,
         "cell_length_m": cell_m,
         "centreline": cl.meta(),
-        "origin": {"lat": lat0, "lon": lon0,
-                   "accuracy_m": origin.get("accuracy"), "source": origin.get("source")},
-        "adjustment": {"dx_m": adj[0], "dy_m": adj[1], "rotation_deg": adj[2],
-                       "note": adj_note},
+        "origin": {"lat": lat0, "lon": lon0, "accuracy_m": origin.get("accuracy"), "source": origin.get("source")},
+        "adjustment": {"dx_m": adj[0], "dy_m": adj[1], "rotation_deg": adj[2], "note": adj_note},
         "contacts": tally.contacts,
         "contact_samples": tally.contact_samples,
         "binned_samples": tally.binned,
@@ -729,12 +795,18 @@ def extract_dive(journal: Path, cl: Centreline, cell_m: float = CELL_M_DEFAULT,
         "confidence_recorded": bool(confs),
         "snapped_fraction": round(snapped_n / max(1, tally.binned), 3),
         "columns": columns,
-        "rejected": {"held_position": tally.held_position,
-                     "off_channel": tally.off_channel,
-                     "no_position": tally.no_position},
-        "tally": {"flat_runs": tally.flat_runs, "too_short": tally.too_short,
-                  "no_fill": tally.no_fill, "too_shallow": tally.too_shallow,
-                  "no_descent": tally.no_descent},
+        "rejected": {
+            "held_position": tally.held_position,
+            "off_channel": tally.off_channel,
+            "no_position": tally.no_position,
+        },
+        "tally": {
+            "flat_runs": tally.flat_runs,
+            "too_short": tally.too_short,
+            "no_fill": tally.no_fill,
+            "too_shallow": tally.too_shallow,
+            "no_descent": tally.no_descent,
+        },
         "cells": cells,
     }, None
 
@@ -791,13 +863,14 @@ def _recompute(cell: dict) -> dict:
     cell["samples"] = sum(p["samples"] for p in per.values())
     cell["contacts"] = sum(p["contacts"] for p in per.values())
     cell["dives"] = sorted(per)
-    cell["deepest_from"] = {"dive_id": deepest_dive,
-                            "t": per[deepest_dive]["t_deepest"],
-                            "confidence": per[deepest_dive]["confidence_at_deepest"]}
+    cell["deepest_from"] = {
+        "dive_id": deepest_dive,
+        "t": per[deepest_dive]["t_deepest"],
+        "confidence": per[deepest_dive]["confidence_at_deepest"],
+    }
     mins = [p["confidence_min"] for p in per.values() if p["confidence_min"] is not None]
     cell["confidence_min"] = round(min(mins), 3) if mins else None
-    wsum = sum(p["confidence_mean"] * p["samples"]
-               for p in per.values() if p["confidence_mean"] is not None)
+    wsum = sum(p["confidence_mean"] * p["samples"] for p in per.values() if p["confidence_mean"] is not None)
     wn = sum(p["samples"] for p in per.values() if p["confidence_mean"] is not None)
     cell["confidence_mean"] = round(wsum / wn, 3) if wn else None
     cell["offset_m_max"] = round(max(p["offset_m_max"] for p in per.values()), 1)
@@ -818,20 +891,35 @@ def merge_dive(store: dict | None, ds: dict, cl: Centreline) -> tuple[dict | Non
 
     # Three ways an accumulation can be meaningless, all of them silent if unchecked.
     if store.get("area") != ds["area"]:
-        return None, (f"this store is for area '{store.get('area')}' and the dive was "
-                      f"binned against '{ds['area']}'"), {}
+        return (
+            None,
+            (f"this store is for area '{store.get('area')}' and the dive was " f"binned against '{ds['area']}'"),
+            {},
+        )
     if abs(float(store.get("cell_length_m", 0)) - float(ds["cell_length_m"])) > 1e-9:
-        return None, (f"this store is binned in {store.get('cell_length_m')} m cells and "
-                      f"this run used {ds['cell_length_m']} m — cell 47 does not mean the "
-                      f"same stretch of canal in the two, and they cannot be added. Re-run "
-                      f"every dive at one cell size into a fresh store"), {}
+        return (
+            None,
+            (
+                f"this store is binned in {store.get('cell_length_m')} m cells and "
+                f"this run used {ds['cell_length_m']} m — cell 47 does not mean the "
+                f"same stretch of canal in the two, and they cannot be added. Re-run "
+                f"every dive at one cell size into a fresh store"
+            ),
+            {},
+        )
     if store.get("centreline", {}).get("fingerprint") != ds["centreline"]["fingerprint"]:
-        return None, (f"this store was built against centreline "
-                      f"{store.get('centreline', {}).get('fingerprint')} and this run used "
-                      f"{ds['centreline']['fingerprint']}. Distance-along is measured from "
-                      f"the start of that geometry, so every cell index in the store means "
-                      f"a different place under the new one. Rebuild the store, or restore "
-                      f"the centreline the soundings were taken against"), {}
+        return (
+            None,
+            (
+                f"this store was built against centreline "
+                f"{store.get('centreline', {}).get('fingerprint')} and this run used "
+                f"{ds['centreline']['fingerprint']}. Distance-along is measured from "
+                f"the start of that geometry, so every cell index in the store means "
+                f"a different place under the new one. Rebuild the store, or restore "
+                f"the centreline the soundings were taken against"
+            ),
+            {},
+        )
 
     by_key = {f"{c['line']}:{c['cell']}": c for c in store["cells"]}
     dive_id = ds["dive_id"]
@@ -854,19 +942,28 @@ def merge_dive(store: dict | None, ds: dict, cl: Centreline) -> tuple[dict | Non
     for key, nc in ds["cells"].items():
         contribution = {
             QUANTITY: nc[QUANTITY],
-            "samples": nc["samples"], "contacts": nc["contacts"],
-            "confidence_mean": nc["confidence_mean"], "confidence_min": nc["confidence_min"],
+            "samples": nc["samples"],
+            "contacts": nc["contacts"],
+            "confidence_mean": nc["confidence_mean"],
+            "confidence_min": nc["confidence_min"],
             "confidence_at_deepest": nc["confidence_at_deepest"],
-            "offset_m_max": nc["offset_m_max"], "t_deepest": nc["t_deepest"],
+            "offset_m_max": nc["offset_m_max"],
+            "t_deepest": nc["t_deepest"],
         }
         cur = by_key.get(key)
         if cur is None:
-            by_key[key] = _recompute({
-                "line": nc["line"], "cell": nc["cell"],
-                "from_m": nc["from_m"], "to_m": nc["to_m"],
-                "lat": nc["lat"], "lon": nc["lon"], "geom": nc["geom"],
-                "per_dive": {dive_id: contribution},
-            })
+            by_key[key] = _recompute(
+                {
+                    "line": nc["line"],
+                    "cell": nc["cell"],
+                    "from_m": nc["from_m"],
+                    "to_m": nc["to_m"],
+                    "lat": nc["lat"],
+                    "lon": nc["lon"],
+                    "geom": nc["geom"],
+                    "per_dive": {dive_id: contribution},
+                }
+            )
             if key not in withdrawn:
                 added += 1
             continue
@@ -874,7 +971,7 @@ def merge_dive(store: dict | None, ds: dict, cl: Centreline) -> tuple[dict | Non
         cur["per_dive"][dive_id] = contribution
         _recompute(cur)
         if key in withdrawn:
-            continue                       # this dive's own contribution, re-stated
+            continue  # this dive's own contribution, re-stated
         if cur[QUANTITY] > before:
             deepened += 1
         else:
@@ -882,17 +979,31 @@ def merge_dive(store: dict | None, ds: dict, cl: Centreline) -> tuple[dict | Non
 
     store["cells"] = list(by_key.values())
     store["dives"][dive_id] = {
-        "journal": ds["journal"], "started_at": ds["started_at"],
-        "origin": ds["origin"], "adjustment": ds["adjustment"],
-        "contacts": ds["contacts"], "contact_samples": ds["contact_samples"],
-        "binned_samples": ds["binned_samples"], "cells": len(ds["cells"]),
-        "confidence_mean": ds["confidence_mean"], "confidence_min": ds["confidence_min"],
+        "journal": ds["journal"],
+        "started_at": ds["started_at"],
+        "origin": ds["origin"],
+        "adjustment": ds["adjustment"],
+        "contacts": ds["contacts"],
+        "contact_samples": ds["contact_samples"],
+        "binned_samples": ds["binned_samples"],
+        "cells": len(ds["cells"]),
+        "confidence_mean": ds["confidence_mean"],
+        "confidence_min": ds["confidence_min"],
         "confidence_recorded": ds["confidence_recorded"],
         "rejected": ds["rejected"],
         "extracted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
-    return store, None, {"added": added, "deepened": deepened, "unchanged": unchanged,
-                         "restated": len(withdrawn), "total": len(store["cells"])}
+    return (
+        store,
+        None,
+        {
+            "added": added,
+            "deepened": deepened,
+            "unchanged": unchanged,
+            "restated": len(withdrawn),
+            "total": len(store["cells"]),
+        },
+    )
 
 
 # ==========================================================================
@@ -912,12 +1023,15 @@ def _as_centreline(centreline, name: str | None = None) -> tuple[Centreline | No
     if isinstance(centreline, dict):
         lines = _lines_from_geojson(centreline)
         if not lines:
-            return None, ("the centreline given holds no LineString or MultiLineString — "
-                          "it carries no channel axis, so nothing can be binned along it")
+            return None, (
+                "the centreline given holds no LineString or MultiLineString — "
+                "it carries no channel axis, so nothing can be binned along it"
+            )
         # Written through the same loader so there is one fingerprint rule, one
         # local-metres conversion and one length: a second path here would drift
         # from the disk path and two stores would disagree about what cell 47 is.
         import tempfile
+
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / f"{name or 'centreline'}.geojson"
             p.write_text(json.dumps(centreline), encoding="utf-8")
@@ -925,11 +1039,20 @@ def _as_centreline(centreline, name: str | None = None) -> tuple[Centreline | No
         if cl is None:
             return None, why
         # The temp path is gone; say where it really came from.
-        return Centreline(name=cl.name, source="(parsed GeoJSON, not a file)",
-                          lines_lonlat=cl.lines_lonlat, lines_local=cl.lines_local,
-                          ref_lat=cl.ref_lat, ref_lon=cl.ref_lon,
-                          fingerprint=cl.fingerprint, n_points=cl.n_points,
-                          length_m=cl.length_m), None
+        return (
+            Centreline(
+                name=cl.name,
+                source="(parsed GeoJSON, not a file)",
+                lines_lonlat=cl.lines_lonlat,
+                lines_local=cl.lines_local,
+                ref_lat=cl.ref_lat,
+                ref_lon=cl.ref_lon,
+                fingerprint=cl.fingerprint,
+                n_points=cl.n_points,
+                length_m=cl.length_m,
+            ),
+            None,
+        )
     return None, f"a centreline cannot be read from a {type(centreline).__name__}"
 
 
@@ -970,9 +1093,11 @@ def build_soundings(journals, centreline, *, cell_m: float = CELL_M_DEFAULT) -> 
 
     journals = [Path(j) for j in journals]
     if not journals:
-        result["reason"] = ("no dive journals were given, so nothing has been surveyed "
-                            "here yet — which is not a finding about the canal. Nobody "
-                            "has been down this stretch with a depth sensor running")
+        result["reason"] = (
+            "no dive journals were given, so nothing has been surveyed "
+            "here yet — which is not a finding about the canal. Nobody "
+            "has been down this stretch with a depth sensor running"
+        )
         return result
 
     store, refusals = None, []
@@ -988,8 +1113,9 @@ def build_soundings(journals, centreline, *, cell_m: float = CELL_M_DEFAULT) -> 
         result["dives"][ds["dive_id"]] = store["dives"][ds["dive_id"]]
 
     if store is None or not store["cells"]:
-        result["reason"] = (f"{len(journals)} journal(s) read and none of them left "
-                            f"evidence of the bottom — " + "; ".join(refusals))
+        result["reason"] = (
+            f"{len(journals)} journal(s) read and none of them left " f"evidence of the bottom — " + "; ".join(refusals)
+        )
         return result
     result["cells"] = sorted(store["cells"], key=lambda c: (c["line"], c["cell"]))
     if refusals:
@@ -1016,26 +1142,32 @@ def write_geojson(result: dict, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     feats = []
     for c in result.get("cells", []):
-        feats.append({
-            "type": "Feature",
-            "geometry": {"type": "LineString",
-                         "coordinates": c.get("geom") or [[c["lon"], c["lat"]]]},
-            "properties": {
-                QUANTITY: c[QUANTITY],
-                "bound": "lower",
-                "what": (f"LOWER BOUND: the bed here is AT LEAST {c[QUANTITY]:.2f} m below "
-                         f"the surface — that is the deepest this sub reached while it was "
-                         f"resting on something solid, not a measurement of the bed, which "
-                         f"may be deeper."),
-                "from_m": c["from_m"], "to_m": c["to_m"],
-                "line": c["line"], "cell": c["cell"],
-                "samples": c["samples"], "contacts": c["contacts"],
-                "dives": c["dives"],
-                "confidence_mean": c["confidence_mean"],
-                "confidence_min": c["confidence_min"],
-                "deepest_from": c["deepest_from"],
-            },
-        })
+        feats.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": c.get("geom") or [[c["lon"], c["lat"]]]},
+                "properties": {
+                    QUANTITY: c[QUANTITY],
+                    "bound": "lower",
+                    "what": (
+                        f"LOWER BOUND: the bed here is AT LEAST {c[QUANTITY]:.2f} m below "
+                        f"the surface — that is the deepest this sub reached while it was "
+                        f"resting on something solid, not a measurement of the bed, which "
+                        f"may be deeper."
+                    ),
+                    "from_m": c["from_m"],
+                    "to_m": c["to_m"],
+                    "line": c["line"],
+                    "cell": c["cell"],
+                    "samples": c["samples"],
+                    "contacts": c["contacts"],
+                    "dives": c["dives"],
+                    "confidence_mean": c["confidence_mean"],
+                    "confidence_min": c["confidence_min"],
+                    "deepest_from": c["deepest_from"],
+                },
+            }
+        )
     doc = {
         "type": "FeatureCollection",
         "quantity": QUANTITY,
@@ -1057,20 +1189,27 @@ def write_geojson(result: dict, path: Path) -> Path:
 # ==========================================================================
 # Report
 # ==========================================================================
-def report(journal: Path, cl: Centreline, store_path: Path, cell_m: float,
-           dry_run: bool = False, as_json: bool = False) -> int:
+def report(
+    journal: Path, cl: Centreline, store_path: Path, cell_m: float, dry_run: bool = False, as_json: bool = False
+) -> int:
     ds, why = extract_dive(journal, cl, cell_m)
     if as_json:
         if ds is None:
-            print(json.dumps({"dive": str(journal), "area": cl.name, "soundings": None,
-                              "quantity": QUANTITY, "refused": why}, indent=2))
+            print(
+                json.dumps(
+                    {"dive": str(journal), "area": cl.name, "soundings": None, "quantity": QUANTITY, "refused": why},
+                    indent=2,
+                )
+            )
             return 1
         print(json.dumps({**ds, "cells": list(ds["cells"].values())}, indent=2))
         return 0
 
     print(f"dive       : {Path(journal).name}")
-    print(f"area       : {cl.name}  ({cl.n_points} centreline points, "
-          f"{cl.length_m:.0f} m, fingerprint {cl.fingerprint})")
+    print(
+        f"area       : {cl.name}  ({cl.n_points} centreline points, "
+        f"{cl.length_m:.0f} m, fingerprint {cl.fingerprint})"
+    )
     print(f"cells      : {cell_m:.0f} m along the channel axis")
     if ds is None:
         print("\n--- NO SOUNDINGS ---")
@@ -1081,29 +1220,29 @@ def report(journal: Path, cl: Centreline, store_path: Path, cell_m: float,
 
     t = ds["tally"]
     print("\n--- BOTTOM EVIDENCE ---")
-    print(f"  {ds['contacts']} touchdown(s), {ds['contact_samples']} sample(s): the sub "
-          f"stopped descending")
+    print(f"  {ds['contacts']} touchdown(s), {ds['contact_samples']} sample(s): the sub " f"stopped descending")
     print(f"  while the syringe was still filling, so something solid was holding it up.")
-    print(f"  ({t['flat_runs']} flat stretch(es) examined: {t['too_short']} too brief, "
-          f"{t['no_fill']} with no fill,")
+    print(
+        f"  ({t['flat_runs']} flat stretch(es) examined: {t['too_short']} too brief, " f"{t['no_fill']} with no fill,"
+    )
     print(f"   {t['too_shallow']} too shallow, {t['no_descent']} with no descent into them.)")
     # Above the soundings, like calibrate's gap section: everything below covers only
     # the stretch the instruments were alive for, and that is a different claim about
     # the canal from "this is what the dive found".
     partial = [k for k in ("depth_m", "ballast") if ds["columns"].get(k) == "partial"]
     if partial:
-        print(f"  SENSOR GAPS: {', '.join(partial)} answered for part of this dive and then "
-              f"stopped.")
+        print(f"  SENSOR GAPS: {', '.join(partial)} answered for part of this dive and then " f"stopped.")
         print("  The soundings below come only from the stretch where it was answering; the")
         print("  cells the sub crossed while it was quiet are UNSURVEYED, not shallow.")
     if not ds["confidence_recorded"]:
-        print("  Confidence was NOT recorded in this journal. The cells built from it carry "
-              "null")
+        print("  Confidence was NOT recorded in this journal. The cells built from it carry " "null")
         print("  rather than 1.0 — 'perfectly trusted' is the last thing an unrecorded fix is.")
     r = ds["rejected"]
     if any(r.values()):
-        print(f"  DISCARDED for position: {r['held_position']} held (dead compass), "
-              f"{r['off_channel']} off-channel, {r['no_position']} with none.")
+        print(
+            f"  DISCARDED for position: {r['held_position']} held (dead compass), "
+            f"{r['off_channel']} off-channel, {r['no_position']} with none."
+        )
     if ds["adjustment"]["note"] and not ds["adjustment"]["note"].startswith(("identity", "none")):
         print(f"  track adjustment applied: {ds['adjustment']['note']}")
 
@@ -1112,10 +1251,12 @@ def report(journal: Path, cl: Centreline, store_path: Path, cell_m: float,
         c = ds["cells"][key]
         conf = c["confidence_at_deepest"]
         conf_s = "confidence not recorded" if conf is None else f"confidence {conf:.2f}"
-        print(f"  line {c['line']} cell {c['cell']:>5}  "
-              f"{c['from_m']:>8.0f}-{c['to_m']:<8.0f} m  "
-              f">= {c[QUANTITY]:.2f} m   {c['samples']:>4} samples / "
-              f"{c['contacts']} touchdown(s)  {conf_s}  off-axis <= {c['offset_m_max']:.0f} m")
+        print(
+            f"  line {c['line']} cell {c['cell']:>5}  "
+            f"{c['from_m']:>8.0f}-{c['to_m']:<8.0f} m  "
+            f">= {c[QUANTITY]:.2f} m   {c['samples']:>4} samples / "
+            f"{c['contacts']} touchdown(s)  {conf_s}  off-axis <= {c['offset_m_max']:.0f} m"
+        )
     print("  Depths are below the water surface ON THE DAY. There is no vertical datum.")
 
     store = load_store(store_path)
@@ -1124,12 +1265,16 @@ def report(journal: Path, cl: Centreline, store_path: Path, cell_m: float,
     if merged is None:
         print(f"  NOT MERGED: {why_m}")
         return 1
-    print(f"  {delta['added']} new cell(s), {delta['deepened']} deepened, "
-          f"{delta['unchanged']} unchanged"
-          + (f"; {delta['restated']} cell(s) this dive had already contributed to were "
-             f"RE-STATED, not added again" if delta["restated"] else ""))
-    print(f"  {delta['total']} cell(s) surveyed in total, from "
-          f"{len(merged['dives'])} dive(s).")
+    print(
+        f"  {delta['added']} new cell(s), {delta['deepened']} deepened, "
+        f"{delta['unchanged']} unchanged"
+        + (
+            f"; {delta['restated']} cell(s) this dive had already contributed to were " f"RE-STATED, not added again"
+            if delta["restated"]
+            else ""
+        )
+    )
+    print(f"  {delta['total']} cell(s) surveyed in total, from " f"{len(merged['dives'])} dive(s).")
     if dry_run:
         print("  --dry-run: nothing written.")
         return 0
@@ -1141,8 +1286,7 @@ def report(journal: Path, cl: Centreline, store_path: Path, cell_m: float,
 # ==========================================================================
 # Selftest
 # ==========================================================================
-def _synthetic_centreline(tmp: Path, name="selftest-area", lat0=52.48, lon0=-1.9,
-                          length_m=400.0, step=10.0) -> Path:
+def _synthetic_centreline(tmp: Path, name="selftest-area", lat0=52.48, lon0=-1.9, length_m=400.0, step=10.0) -> Path:
     """A straight east-running canal, so distance-along is arithmetic we can check."""
     pts = []
     n = int(length_m / step) + 1
@@ -1150,14 +1294,16 @@ def _synthetic_centreline(tmp: Path, name="selftest-area", lat0=52.48, lon0=-1.9
         lat, lon = to_latlon(i * step, 0.0, lat0, lon0)
         pts.append([round(lon, 7), round(lat, 7)])
     p = tmp / f"{name}.geojson"
-    p.write_text(json.dumps({"type": "Feature", "properties": {},
-                             "geometry": {"type": "LineString", "coordinates": pts}}),
-                 encoding="utf-8")
+    p.write_text(
+        json.dumps({"type": "Feature", "properties": {}, "geometry": {"type": "LineString", "coordinates": pts}}),
+        encoding="utf-8",
+    )
     return p
 
 
-def _synthetic_dive(landings, lat0=52.48, lon0=-1.9, dt=0.1, depth_col=True,
-                    ballast_col=True, land=True, confidence=1.0):
+def _synthetic_dive(
+    landings, lat0=52.48, lon0=-1.9, dt=0.1, depth_col=True, ballast_col=True, land=True, confidence=1.0
+):
     """A dive that runs east along the canal and lands where told.
 
     `landings` is [(along_m, bed_depth_m), …]. Between landings the sub is at the
@@ -1170,13 +1316,28 @@ def _synthetic_dive(landings, lat0=52.48, lon0=-1.9, dt=0.1, depth_col=True,
         nonlocal t
         for _ in range(n):
             t += dt
-            row = {"type": "s", "t": round(t, 3), "x": round(x_m, 3), "y": 0.0,
-                   "heading_deg": 90.0, "snapped": False, "confidence": confidence,
-                   "speed_ms": 0.0, "speed_src": "lut", "snagged": False,
-                   "gyro_only": False, "no_heading": False,
-                   "throttle": 0.0, "steer": 0.0, "left": 0.0, "right": 0.0,
-                   "ballast_tgt": 1.0, "armed": True, "mag_cal": 3,
-                   "encoder_m": 0.0}
+            row = {
+                "type": "s",
+                "t": round(t, 3),
+                "x": round(x_m, 3),
+                "y": 0.0,
+                "heading_deg": 90.0,
+                "snapped": False,
+                "confidence": confidence,
+                "speed_ms": 0.0,
+                "speed_src": "lut",
+                "snagged": False,
+                "gyro_only": False,
+                "no_heading": False,
+                "throttle": 0.0,
+                "steer": 0.0,
+                "left": 0.0,
+                "right": 0.0,
+                "ballast_tgt": 1.0,
+                "armed": True,
+                "mag_cal": 3,
+                "encoder_m": 0.0,
+            }
             if depth_col:
                 row["depth_m"] = None if depth is None else round(depth, 3)
                 row["psi"] = None if depth is None else round(14.7 + depth * 1.42, 2)
@@ -1186,27 +1347,42 @@ def _synthetic_dive(landings, lat0=52.48, lon0=-1.9, dt=0.1, depth_col=True,
 
     for along, bed in landings:
         x = along
-        emit(40, 0.0, 0.0, x)                                   # afloat, syringe empty
-        for i in range(1, 11):                                  # descending as it fills
+        emit(40, 0.0, 0.0, x)  # afloat, syringe empty
+        for i in range(1, 11):  # descending as it fills
             emit(2, bed * i / 10.0, 0.05 * i, x)
         if land:
-            for i in range(60):                                 # ON THE BED, still filling
+            for i in range(60):  # ON THE BED, still filling
                 emit(1, bed, min(1.0, 0.5 + 0.01 * i), x)
         else:
-            for i in range(1, 21):                              # keeps sinking: no bed
+            for i in range(1, 21):  # keeps sinking: no bed
                 emit(2, bed + 0.1 * i, min(1.0, 0.5 + 0.02 * i), x)
-        emit(40, 0.0, 0.0, x)                                   # back up
+        emit(40, 0.0, 0.0, x)  # back up
     return rows
 
 
 def _write_journal(tmp: Path, dive_id: str, rows, lat0=52.48, lon0=-1.9) -> Path:
     p = tmp / f"{dive_id}.jsonl"
     with open(p, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps({"type": "header", "dive_id": dive_id,
-                             "started_at": "2026-08-06T10:00:00Z",
-                             "origin": {"lat": lat0, "lon": lon0, "accuracy": 4.0,
-                                        "heading_deg": 90.0, "source": "phone", "t": None},
-                             "speed_lut_id": "default", "auto": False}) + "\n")
+        fh.write(
+            json.dumps(
+                {
+                    "type": "header",
+                    "dive_id": dive_id,
+                    "started_at": "2026-08-06T10:00:00Z",
+                    "origin": {
+                        "lat": lat0,
+                        "lon": lon0,
+                        "accuracy": 4.0,
+                        "heading_deg": 90.0,
+                        "source": "phone",
+                        "t": None,
+                    },
+                    "speed_lut_id": "default",
+                    "auto": False,
+                }
+            )
+            + "\n"
+        )
         for r in rows:
             fh.write(json.dumps(r) + "\n")
     return p
@@ -1215,14 +1391,17 @@ def _write_journal(tmp: Path, dive_id: str, rows, lat0=52.48, lon0=-1.9) -> Path
 def selftest(tmpdir: str | None = None) -> int:
     """Prove the maths recovers a bed it was not told, and refuses when it cannot."""
     import tempfile
+
     ok = True
     with tempfile.TemporaryDirectory(dir=tmpdir) as td:
         tmp = Path(td)
         cl, why = load_centreline(_synthetic_centreline(tmp))
         good = cl is not None
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  centreline read: "
-              f"{cl and cl.n_points} points, {cl and round(cl.length_m)} m ({why or ''})")
+        print(
+            f"  {'pass' if good else 'FAIL'}  centreline read: "
+            f"{cl and cl.n_points} points, {cl and round(cl.length_m)} m ({why or ''})"
+        )
         if cl is None:
             return 1
 
@@ -1235,15 +1414,18 @@ def selftest(tmpdir: str | None = None) -> int:
         got = ds and {c["cell"]: c[QUANTITY] for c in ds["cells"].values()}
         good = ds is not None and got == {5: 1.40, 15: 2.10}
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  two landings recovered at the right cells "
-              f"and depths: {got} (truth {{5: 1.4, 15: 2.1}}) ({why or ''})")
+        print(
+            f"  {'pass' if good else 'FAIL'}  two landings recovered at the right cells "
+            f"and depths: {got} (truth {{5: 1.4, 15: 2.1}}) ({why or ''})"
+        )
 
         # The label has to survive into the data, not just the print-out.
-        good = (ds is not None and all(c["bound"] == "lower" for c in ds["cells"].values())
-                and "lower_bound" in QUANTITY)
+        good = ds is not None and all(c["bound"] == "lower" for c in ds["cells"].values()) and "lower_bound" in QUANTITY
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  every cell carries the lower-bound label in "
-              f"its own field name ({QUANTITY}) and bound='lower'")
+        print(
+            f"  {'pass' if good else 'FAIL'}  every cell carries the lower-bound label in "
+            f"its own field name ({QUANTITY}) and bound='lower'"
+        )
 
         # ---- 2. two dives over one cell COMBINE, and take the max -------------
         store, why_m, _d = merge_dive(None, ds, cl)
@@ -1251,13 +1433,18 @@ def selftest(tmpdir: str | None = None) -> int:
         ds2, why2 = extract_dive(j2, cl, cell_m=8.0)
         store, why_m2, delta = merge_dive(store, ds2, cl)
         cell5 = next((c for c in store["cells"] if c["cell"] == 5), None) if store else None
-        good = (cell5 is not None and cell5[QUANTITY] == 1.85
-                and cell5["dives"] == ["dive-A", "dive-B"]
-                and cell5["deepest_from"]["dive_id"] == "dive-B")
+        good = (
+            cell5 is not None
+            and cell5[QUANTITY] == 1.85
+            and cell5["dives"] == ["dive-A", "dive-B"]
+            and cell5["deepest_from"]["dive_id"] == "dive-B"
+        )
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  a second, deeper dive over the same cell "
-              f"COMBINES: {cell5 and cell5[QUANTITY]} m from "
-              f"{cell5 and cell5['dives']} ({why_m or why_m2 or why2 or ''})")
+        print(
+            f"  {'pass' if good else 'FAIL'}  a second, deeper dive over the same cell "
+            f"COMBINES: {cell5 and cell5[QUANTITY]} m from "
+            f"{cell5 and cell5['dives']} ({why_m or why_m2 or why2 or ''})"
+        )
 
         shallower = _write_journal(tmp, "dive-C", _synthetic_dive([(44.0, 0.90)]))
         ds3, _ = extract_dive(shallower, cl, cell_m=8.0)
@@ -1265,27 +1452,37 @@ def selftest(tmpdir: str | None = None) -> int:
         cell5 = next(c for c in store["cells"] if c["cell"] == 5)
         good = cell5[QUANTITY] == 1.85 and cell5["samples"] > 0 and len(cell5["dives"]) == 3
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  ...and a shallower one does not pull the "
-              f"bound back up (still {cell5[QUANTITY]} m, {len(cell5['dives'])} dives, "
-              f"{cell5['samples']} samples)")
+        print(
+            f"  {'pass' if good else 'FAIL'}  ...and a shallower one does not pull the "
+            f"bound back up (still {cell5[QUANTITY]} m, {len(cell5['dives'])} dives, "
+            f"{cell5['samples']} samples)"
+        )
 
         # ---- 3. re-running a dive REPLACES, never double-counts ---------------
         n_before, cells_before = cell5["samples"], len(store["cells"])
         store, _, delta = merge_dive(store, ds2, cl)
         cell5 = next(c for c in store["cells"] if c["cell"] == 5)
-        good = (cell5["samples"] == n_before and delta["restated"] >= 1
-                and delta["added"] == 0 and len(store["cells"]) == cells_before)
+        good = (
+            cell5["samples"] == n_before
+            and delta["restated"] >= 1
+            and delta["added"] == 0
+            and len(store["cells"]) == cells_before
+        )
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  re-running the same dive replaces its own "
-              f"contribution ({n_before} -> {cell5['samples']} samples)")
+        print(
+            f"  {'pass' if good else 'FAIL'}  re-running the same dive replaces its own "
+            f"contribution ({n_before} -> {cell5['samples']} samples)"
+        )
 
         # ---- 4. provenance is per cell, per dive ------------------------------
-        good = (set(cell5["per_dive"]) == {"dive-A", "dive-B", "dive-C"}
-                and all("samples" in p and "confidence_mean" in p
-                        for p in cell5["per_dive"].values()))
+        good = set(cell5["per_dive"]) == {"dive-A", "dive-B", "dive-C"} and all(
+            "samples" in p and "confidence_mean" in p for p in cell5["per_dive"].values()
+        )
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  each cell names its dives, their sample "
-              f"counts and the confidence they carried ({sorted(cell5['per_dive'])})")
+        print(
+            f"  {'pass' if good else 'FAIL'}  each cell names its dives, their sample "
+            f"counts and the confidence they carried ({sorted(cell5['per_dive'])})"
+        )
 
         # ---- 5. the refusals --------------------------------------------------
         # (a) the sub never lands: it keeps sinking, so nothing stopped it.
@@ -1293,17 +1490,19 @@ def selftest(tmpdir: str | None = None) -> int:
         dsn, whyn = extract_dive(jn, cl, cell_m=8.0)
         good = dsn is None and "still filling" in (whyn or "")
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  a dive that never stops descending yields "
-              f"NOTHING and says why ({(whyn or '')[:72]}…)")
+        print(
+            f"  {'pass' if good else 'FAIL'}  a dive that never stops descending yields "
+            f"NOTHING and says why ({(whyn or '')[:72]}…)"
+        )
 
         # (b) no syringe level: equilibrium and the bed are indistinguishable.
-        jb = _write_journal(tmp, "dive-noball",
-                            _synthetic_dive([(44.0, 1.4)], ballast_col=False))
+        jb = _write_journal(tmp, "dive-noball", _synthetic_dive([(44.0, 1.4)], ballast_col=False))
         dsb, whyb = extract_dive(jb, cl, cell_m=8.0)
         good = dsb is None and "ballast" in (whyb or "")
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  a dive with no ballast column yields NOTHING "
-              f"({(whyb or '')[:72]}…)")
+        print(
+            f"  {'pass' if good else 'FAIL'}  a dive with no ballast column yields NOTHING " f"({(whyb or '')[:72]}…)"
+        )
 
         # (c) the MS5837 never answered — present, null throughout.
         rows = _synthetic_dive([(44.0, 1.4)])
@@ -1313,16 +1512,20 @@ def selftest(tmpdir: str | None = None) -> int:
         dsd, whyd = extract_dive(jd, cl, cell_m=8.0)
         good = dsd is None and "never answered once" in (whyd or "")
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  a dive whose pressure sensor never answered "
-              f"is refused as such, not as 'no soundings' ({(whyd or '')[:60]}…)")
+        print(
+            f"  {'pass' if good else 'FAIL'}  a dive whose pressure sensor never answered "
+            f"is refused as such, not as 'no soundings' ({(whyd or '')[:60]}…)"
+        )
 
         # (d) floating at the surface with the syringe filling is NOT a landing.
         jf = _write_journal(tmp, "dive-float", _synthetic_dive([(44.0, 0.0)]))
         dsf, whyf = extract_dive(jf, cl, cell_m=8.0)
         good = dsf is None
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  a sub floating while it fills is not a "
-              f"touchdown ({(whyf or '')[:64]}…)")
+        print(
+            f"  {'pass' if good else 'FAIL'}  a sub floating while it fills is not a "
+            f"touchdown ({(whyf or '')[:64]}…)"
+        )
 
         # (e) the compass died: the position is HELD, so the depth has no place.
         rows = _synthetic_dive([(44.0, 1.4)])
@@ -1332,15 +1535,19 @@ def selftest(tmpdir: str | None = None) -> int:
         dsh, whyh = extract_dive(jh, cl, cell_m=8.0)
         good = dsh is None and "HELD" in (whyh or "")
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  contact samples with a HELD position are "
-              f"discarded and the refusal says the depths were real ({(whyh or '')[:56]}…)")
+        print(
+            f"  {'pass' if good else 'FAIL'}  contact samples with a HELD position are "
+            f"discarded and the refusal says the depths were real ({(whyh or '')[:56]}…)"
+        )
 
         # (f) an absent centreline reports ABSENT — not an empty survey.
         _cl2, why2 = load_centreline(tmp / "no-such-area.geojson", "no-such-area")
         good = _cl2 is None and "ABSENT" in (why2 or "")
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  a missing centreline reports itself ABSENT "
-              f"rather than surveying nothing ({(why2 or '')[:52]}…)")
+        print(
+            f"  {'pass' if good else 'FAIL'}  a missing centreline reports itself ABSENT "
+            f"rather than surveying nothing ({(why2 or '')[:52]}…)"
+        )
 
         # (g) a different centreline cannot be accumulated into the same store. Same
         # area NAME, different geometry — which is exactly what a re-downloaded area
@@ -1350,16 +1557,17 @@ def selftest(tmpdir: str | None = None) -> int:
         bad, whyx, _ = merge_dive(store, {**ds, "centreline": cl2.meta()}, cl2)
         good = bad is None and "distance-along" in (whyx or "").lower()
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  a store will not accumulate soundings taken "
-              f"against a different centreline ({(whyx or '')[:52]}…)")
+        print(
+            f"  {'pass' if good else 'FAIL'}  a store will not accumulate soundings taken "
+            f"against a different centreline ({(whyx or '')[:52]}…)"
+        )
 
         # (h) a cell size mismatch is refused for the same reason.
         ds8 = dict(ds, cell_length_m=5.0)
         bad2, whyy, _ = merge_dive(store, ds8, cl)
         good = bad2 is None and "cell 47" in (whyy or "")
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  ...and will not mix cell sizes "
-              f"({(whyy or '')[:52]}…)")
+        print(f"  {'pass' if good else 'FAIL'}  ...and will not mix cell sizes " f"({(whyy or '')[:52]}…)")
 
         # ---- 5b. THE CHIP THAT STOPPED MID-DIVE -------------------------------
         # Not the same case as a sensor that was never fitted. The column is PRESENT
@@ -1375,60 +1583,78 @@ def selftest(tmpdir: str | None = None) -> int:
         jp = _write_journal(tmp, "dive-died", rows)
         dsp, whyp = extract_dive(jp, cl, cell_m=8.0)
         gotp = dsp and {c["cell"]: c[QUANTITY] for c in dsp["cells"].values()}
-        good = (dsp is not None and gotp == {5: 1.40}
-                and dsp["columns"]["depth_m"] == "partial")
+        good = dsp is not None and gotp == {5: 1.40} and dsp["columns"]["depth_m"] == "partial"
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  a dive whose depth sensor died halfway keeps "
-              f"the landing it measured and invents no second one: {gotp} "
-              f"(depth column '{dsp and dsp['columns']['depth_m']}') ({whyp or ''})")
+        print(
+            f"  {'pass' if good else 'FAIL'}  a dive whose depth sensor died halfway keeps "
+            f"the landing it measured and invents no second one: {gotp} "
+            f"(depth column '{dsp and dsp['columns']['depth_m']}') ({whyp or ''})"
+        )
 
         # ---- 5c. the multi-journal entry point and the layer it writes --------
         res = build_soundings([j1, j2, shallower], cl.source, cell_m=8.0)
         spans = {(c["from_m"], c["to_m"]): c[QUANTITY] for c in res["cells"]}
-        good = (spans.get((40.0, 48.0)) == 1.85 and spans.get((120.0, 128.0)) == 2.10
-                and res["reason"] is None and res["cell_m"] == 8.0)
+        good = (
+            spans.get((40.0, 48.0)) == 1.85
+            and spans.get((120.0, 128.0)) == 2.10
+            and res["reason"] is None
+            and res["cell_m"] == 8.0
+        )
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  build_soundings() takes several journals at "
-              f"once and combines them: {sorted(spans.items())}")
+        print(
+            f"  {'pass' if good else 'FAIL'}  build_soundings() takes several journals at "
+            f"once and combines them: {sorted(spans.items())}"
+        )
 
         # An empty answer and an empty answer are not the same empty answer.
         r_none = build_soundings([], cl.source, cell_m=8.0)
         r_dead = build_soundings([jd], cl.source, cell_m=8.0)
-        good = (r_none["cells"] == [] and r_dead["cells"] == []
-                and r_none["reason"] and r_dead["reason"]
-                and r_none["reason"] != r_dead["reason"])
+        good = (
+            r_none["cells"] == []
+            and r_dead["cells"] == []
+            and r_none["reason"]
+            and r_dead["reason"]
+            and r_none["reason"] != r_dead["reason"]
+        )
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  'nobody has dived here' and 'a dive was flown "
-              f"with a dead sensor' are DIFFERENT reasons, not one empty list")
+        print(
+            f"  {'pass' if good else 'FAIL'}  'nobody has dived here' and 'a dive was flown "
+            f"with a dead sensor' are DIFFERENT reasons, not one empty list"
+        )
 
         gj = write_geojson(res, tmp / "soundings.geojson")
         doc = json.loads(Path(gj).read_text(encoding="utf-8"))
-        bare = [f for f in doc["features"]
-                if "lower" not in json.dumps(f["properties"]).lower()]
-        good = (doc["surveyed"] is True and not bare
-                and all(f["properties"]["bound"] == "lower" for f in doc["features"]))
+        bare = [f for f in doc["features"] if "lower" not in json.dumps(f["properties"]).lower()]
+        good = (
+            doc["surveyed"] is True and not bare and all(f["properties"]["bound"] == "lower" for f in doc["features"])
+        )
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  the layer on disk labels EVERY feature a "
-              f"lower bound, not just the file ({len(doc['features'])} features, "
-              f"{len(bare)} bare)")
+        print(
+            f"  {'pass' if good else 'FAIL'}  the layer on disk labels EVERY feature a "
+            f"lower bound, not just the file ({len(doc['features'])} features, "
+            f"{len(bare)} bare)"
+        )
 
         gj2 = write_geojson(r_dead, tmp / "empty.geojson")
         doc2 = json.loads(Path(gj2).read_text(encoding="utf-8"))
         good = doc2["surveyed"] is False and bool(doc2["reason"])
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  a survey with no cells still writes a file "
-              f"that says it is UNSURVEYED and why, rather than empty clear water")
+        print(
+            f"  {'pass' if good else 'FAIL'}  a survey with no cells still writes a file "
+            f"that says it is UNSURVEYED and why, rather than empty clear water"
+        )
 
         # ---- 6. round-trip on disk -------------------------------------------
         sp = tmp / "store.json"
         save_store(sp, store)
         back = load_store(sp)
         cell5b = next(c for c in back["cells"] if c["cell"] == 5)
-        good = (back["quantity"] == QUANTITY and cell5b[QUANTITY] == 1.85
-                and "UNSURVEYED" in back["unsurveyed"])
+        good = back["quantity"] == QUANTITY and cell5b[QUANTITY] == 1.85 and "UNSURVEYED" in back["unsurveyed"]
         ok &= good
-        print(f"  {'pass' if good else 'FAIL'}  the store round-trips with the quantity, the "
-              f"bound and the meaning of an absent cell written into the file")
+        print(
+            f"  {'pass' if good else 'FAIL'}  the store round-trips with the quantity, the "
+            f"bound and the meaning of an absent cell written into the file"
+        )
 
     print("\nselftest " + ("passed" if ok else "FAILED"))
     return 0 if ok else 1
@@ -1437,16 +1663,19 @@ def selftest(tmpdir: str | None = None) -> int:
 # ==========================================================================
 def main(argv=None) -> int:
     """CLI entry point. Same contract as calibrate.main: parses argv, returns a code."""
-    ap = argparse.ArgumentParser(prog="nav.soundings", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        prog="nav.soundings", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("dive", nargs="?", help="path to a dive .jsonl journal")
     ap.add_argument("--area", help="area name; its centreline is data/areas/<area>.geojson")
     ap.add_argument("--centreline", help="explicit centreline GeoJSON (overrides --area)")
-    ap.add_argument("--store", help="sounding store to accumulate into "
-                                    "(default: data/soundings/<area>.json)")
-    ap.add_argument("--cell-m", type=float, default=CELL_M_DEFAULT,
-                    help=f"cell length along the channel, {CELL_M_MIN:.0f}-{CELL_M_MAX:.0f} m "
-                         f"(default {CELL_M_DEFAULT:.0f})")
+    ap.add_argument("--store", help="sounding store to accumulate into " "(default: data/soundings/<area>.json)")
+    ap.add_argument(
+        "--cell-m",
+        type=float,
+        default=CELL_M_DEFAULT,
+        help=f"cell length along the channel, {CELL_M_MIN:.0f}-{CELL_M_MAX:.0f} m " f"(default {CELL_M_DEFAULT:.0f})",
+    )
     ap.add_argument("--dry-run", action="store_true", help="report, write nothing")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--selftest", action="store_true", help="check the maths and the refusals")
@@ -1463,9 +1692,11 @@ def main(argv=None) -> int:
         # Not clamped silently. A 1 m cell would imply a longitudinal precision the
         # dead reckoner does not have, and a 100 m cell would average two pounds and
         # a lock together; either would still look like a perfectly good map.
-        ap.error(f"--cell-m must be between {CELL_M_MIN:.0f} and {CELL_M_MAX:.0f} "
-                 f"(position error along the channel does not support finer, and coarser "
-                 f"stops being a survey)")
+        ap.error(
+            f"--cell-m must be between {CELL_M_MIN:.0f} and {CELL_M_MAX:.0f} "
+            f"(position error along the channel does not support finer, and coarser "
+            f"stops being a survey)"
+        )
     if not a.centreline and not a.area:
         ap.error("give --area <name> (uses data/areas/<name>.geojson) or --centreline <file>")
 

@@ -2,6 +2,7 @@
 paddlewheel / tether encoder, spec §5.1). The service reads SensorSamples from
 here at dr_hz.
 """
+
 from __future__ import annotations
 
 import logging
@@ -111,8 +112,7 @@ def _hw_sample_fields(rov, hw) -> dict:
     # dive log as a measurement.
     surface_psi = settings_surface_psi()
     pressure = _num(_readback(hw, "read_pressure"))
-    depth = (None if pressure is None
-             else max(0.0, (pressure - surface_psi) / settings_psi_per_m()))
+    depth = None if pressure is None else max(0.0, (pressure - surface_psi) / settings_psi_per_m())
 
     # Use the ACTUAL thruster output, not the commanded throttle.
     #
@@ -197,6 +197,7 @@ def _hw_sample_fields(rov, hw) -> dict:
 
 class SensorSource:
     is_sim = False
+
     def read(self, dt: float) -> SensorSample | None: ...
     def reset(self) -> None: ...
 
@@ -206,14 +207,14 @@ class SimSensorSource(SensorSource):
 
     def __init__(self) -> None:
         self._clock = 0.0
-        self._sim = Simulator(hold_at_end=True)   # never stops; flies the last leg
+        self._sim = Simulator(hold_at_end=True)  # never stops; flies the last leg
         log.info("nav sensors: SIMULATOR (scripted path, drift + mag + current)")
 
     def read(self, dt: float) -> SensorSample | None:
         self._clock += dt
         s = self._sim.step(dt)
         if s is not None:
-            s.t = round(self._clock, 3)           # continuous clock across the run
+            s.t = round(self._clock, 3)  # continuous clock across the run
         return s
 
     def truth_row(self) -> dict:
@@ -284,9 +285,7 @@ class RealSensorSource(SensorSource):
         # hidden in a helper default, so the exception is visible and arguable.
         payout = _num(_readback(hw, "read_payout_m"))
         payout = 0.0 if payout is None else max(0.0, payout)
-        return SensorSample(t=round(self._t, 3),
-                            encoder_m=round(payout, 3),
-                            **_hw_sample_fields(rov, hw))
+        return SensorSample(t=round(self._t, 3), encoder_m=round(payout, 3), **_hw_sample_fields(rov, hw))
 
     def reset(self) -> None:
         self._t = 0.0
@@ -354,6 +353,7 @@ class VehicleSensorSource(SensorSource):
 def settings_surface_psi() -> float:
     try:
         from config import settings as rov_settings
+
         return float(rov_settings.surface_pressure_psi)
     except Exception:  # noqa: BLE001
         return 14.7
@@ -362,6 +362,7 @@ def settings_surface_psi() -> float:
 def settings_psi_per_m() -> float:
     try:
         from config import settings as rov_settings
+
         return float(rov_settings.psi_per_meter) or 1.42
     except Exception:  # noqa: BLE001
         return 1.42
@@ -370,7 +371,7 @@ def settings_psi_per_m() -> float:
 def get_sensor_source(get_rov=None) -> SensorSource:
     choice = settings.sensor_backend.lower()
     if choice == "sim":
-        return SimSensorSource()                 # scripted demo path, ignores the operator
+        return SimSensorSource()  # scripted demo path, ignores the operator
     if choice == "real":
         try:
             return RealSensorSource(get_rov)

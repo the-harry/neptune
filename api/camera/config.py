@@ -1,6 +1,7 @@
 """Camera-service configuration. All values from the build spec / HAR captures.
 Env-overridable so tests can point the CGI client at the mock.
 """
+
 from __future__ import annotations
 
 import os
@@ -113,9 +114,10 @@ def read_name_for(write_prop: str) -> str:
     """
     if write_prop in WRITE_TO_READ:
         return WRITE_TO_READ[write_prop]
-    if "." in write_prop:                 # already dotted (Camera.Preview.H264.w)
+    if "." in write_prop:  # already dotted (Camera.Preview.H264.w)
         return write_prop
     return f"Camera.Menu.{write_prop}"
+
 
 # Operations that block the server for ~seconds (spec §3.3c) → slow timeout + settle.
 SLOW_PROPERTIES = frozenset({"Video", "Camera.Menu.UIMode", "Playback", "SD0", "Videores", "Imageres"})

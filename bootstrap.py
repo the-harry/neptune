@@ -18,6 +18,7 @@ There are two machines in this system and they need opposite things:
 Deliberately read-only unless asked. A bootstrap that silently installs things is
 one you cannot run to find out where you stand, which is the main reason to have one.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -44,12 +45,9 @@ OK, WARN, BAD = "  ok  ", " note ", " MISS "
 # is find_spec and never an import: importing gpiozero off a Pi is slow at best.
 # Keep this list in step with api/requirements.txt and docs/hardware.md §1.3.
 HW_DEPS = (
-    ("gpiozero", "gpiozero",
-     "thrusters, stepper, limit switches, leak probes, pulse counting"),
-    ("smbus2", "smbus2",
-     "I2C bus: MS5837 depth, INA219 pack voltage/current"),
-    ("adafruit_bno08x", "adafruit-circuitpython-bno08x",
-     "BNO085: heading, mag-cal status, gyro rate, linear accel"),
+    ("gpiozero", "gpiozero", "thrusters, stepper, limit switches, leak probes, pulse counting"),
+    ("smbus2", "smbus2", "I2C bus: MS5837 depth, INA219 pack voltage/current"),
+    ("adafruit_bno08x", "adafruit-circuitpython-bno08x", "BNO085: heading, mag-cal status, gyro rate, linear accel"),
 )
 
 # The api's CORE libraries: the first section of api/requirements.txt, the ones BOTH
@@ -88,13 +86,14 @@ CORE_DEPS = (
 #
 # Keep this list in step with the handheld section of api/requirements.txt.
 MAP_DEPS = (
-    ("numpy", "numpy",
-     "the elevation grid itself - every array, mask and statistic in nav/lidar.py"),
-    ("scipy", "scipy",
-     "scipy.ndimage in nav/bank.py: the corridor buffer, the gradients, and the "
-     "distance transform that measures a bank against its nearest water"),
-    ("PIL", "Pillow",
-     "decodes the float32 GeoTIFF the service returns and writes the overlay PNGs"),
+    ("numpy", "numpy", "the elevation grid itself - every array, mask and statistic in nav/lidar.py"),
+    (
+        "scipy",
+        "scipy",
+        "scipy.ndimage in nav/bank.py: the corridor buffer, the gradients, and the "
+        "distance transform that measures a bank against its nearest water",
+    ),
+    ("PIL", "Pillow", "decodes the float32 GeoTIFF the service returns and writes the overlay PNGs"),
 )
 
 # Tools that belong to a DESK, not to either machine in this system: (module to probe,
@@ -117,19 +116,24 @@ MAP_DEPS = (
 # Keep this list in step with the dev tooling and code tools sections of
 # api/requirements.txt, which carry the pinned versions and the install commands.
 DEV_TOOLS = (
-    ("coverage", "coverage",
-     "python api/tests/run.py --coverage - which lines and branches of api/ the "
-     "suites actually execute"),
-    ("black", "black",
-     "python lint.py - formatting at 120 columns, and --fix to apply it"),
-    ("flake8", "flake8",
-     "python lint.py - the lint proper at 120 columns (setup.cfg; flake8 cannot "
-     "read pyproject.toml)"),
-    ("isort", "isort",
-     "python lint.py - import order, on black's profile so the two agree"),
-    ("mypy", "mypy",
-     "python lint.py - types over api/: light by default, strict at the public "
-     "boundaries (protocol, hardware, nav.models, camera.models)"),
+    (
+        "coverage",
+        "coverage",
+        "python api/tests/run.py --coverage - which lines and branches of api/ the " "suites actually execute",
+    ),
+    ("black", "black", "python lint.py - formatting at 120 columns, and --fix to apply it"),
+    (
+        "flake8",
+        "flake8",
+        "python lint.py - the lint proper at 120 columns (setup.cfg; flake8 cannot " "read pyproject.toml)",
+    ),
+    ("isort", "isort", "python lint.py - import order, on black's profile so the two agree"),
+    (
+        "mypy",
+        "mypy",
+        "python lint.py - types over api/: light by default, strict at the public "
+        "boundaries (protocol, hardware, nav.models, camera.models)",
+    ),
 )
 
 
@@ -186,11 +190,13 @@ def is_pi() -> bool:
 
 
 def find_browser() -> str | None:
-    for p in (r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-              r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-              os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
-              r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-              "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"):
+    for p in (
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    ):
         if p and Path(p).exists():
             return p
     for n in ("google-chrome", "chromium", "chromium-browser", "chrome", "msedge"):
@@ -208,8 +214,7 @@ def check_common() -> int:
     else:
         say(BAD, "python 3.9+", f"found {v.major}.{v.minor}")
         missing += 1
-    say(OK if shutil.which("git") else WARN, "git",
-        shutil.which("git") or "not on PATH (only needed to update)")
+    say(OK if shutil.which("git") else WARN, "git", shutil.which("git") or "not on PATH (only needed to update)")
     for p in ("client/index.html", "api/main.py", "api/requirements.txt"):
         if not (ROOT / p).exists():
             say(BAD, f"{p}", "missing - is this a full checkout?")
@@ -233,12 +238,16 @@ def topside(args) -> int:
     # through to "Everything this machine needs is present." at the bottom, because the
     # line was drawn from a condition nobody added to the tally - a report that
     # contradicts itself six lines apart is worse than one that never mentioned it.
-    missing += (0 if launcher.exists() else 1)
+    missing += 0 if launcher.exists() else 1
 
     hostfile = ROOT / "client" / "launch" / "neptune-host.txt"
     if hostfile.exists():
-        say(OK, "vehicle address", hostfile.read_text(encoding="utf-8", errors="replace").strip()
-            or "(empty - the client will run the simulator)")
+        say(
+            OK,
+            "vehicle address",
+            hostfile.read_text(encoding="utf-8", errors="replace").strip()
+            or "(empty - the client will run the simulator)",
+        )
     else:
         say(WARN, "vehicle address", "no neptune-host.txt - the client runs the simulator")
 
@@ -256,7 +265,7 @@ def topside(args) -> int:
             say(BAD, "tests", "need a browser")
             return missing + 1
         rc = call([sys.executable, str(ROOT / "client" / "tests" / "run.py")])
-        missing += (1 if rc else 0)
+        missing += 1 if rc else 0
     else:
         # THE SUITE COUNT IS COUNTED, NOT REMEMBERED - one file per suite, so the one
         # number that can drift silently is derived from the tree instead. The CHECK
@@ -372,6 +381,7 @@ def probe_imports(py: Path | None, mods: tuple[str, ...]) -> dict[str, bool]:
     A venv that will not answer reports its modules ABSENT rather than assumed present:
     this check exists to find out, and "could not find out" is not "fine".
     """
+
     def here(m: str) -> bool:
         try:
             return importlib.util.find_spec(m) is not None
@@ -380,14 +390,15 @@ def probe_imports(py: Path | None, mods: tuple[str, ...]) -> dict[str, bool]:
 
     if py is None:
         return {m: here(m) for m in mods}
-    code = ("import importlib.util as u, sys\n"
-            "def ok(m):\n"
-            "    try: return u.find_spec(m) is not None\n"
-            "    except Exception: return False\n"
-            "print(''.join('1' if ok(m) else '0' for m in sys.argv[1:]))\n")
+    code = (
+        "import importlib.util as u, sys\n"
+        "def ok(m):\n"
+        "    try: return u.find_spec(m) is not None\n"
+        "    except Exception: return False\n"
+        "print(''.join('1' if ok(m) else '0' for m in sys.argv[1:]))\n"
+    )
     try:
-        out = subprocess.run([str(py), "-c", code, *mods],
-                             capture_output=True, text=True, timeout=60)
+        out = subprocess.run([str(py), "-c", code, *mods], capture_output=True, text=True, timeout=60)
         flags = (out.stdout.strip().splitlines() or [""])[-1]
         if len(flags) == len(mods) and set(flags) <= {"0", "1"}:
             return {m: f == "1" for m, f in zip(mods, flags)}
@@ -412,8 +423,7 @@ def core_deps() -> int:
     """
     print("\n--- API CORE LIBRARIES ---")
     py = venv_python()
-    say(OK if py else WARN, "interpreter", str(py) if py else
-        f"no repo venv - checking {sys.executable}")
+    say(OK if py else WARN, "interpreter", str(py) if py else f"no repo venv - checking {sys.executable}")
     found = probe_imports(py, tuple(m for m, _ in CORE_DEPS))
     absent = [m for m, _ in CORE_DEPS if not found[m]]
     on_pi = is_pi()
@@ -421,8 +431,7 @@ def core_deps() -> int:
         # The absent ones say "not installed" in the detail, in the same shape as
         # hardware_deps. Printing only the description left four [ note ] lines that a
         # reader skims as four things that are fine.
-        say(OK if found[mod] else (BAD if on_pi else WARN), mod,
-            what if found[mod] else f"not installed   ({what})")
+        say(OK if found[mod] else (BAD if on_pi else WARN), mod, what if found[mod] else f"not installed   ({what})")
     if not absent:
         return 0
     if on_pi:
@@ -479,8 +488,7 @@ def map_deps() -> int:
         if found[mod]:
             say(OK, pkg, what)
         elif on_pi:
-            say(WARN, pkg, f"not needed here, and not wanted - the vehicle is not a "
-                           f"chart server   ({what})")
+            say(WARN, pkg, f"not needed here, and not wanted - the vehicle is not a " f"chart server   ({what})")
         else:
             say(BAD, pkg, f"not installed   ({what})")
     if on_pi:
@@ -498,8 +506,7 @@ def map_deps() -> int:
     print("  `python -m nav.cli bank-fetch --libs` asks the same question of the api's")
     print("  own interpreter and exits non-zero, so a pre-trip check can gate on it.")
     print("\n  One command fixes it, and it installs nothing else:")
-    print(f"      {py or sys.executable} -m pip install "
-          + " ".join(pkg for pkg, _ in absent))
+    print(f"      {py or sys.executable} -m pip install " + " ".join(pkg for pkg, _ in absent))
     return len(absent)
 
 
@@ -524,8 +531,7 @@ def dev_tools() -> None:
     found = probe_imports(py, tuple(m for m, _, _ in DEV_TOOLS))
     absent = [(pkg, what) for mod, pkg, what in DEV_TOOLS if not found[mod]]
     for mod, pkg, what in DEV_TOOLS:
-        say(OK if found[mod] else WARN, pkg,
-            what if found[mod] else f"not installed   ({what})")
+        say(OK if found[mod] else WARN, pkg, what if found[mod] else f"not installed   ({what})")
     if not absent:
         return
     print("  Optional, absent by default, and NOT counted below. None of it is in")
@@ -537,8 +543,7 @@ def dev_tools() -> None:
     print("  python lint.py names each absent tool, refuses to call the run clean, and")
     print("  exits non-zero. Nothing is silently skipped and nothing silently passes.")
     print("\n  Nothing here is installed by this check. If you want it:")
-    print(f"      {py or sys.executable} -m pip install "
-          + " ".join(pkg for pkg, _ in absent))
+    print(f"      {py or sys.executable} -m pip install " + " ".join(pkg for pkg, _ in absent))
     print("  api/requirements.txt carries the same command with a version pin on each of")
     print("  the code tools and the reason for the pin written beside it.")
 
@@ -569,9 +574,13 @@ def api_suite_totals(py: Path | None):
     if not suite.exists():
         return None
     try:
-        out = subprocess.run([str(py or sys.executable), str(suite), "--list", "--no-venv"],
-                             capture_output=True, text=True, timeout=120,
-                             cwd=str(ROOT / "api"))
+        out = subprocess.run(
+            [str(py or sys.executable), str(suite), "--list", "--no-venv"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(ROOT / "api"),
+        )
     except Exception:  # noqa: BLE001 - an interpreter that will not start is "cannot say"
         return None
     if out.returncode != 0:
@@ -585,7 +594,7 @@ def api_suite_totals(py: Path | None):
         m = re.search(r"\b(\d+) checks$", line)
         if m:
             checks += int(m.group(1))
-        else:                       # "<name>   cannot load here - needs <package>"
+        else:  # "<name>   cannot load here - needs <package>"
             blocked.append(line.split()[0])
     return (suites, checks, blocked) if suites else None
 
@@ -605,17 +614,28 @@ def api_tests(args) -> int:
         # remembered number, for the same reason.
         totals = api_suite_totals(venv_python())
         if totals is None:
-            say(WARN, "api tests", "python api/tests/run.py   "
-                                   "(could not ask it how many checks it has; "
-                                   "run it and read the total off the run)")
+            say(
+                WARN,
+                "api tests",
+                "python api/tests/run.py   "
+                "(could not ask it how many checks it has; "
+                "run it and read the total off the run)",
+            )
         elif totals[2]:
-            say(WARN, "api tests", f"python api/tests/run.py   ({totals[0]} suites, "
-                                   f"{totals[1]} checks loadable in this python; "
-                                   f"{len(totals[2])} suite(s) cannot load here "
-                                   f"({', '.join(totals[2])}) - see API CORE LIBRARIES above)")
+            say(
+                WARN,
+                "api tests",
+                f"python api/tests/run.py   ({totals[0]} suites, "
+                f"{totals[1]} checks loadable in this python; "
+                f"{len(totals[2])} suite(s) cannot load here "
+                f"({', '.join(totals[2])}) - see API CORE LIBRARIES above)",
+            )
         else:
-            say(WARN, "api tests", f"python api/tests/run.py   ({totals[0]} suites, "
-                                   f"{totals[1]} checks; or pass --test)")
+            say(
+                WARN,
+                "api tests",
+                f"python api/tests/run.py   ({totals[0]} suites, " f"{totals[1]} checks; or pass --test)",
+            )
         return 0
     # The venv interpreter whenever there is one (see venv_python): fastapi, pydantic and
     # httpx were installed INTO it, and the suite imports the API's own modules. Running
@@ -625,8 +645,11 @@ def api_tests(args) -> int:
     # this working if that ever gets a --no-venv in front of it.
     py = venv_python()
     if py is None:
-        say(WARN, "interpreter", f"no venv - running under {sys.executable} "
-                                 "(pass --dev to build one if the imports fail)")
+        say(
+            WARN,
+            "interpreter",
+            f"no venv - running under {sys.executable} " "(pass --dev to build one if the imports fail)",
+        )
     # cwd=api because the API's imports are rooted there (`from config import settings`),
     # the same way the README and install.sh run it.
     rc = call([str(py or sys.executable), str(suite)], cwd=str(ROOT / "api"))
@@ -634,8 +657,7 @@ def api_tests(args) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dev", action="store_true", help="build the API virtualenv")
     ap.add_argument("--test", action="store_true", help="run the test suites")
     args = ap.parse_args()

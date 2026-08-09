@@ -44,6 +44,7 @@ there is no waterway geometry at all it returns None — ABSENT — and never an
 empty FeatureCollection, because "no water mapped here" and "no depth guidance
 here" are different claims and neither of them is "the canal is not there".
 """
+
 from __future__ import annotations
 
 import json
@@ -87,6 +88,7 @@ _PLAUSIBLE_M = (0.1, 40.0)
 # attribute, `draught_from_props` uses THAT and this table is not consulted; the
 # table is the fallback for water we have geometry for and dimensions for.
 
+
 @dataclass(frozen=True)
 class Guideline:
     """One class of waterway and the published guidance for it.
@@ -96,17 +98,20 @@ class Guideline:
     and a single number is what a renderer needs. Showing only the number would
     let a 7 cm difference between two sections read as a survey result.
     """
+
     waterway: str
-    label: str                       # what an operator calls this water
-    draught_m: float | None          # the figure used as the nominal, or None
+    label: str  # what an operator calls this water
+    draught_m: float | None  # the figure used as the nominal, or None
     band_m: tuple[float, float] | None
-    source: str                      # where the figure came from, in a full sentence
+    source: str  # where the figure came from, in a full sentence
 
 
-_CRT_NOTE = ("Canal & River Trust publish maximum-draught guidance per navigation; "
-             "this figure was typed into api/nav/nominal.py by hand from that published "
-             "guidance and has never been downloaded, measured or checked against this "
-             "stretch of water")
+_CRT_NOTE = (
+    "Canal & River Trust publish maximum-draught guidance per navigation; "
+    "this figure was typed into api/nav/nominal.py by hand from that published "
+    "guidance and has never been downloaded, measured or checked against this "
+    "stretch of water"
+)
 
 GUIDELINES: dict[str, Guideline] = {
     # THE TRUST'S OWN GAUGE, when a downloaded layer carries it. Verified on a live
@@ -116,26 +121,43 @@ GUIDELINES: dict[str, Guideline] = {
     # published guideline applies to this length of canal, which is a great deal
     # better than assuming.
     "narrow": Guideline(
-        waterway="narrow", label="narrow canal", draught_m=1.07, band_m=(1.0, 1.2),
-        source=(_CRT_NOTE + ". Narrow-canal guidance clusters at 3 ft 6 in (1.07 m) of "
-                "draught, inside a mid-channel depth band of roughly 1.0–1.2 m")),
+        waterway="narrow",
+        label="narrow canal",
+        draught_m=1.07,
+        band_m=(1.0, 1.2),
+        source=(
+            _CRT_NOTE + ". Narrow-canal guidance clusters at 3 ft 6 in (1.07 m) of "
+            "draught, inside a mid-channel depth band of roughly 1.0–1.2 m"
+        ),
+    ),
     "broad": Guideline(
-        waterway="broad", label="broad canal", draught_m=1.22, band_m=(1.2, 1.4),
-        source=(_CRT_NOTE + ". Broad-canal guidance runs about a foot deeper than "
-                "narrow — 4 ft (1.22 m) of draught, in a mid-channel band of roughly "
-                "1.2–1.4 m")),
+        waterway="broad",
+        label="broad canal",
+        draught_m=1.22,
+        band_m=(1.2, 1.4),
+        source=(
+            _CRT_NOTE + ". Broad-canal guidance runs about a foot deeper than "
+            "narrow — 4 ft (1.22 m) of draught, in a mid-channel band of roughly "
+            "1.2–1.4 m"
+        ),
+    ),
     # A canal whose gauge nobody stated. OSM's `waterway=canal` says nothing about
     # narrow versus broad, so this row takes the NARROW figure and says out loud
     # that it is an assumption. Under-stating the water is the safe direction to be
     # wrong in for a vehicle whose hazard is the bottom: a broad canal treated as
     # narrow makes an operator cautious, and the reverse makes them confident.
     "canal": Guideline(
-        waterway="canal", label="canal of unstated gauge", draught_m=1.07,
+        waterway="canal",
+        label="canal of unstated gauge",
+        draught_m=1.07,
         band_m=(1.0, 1.2),
-        source=(_CRT_NOTE + ". Nothing in the source says whether this is a narrow or "
-                "a broad canal, so the NARROW figure (3 ft 6 in / 1.07 m) is used — "
-                "the shallower of the two guidelines, which is the direction this "
-                "layer is deliberately wrong in")),
+        source=(
+            _CRT_NOTE + ". Nothing in the source says whether this is a narrow or "
+            "a broad canal, so the NARROW figure (3 ft 6 in / 1.07 m) is used — "
+            "the shallower of the two guidelines, which is the direction this "
+            "layer is deliberately wrong in"
+        ),
+    ),
     # A river IS navigable water and CRT do publish figures for the ones they
     # manage — but per navigation, and per reach within a navigation, because a
     # river's depth is set by its flow and its weirs and not by the fact that it
@@ -143,22 +165,40 @@ GUIDELINES: dict[str, Guideline] = {
     # nothing rather than inventing an average. A section that lands here comes
     # out with a null nominal and the reason attached.
     "river": Guideline(
-        waterway="river", label="river navigation", draught_m=None, band_m=None,
-        source=("Canal & River Trust publish river draughts per navigation and per "
-                "reach, not per class — there is no class-level figure to quote, so "
-                "this section has no nominal depth rather than an averaged one")),
+        waterway="river",
+        label="river navigation",
+        draught_m=None,
+        band_m=None,
+        source=(
+            "Canal & River Trust publish river draughts per navigation and per "
+            "reach, not per class — there is no class-level figure to quote, so "
+            "this section has no nominal depth rather than an averaged one"
+        ),
+    ),
     # Not navigations at all. Nobody publishes a draught for a field drain because
     # nothing is meant to float on it. They appear in an Overpass waterway query
     # (satellite.fetch_centreline asks for them) so they have to be answered for.
     "stream": Guideline(
-        waterway="stream", label="stream", draught_m=None, band_m=None,
-        source="not a navigation — no authority publishes a draught for it"),
+        waterway="stream",
+        label="stream",
+        draught_m=None,
+        band_m=None,
+        source="not a navigation — no authority publishes a draught for it",
+    ),
     "ditch": Guideline(
-        waterway="ditch", label="ditch", draught_m=None, band_m=None,
-        source="not a navigation — no authority publishes a draught for it"),
+        waterway="ditch",
+        label="ditch",
+        draught_m=None,
+        band_m=None,
+        source="not a navigation — no authority publishes a draught for it",
+    ),
     "drain": Guideline(
-        waterway="drain", label="drain", draught_m=None, band_m=None,
-        source="not a navigation — no authority publishes a draught for it"),
+        waterway="drain",
+        label="drain",
+        draught_m=None,
+        band_m=None,
+        source="not a navigation — no authority publishes a draught for it",
+    ),
 }
 
 # Attribute names a downloaded waterway feature might carry its own draught in,
@@ -173,9 +213,16 @@ GUIDELINES: dict[str, Guideline] = {
 #                               only entries here that are NOT a draught, hence
 #                               their own basis sentence in draught_from_props
 DRAUGHT_FIELDS: tuple[str, ...] = (
-    "max_draught", "maxdraught", "MAX_DRAUGHT", "MaxDraught",
-    "draught", "draft", "DRAUGHT",
-    "depth", "depth_m", "DEPTH",
+    "max_draught",
+    "maxdraught",
+    "MAX_DRAUGHT",
+    "MaxDraught",
+    "draught",
+    "draft",
+    "DRAUGHT",
+    "depth",
+    "depth_m",
+    "DEPTH",
 )
 
 # The subset of the above that are depths rather than draughts — a depth needs no
@@ -200,16 +247,16 @@ _CLASS_FIELDS: tuple[str, ...] = ("waterway", "WATERWAY", "class", "type", "navi
 # would be the layer's worst possible failure — a confident metre of water drawn
 # over a pound with none in it. Anything that is not unambiguously navigable comes
 # out with NO nominal depth and the status attached.
-NAV_STATUS_FIELDS: tuple[str, ...] = ("sapnavstatus", "SAPNAVSTATUS", "navstatus",
-                                      "navigation_status")
+NAV_STATUS_FIELDS: tuple[str, ...] = ("sapnavstatus", "SAPNAVSTATUS", "navstatus", "navigation_status")
 _NAVIGABLE = "fully navigable"
 
 
 # ---------------------------------------------------------------------------
 # Reading a draught out of whatever a layer happens to carry
 # ---------------------------------------------------------------------------
-_FT_IN = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(?:'|ft|feet)\s*(?:(\d+(?:\.\d+)?)\s*(?:\"|in|inch(?:es)?)?)?\s*$",
-                    re.IGNORECASE)
+_FT_IN = re.compile(
+    r"^\s*(\d+(?:\.\d+)?)\s*(?:'|ft|feet)\s*(?:(\d+(?:\.\d+)?)\s*(?:\"|in|inch(?:es)?)?)?\s*$", re.IGNORECASE
+)
 _METRES = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(?:m|metres?|meters?)?\s*$", re.IGNORECASE)
 
 
@@ -227,7 +274,7 @@ def parse_draught(raw) -> tuple[float | None, str]:
     """
     if raw is None:
         return None, "no value"
-    if isinstance(raw, bool):        # JSON true/false in a numeric field is corruption
+    if isinstance(raw, bool):  # JSON true/false in a numeric field is corruption
         return None, f"value {raw!r} is a boolean, not a length"
     if isinstance(raw, (int, float)):
         v = float(raw)
@@ -249,13 +296,14 @@ def parse_draught(raw) -> tuple[float | None, str]:
             if not m:
                 return None, f"value {s!r} is not a length this reader understands"
             v = float(m.group(1))
-            unit_note = (f"read as {s!r} in metres" if not s.rstrip().lower().endswith(("m", "s"))
-                         else f"read as {s!r}")
+            unit_note = f"read as {s!r} in metres" if not s.rstrip().lower().endswith(("m", "s")) else f"read as {s!r}"
     lo, hi = _PLAUSIBLE_M
     if not (lo <= v <= hi):
-        return None, (f"{v:.2f} m is outside the {lo}–{hi} m band any CRT navigation "
-                      f"occupies, so it is a unit error or a corrupt attribute and was "
-                      f"REFUSED rather than clamped ({unit_note})")
+        return None, (
+            f"{v:.2f} m is outside the {lo}–{hi} m band any CRT navigation "
+            f"occupies, so it is a unit error or a corrupt attribute and was "
+            f"REFUSED rather than clamped ({unit_note})"
+        )
     return round(v, 2), unit_note
 
 
@@ -278,15 +326,19 @@ def draught_from_props(props: dict) -> tuple[float | None, str | None, str, list
                 refusals.append(f"{field}={props[field]!r}: {how}")
             continue
         if field in _DEPTH_FIELDS:
-            basis = (f"a depth carried on the source layer's {field!r} attribute "
-                     f"({how}). It is not this vehicle's measurement — whoever "
-                     f"published the layer measured or modelled it, and nothing here "
-                     f"knows which")
+            basis = (
+                f"a depth carried on the source layer's {field!r} attribute "
+                f"({how}). It is not this vehicle's measurement — whoever "
+                f"published the layer measured or modelled it, and nothing here "
+                f"knows which"
+            )
         else:
-            basis = (f"the maximum draught carried on the source layer's {field!r} "
-                     f"attribute ({how}). A published draught is a FLOOR on the "
-                     f"mid-channel depth and not the depth: the bed is deeper than "
-                     f"this by a margin nobody publishes")
+            basis = (
+                f"the maximum draught carried on the source layer's {field!r} "
+                f"attribute ({how}). A published draught is a FLOOR on the "
+                f"mid-channel depth and not the depth: the bed is deeper than "
+                f"this by a margin nobody publishes"
+            )
         return metres, field, basis, refusals
     return None, None, "", refusals
 
@@ -332,8 +384,7 @@ def navigable(props: dict) -> tuple[bool | None, str | None, str | None]:
 # ---------------------------------------------------------------------------
 # One section
 # ---------------------------------------------------------------------------
-def _sentences(depth: float | None, label: str, basis: str, source: str,
-               why_none: str = "") -> tuple[str, str]:
+def _sentences(depth: float | None, label: str, basis: str, source: str, why_none: str = "") -> tuple[str, str]:
     """The title and the aria-label for one section, as full sentences.
 
     Both are written HERE and shipped on the feature rather than assembled in the
@@ -344,21 +395,29 @@ def _sentences(depth: float | None, label: str, basis: str, source: str,
     separate properties will one day ship a tooltip that says "1.07 m" and stop.
     """
     if depth is None:
-        t = (f"NOMINAL depth: CANNOT TELL for this {label}. {why_none} No depth is "
-             f"claimed here at all — that is not shallow water and not deep water, it "
-             f"is no claim about the water, and the vehicle should be flown here as "
-             f"though the bed could be anywhere.")
-        a = (f"Nominal depth for this {label}: cannot tell. {why_none} No depth is "
-             f"claimed here. An absent figure is not a safe figure.")
+        t = (
+            f"NOMINAL depth: CANNOT TELL for this {label}. {why_none} No depth is "
+            f"claimed here at all — that is not shallow water and not deep water, it "
+            f"is no claim about the water, and the vehicle should be flown here as "
+            f"though the bed could be anywhere."
+        )
+        a = (
+            f"Nominal depth for this {label}: cannot tell. {why_none} No depth is "
+            f"claimed here. An absent figure is not a safe figure."
+        )
         return " ".join(t.split()), " ".join(a.split())
-    t = (f"NOMINAL depth about {depth:.2f} metres mid-channel for this {label}. "
-         f"This is GUIDANCE, not a survey: {basis}. Source: {source}. The channel "
-         f"shoals toward both banks, so the water at the edge is shallower than "
-         f"this — often much shallower — and nothing has measured this stretch.")
-    a = (f"Nominal depth for this {label}, about {depth:.2f} metres in mid-channel. "
-         f"It is published guidance and not a measurement: {basis}. The canal is "
-         f"shallower toward each bank than this figure, and no survey of this "
-         f"stretch exists.")
+    t = (
+        f"NOMINAL depth about {depth:.2f} metres mid-channel for this {label}. "
+        f"This is GUIDANCE, not a survey: {basis}. Source: {source}. The channel "
+        f"shoals toward both banks, so the water at the edge is shallower than "
+        f"this — often much shallower — and nothing has measured this stretch."
+    )
+    a = (
+        f"Nominal depth for this {label}, about {depth:.2f} metres in mid-channel. "
+        f"It is published guidance and not a measurement: {basis}. The canal is "
+        f"shallower toward each bank than this figure, and no survey of this "
+        f"stretch exists."
+    )
     return t, a
 
 
@@ -378,11 +437,12 @@ def section_properties(props: dict, idx: int) -> dict:
         # Any draught the feature carried is dropped with it, for the same reason.
         depth, field = None, None
         depth_source = "withheld:not-navigable"
-        source = (f"the source layer's {nav_field!r} attribute reads {nav_value!r}, "
-                  f"which is not 'Fully Navigable'")
-        why_none = (f"The source records this length as {nav_value!r} rather than fully "
-                    f"navigable, so published guidance for navigable water does not "
-                    f"describe it and none is quoted.")
+        source = f"the source layer's {nav_field!r} attribute reads {nav_value!r}, " f"which is not 'Fully Navigable'"
+        why_none = (
+            f"The source records this length as {nav_value!r} rather than fully "
+            f"navigable, so published guidance for navigable water does not "
+            f"describe it and none is quoted."
+        )
         basis = ""
     elif depth is not None:
         source = f"the source layer's own {field!r} attribute"
@@ -392,17 +452,25 @@ def section_properties(props: dict, idx: int) -> dict:
         band = guide.band_m
         source = guide.source
         depth_source = "guideline-table"
-        chose = (f"chosen by the source layer's {guide_field!r} attribute" if guide_field
-                 else "and nothing in the source chose it")
-        basis = (f"the published guideline maximum draught for a {guide.label}, {chose}. "
-                 f"It is a FLOOR on the mid-channel depth and not the depth itself — "
-                 f"the bed is deeper than this by a margin nobody publishes. "
-                 f"Under-stating the water is the deliberate direction of error for a "
-                 f"vehicle whose hazard is the bottom")
+        chose = (
+            f"chosen by the source layer's {guide_field!r} attribute"
+            if guide_field
+            else "and nothing in the source chose it"
+        )
+        basis = (
+            f"the published guideline maximum draught for a {guide.label}, {chose}. "
+            f"It is a FLOOR on the mid-channel depth and not the depth itself — "
+            f"the bed is deeper than this by a margin nobody publishes. "
+            f"Under-stating the water is the deliberate direction of error for a "
+            f"vehicle whose hazard is the bottom"
+        )
     else:
-        source = (guide.source if guide is not None
-                  else "this section carries no waterway class and no gauge, so no "
-                       "guidance could be looked up for it at all")
+        source = (
+            guide.source
+            if guide is not None
+            else "this section carries no waterway class and no gauge, so no "
+            "guidance could be looked up for it at all"
+        )
         depth_source = "none"
         basis = ""
         why_none = f"Nothing published a draught for it and nothing has surveyed it: {source}."
@@ -492,13 +560,17 @@ def build(source: dict, *, area: str, built_from: str) -> dict:
         feats.append({"type": "Feature", "geometry": f.get("geometry"), "properties": np_})
 
     known = len(feats) - unknown
-    title = (f"NOMINAL depth guidance for {area}: {known} of {len(feats)} waterway "
-             f"sections carry a published guideline depth and {unknown} carry none. "
-             f"Every figure is guidance for a class of waterway, mid-channel, and "
-             f"nothing on this layer has been surveyed or measured by this vehicle.")
-    aria = (f"Nominal depth layer for area {area}. {known} of {len(feats)} sections "
-            f"have published guidance; {unknown} have none and claim no depth. This "
-            f"layer is guidance and not a survey.")
+    title = (
+        f"NOMINAL depth guidance for {area}: {known} of {len(feats)} waterway "
+        f"sections carry a published guideline depth and {unknown} carry none. "
+        f"Every figure is guidance for a class of waterway, mid-channel, and "
+        f"nothing on this layer has been surveyed or measured by this vehicle."
+    )
+    aria = (
+        f"Nominal depth layer for area {area}. {known} of {len(feats)} sections "
+        f"have published guidance; {unknown} have none and claim no depth. This "
+        f"layer is guidance and not a survey."
+    )
     return {
         "type": "FeatureCollection",
         "features": feats,
@@ -564,7 +636,7 @@ def _crt_layer_dir(area: str) -> Path | None:
     """
     try:
         from . import crt
-    except ImportError:      # the downloader is not in this build; nothing to scan
+    except ImportError:  # the downloader is not in this build; nothing to scan
         return None
     name = crt.safe_area_name(area)
     if not name:
@@ -600,13 +672,16 @@ def crt_depth_layer(area: str) -> tuple[Path | None, str]:
     """
     d = _crt_layer_dir(area)
     if d is None:
-        return None, ("no CRT layers have been downloaded for this area — "
-                      "`python -m nav.cli crt-fetch <area>` is a BOOTSTRAP-time job "
-                      "and it has not been run here")
+        return None, (
+            "no CRT layers have been downloaded for this area — "
+            "`python -m nav.cli crt-fetch <area>` is a BOOTSTRAP-time job "
+            "and it has not been run here"
+        )
     files = sorted(p for p in d.glob("*.geojson"))
     if not files:
-        return None, (f"{d} exists but holds no layer files — a CRT fetch was started "
-                      f"for this area and wrote nothing")
+        return None, (
+            f"{d} exists but holds no layer files — a CRT fetch was started " f"for this area and wrote nothing"
+        )
     best, best_score, best_why, scanned, with_draught = None, 0, "", 0, 0
     for p in files:
         scanned += 1
@@ -635,17 +710,24 @@ def crt_depth_layer(area: str) -> tuple[Path | None, str]:
         score = n_draught * 1000 + n_class
         if score > best_score:
             best, best_score = p, score
-            best_why = (f"{n_draught} of its features publish a draught"
-                        if n_draught else
-                        f"{n_class} of its features carry a gauge or waterway class")
+            best_why = (
+                f"{n_draught} of its features publish a draught"
+                if n_draught
+                else f"{n_class} of its features carry a gauge or waterway class"
+            )
     if best is None:
-        return None, (f"{scanned} CRT layer(s) are on this card for this area and not "
-                      f"one carries a draught, a gauge or a waterway class this reader "
-                      f"can use (looked for {', '.join(DRAUGHT_FIELDS[:3])}, "
-                      f"{', '.join(GAUGE_FIELDS[:2])})")
-    tail = ("" if with_draught else
-            " — no CRT layer here publishes a draught at all, so the figures come from "
-            "the hand-typed guideline table in api/nav/nominal.py")
+        return None, (
+            f"{scanned} CRT layer(s) are on this card for this area and not "
+            f"one carries a draught, a gauge or a waterway class this reader "
+            f"can use (looked for {', '.join(DRAUGHT_FIELDS[:3])}, "
+            f"{', '.join(GAUGE_FIELDS[:2])})"
+        )
+    tail = (
+        ""
+        if with_draught
+        else " — no CRT layer here publishes a draught at all, so the figures come from "
+        "the hand-typed guideline table in api/nav/nominal.py"
+    )
     return best, (f"{best.name}, out of {scanned} CRT layer(s) scanned: {best_why}{tail}")
 
 
@@ -663,8 +745,10 @@ def source_path(area: str) -> tuple[Path, str] | None:
         return crt_layer, scan
     centre = settings.areas_dir / f"{area}.geojson"
     if centre.exists():
-        return centre, (f"{centre.name}, the OSM waterway centreline cached for this "
-                        f"area, which carries a waterway class and no draught. {scan}")
+        return centre, (
+            f"{centre.name}, the OSM waterway centreline cached for this "
+            f"area, which carries a waterway class and no draught. {scan}"
+        )
     return None
 
 

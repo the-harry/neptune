@@ -19,6 +19,7 @@ Timestamps are the Pi's own MONOTONIC clock in milliseconds (never wall-clock â€
 monotonic can't jump backwards). The client keeps its own monotonic time; the two
 are reconciled in analysis using the logged clock_sync offsets, never rewritten.
 """
+
 from __future__ import annotations
 
 import json
@@ -74,15 +75,15 @@ def _resolve_log_dir() -> Path:
         try:
             p.mkdir(parents=True, exist_ok=True)
             testf = p / ".wtest"
-            testf.write_text("x"); testf.unlink()
+            testf.write_text("x")
+            testf.unlink()
             return p.resolve()
         except Exception:  # noqa: BLE001 â€” not writable (not root, read-only fs)
             continue
     # Nowhere to write. Say which places were rejected rather than letting the last
     # mkdir's bare OSError stand in for it: "Permission denied: '/var/log/rov'" reads
     # like the only path that was ever considered.
-    raise RuntimeError("blackbox has nowhere to record: none of "
-                       + ", ".join(tried) + " is writable. Set ROV_LOG_DIR.")
+    raise RuntimeError("blackbox has nowhere to record: none of " + ", ".join(tried) + " is writable. Set ROV_LOG_DIR.")
 
 
 class BlackBox:
@@ -103,10 +104,14 @@ class BlackBox:
         self._lock = threading.Lock()
         self._f = self.nav_path.open("a", encoding="utf-8")
         self._link_current()
-        self.event("session_start", {
-            "session_id": self.session_id, "pi_boot_id": self.pi_boot_id,
-            "wall_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        })
+        self.event(
+            "session_start",
+            {
+                "session_id": self.session_id,
+                "pi_boot_id": self.pi_boot_id,
+                "wall_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            },
+        )
         # ASCII arrow. The arrow that used to be here was U+2192, which the Windows
         # console cannot encode, so this line came out as "blackbox recording \u2192
         # C:\..." - the one line that says where a dive is being recorded, delivered
@@ -129,11 +134,9 @@ class BlackBox:
         return time.monotonic() * 1000.0
 
     def session_info(self) -> dict:
-        return {"session_id": self.session_id, "pi_boot_id": self.pi_boot_id,
-                "pi_t_mono": round(self.now_ms(), 3)}
+        return {"session_id": self.session_id, "pi_boot_id": self.pi_boot_id, "pi_t_mono": round(self.now_ms(), 3)}
 
-    def event(self, e: str, d: dict | None = None, c_id: str | None = None,
-              t: float | None = None) -> None:
+    def event(self, e: str, d: dict | None = None, c_id: str | None = None, t: float | None = None) -> None:
         rec: dict = {"t": round(t if t is not None else self.now_ms(), 3), "e": e}
         if c_id:
             rec["c_id"] = c_id
@@ -161,6 +164,7 @@ class BlackBox:
     def close(self) -> None:
         with self._lock:
             try:
-                self._f.flush(); self._f.close()
+                self._f.flush()
+                self._f.close()
             except Exception:  # noqa: BLE001
                 pass

@@ -4,6 +4,7 @@ Owns the CGI client, the cached Camera.Menu.* snapshot, the record-state poller,
 the sequential download queue, the telemetry loop, and pre-flight. Exposes an
 APIRouter (mounted under /api + /ws/telemetry by app.py / the ROV main app).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,9 +31,11 @@ from .defaults import (
     Setting,
     awb_setting,
     load_caps,
-    save_caps,
 )
 from .defaults import same as _same
+from .defaults import (
+    save_caps,
+)
 from .models import (
     CameraUnavailable,
     CgiError,
@@ -54,13 +57,21 @@ _MAX_PROBE_ATTEMPTS = 6
 
 def _log_defaults(rep: dict) -> None:
     if not rep.get("ok"):
-        log.warning("camera defaults (%s%s): CRITICAL UNMET %s — counts=%s",
-                    rep.get("reason"), " audit" if rep.get("audit_only") else "",
-                    rep.get("critical_unmet"), rep.get("counts"))
+        log.warning(
+            "camera defaults (%s%s): CRITICAL UNMET %s — counts=%s",
+            rep.get("reason"),
+            " audit" if rep.get("audit_only") else "",
+            rep.get("critical_unmet"),
+            rep.get("counts"),
+        )
     else:
-        log.info("camera defaults (%s%s): %s in %sms",
-                 rep.get("reason"), " audit" if rep.get("audit_only") else "",
-                 rep.get("counts"), rep.get("took_ms"))
+        log.info(
+            "camera defaults (%s%s): %s in %sms",
+            rep.get("reason"),
+            " audit" if rep.get("audit_only") else "",
+            rep.get("counts"),
+            rep.get("took_ms"),
+        )
     for r in rep.get("results", []):
         if r["outcome"] == "set":
             log.info("  %s: %s -> %s (%s)", r["property"], r["before"], r["after"], r["detail"])
@@ -72,12 +83,12 @@ def _log_defaults(rep: dict) -> None:
 class CameraService:
     def __init__(self, get_rov=None) -> None:
         self.cgi = CgiClient()
-        self.menu_cache: dict[str, str] = {}     # Camera.Menu.* — read once, updated on write
+        self.menu_cache: dict[str, str] = {}  # Camera.Menu.* — read once, updated on write
         self.menu_options: list[MenuOption] = []  # parsed cammenu.xml
         self._subs: set[WebSocket] = set()
         self._dl_queue: asyncio.Queue = asyncio.Queue()
         self._tasks: list[asyncio.Task] = []
-        self.downloads: dict[str, dict] = {}     # name -> {state, received, total}
+        self.downloads: dict[str, dict] = {}  # name -> {state, received, total}
         # Optional accessor for the live vehicle. Only used to read the white-light
         # state, which decides AWB — see defaults.awb_setting(). None on the bench.
         self.get_rov = get_rov
@@ -100,8 +111,9 @@ class CameraService:
             asyncio.create_task(self._download_worker()),
             asyncio.create_task(self._defaults_loop()),
         ]
-        log.info("camera service started (base=%s, apply_defaults=%s)",
-                 cam_settings.base_url, cam_settings.apply_defaults)
+        log.info(
+            "camera service started (base=%s, apply_defaults=%s)", cam_settings.base_url, cam_settings.apply_defaults
+        )
 
     async def stop(self) -> None:
         for t in self._tasks:
@@ -130,8 +142,11 @@ class CameraService:
                 prop = item.get("property", "")
                 options = [o.text or "" for o in item.findall("option")]
                 read_prop = WRITE_TO_READ.get(prop, prop)
-                opts.append(MenuOption(property=prop, read_property=read_prop,
-                                       options=options, current=self.menu_cache.get(read_prop)))
+                opts.append(
+                    MenuOption(
+                        property=prop, read_property=read_prop, options=options, current=self.menu_cache.get(read_prop)
+                    )
+                )
         except ET.ParseError as exc:
             log.warning("cammenu.xml parse failed: %s", exc)
         self.menu_options = opts
@@ -208,12 +223,17 @@ class CameraService:
         plan = list(SETTINGS)
         plan.append(awb_setting(self._white_lights_on()))
         if cam_settings.upside_down:
-            plan.append(Setting(
-                "upside_down", "Camera.Menu.UpsideDown",
-                ("UpsideDown", "Camera.Menu.UpsideDown"), (cam_settings.upside_down,), HULL,
-                "Physical mounting, asserted because WOLFANG_UPSIDE_DOWN is set. Getting it "
-                "right in the sensor beats rotating in post.",
-            ))
+            plan.append(
+                Setting(
+                    "upside_down",
+                    "Camera.Menu.UpsideDown",
+                    ("UpsideDown", "Camera.Menu.UpsideDown"),
+                    (cam_settings.upside_down,),
+                    HULL,
+                    "Physical mounting, asserted because WOLFANG_UPSIDE_DOWN is set. Getting it "
+                    "right in the sensor beats rotating in post.",
+                )
+            )
         return plan
 
     async def _apply_one(self, s: Setting, priority: int) -> tuple[str, str | None, str]:
@@ -240,7 +260,7 @@ class CameraService:
                 except CgiError as exc:
                     refused = True
                     note = f"set {wname}={value} refused ({exc})"
-                    continue                      # name looks real, value is not
+                    continue  # name looks real, value is not
                 actual = (await self.cgi.get(s.read, priority=priority)).data.get(s.read)
                 if _same(actual, value):
                     self.caps.write_names[s.key] = wname
@@ -251,7 +271,7 @@ class CameraService:
                     return "set", actual, f"via {wname}"
                 note = f"set {wname}={value} returned OK but {s.read} is still {actual!r}"
                 if vi == 0 and len(writes) > 1:
-                    break                          # silent no-op on the first value: suspect the NAME
+                    break  # silent no-op on the first value: suspect the NAME
         if refused:
             if s.key not in self.caps.rejected:
                 self.caps.rejected.append(s.key)
@@ -260,8 +280,9 @@ class CameraService:
             self.caps.ignored.append(s.key)
         return "ignored", None, note
 
-    async def apply_defaults(self, *, include_cold: bool = True, reason: str = "manual",
-                             reprobe: bool = False, priority: int = PRIORITY_USER) -> dict:
+    async def apply_defaults(
+        self, *, include_cold: bool = True, reason: str = "manual", reprobe: bool = False, priority: int = PRIORITY_USER
+    ) -> dict:
         """Bring the camera to the defaults in `defaults.py`, verifying every write.
 
         Never writes a setting that is already at an acceptable value — that keeps a
@@ -278,7 +299,7 @@ class CameraService:
             state = dict(await self.refresh_menu(priority=priority))
             try:
                 state.update((await self.cgi.get("Camera.Preview.*", priority=priority)).data)
-            except CgiError as exc:                # preview block is optional for the menu settings
+            except CgiError as exc:  # preview block is optional for the menu settings
                 log.info("preview state unreadable (%s) — preview defaults skipped", exc)
         except (CgiError, CameraUnavailable) as exc:
             return {"reason": reason, "ok": False, "error": str(exc), "results": [], "counts": {}}
@@ -292,9 +313,19 @@ class CameraService:
         results: list[dict] = []
 
         def row(s: Setting, before, after, outcome, detail=""):
-            results.append({"key": s.key, "tier": s.tier, "property": s.read,
-                            "desired": s.values[0], "before": before, "after": after,
-                            "outcome": outcome, "detail": detail, "why": s.why})
+            results.append(
+                {
+                    "key": s.key,
+                    "tier": s.tier,
+                    "property": s.read,
+                    "desired": s.values[0],
+                    "before": before,
+                    "after": after,
+                    "outcome": outcome,
+                    "detail": detail,
+                    "why": s.why,
+                }
+            )
 
         for s in self._plan():
             before = state.get(s.read)
@@ -302,8 +333,7 @@ class CameraService:
                 row(s, before, before, "already")
                 continue
             if audit_only:
-                row(s, before, before, "unmet",
-                    "WOLFANG_APPLY_DEFAULTS=0 — reported, not corrected")
+                row(s, before, before, "unmet", "WOLFANG_APPLY_DEFAULTS=0 — reported, not corrected")
                 continue
             if not s.hot:
                 # Slow and/or blanks the picture: every UIMode-class op stalls the
@@ -326,7 +356,7 @@ class CameraService:
                 outcome, actual, detail = await self._apply_one(s, priority)
             except CameraUnavailable as exc:
                 row(s, before, None, "unreachable", str(exc))
-                break                              # the camera is gone; stop hammering it
+                break  # the camera is gone; stop hammering it
             row(s, before, actual, outcome, detail)
             if actual is not None:
                 state[s.read] = actual
@@ -339,14 +369,19 @@ class CameraService:
         counts: dict[str, int] = {}
         for r in results:
             counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
-        critical_bad = [r["key"] for r in results
-                        if r["tier"] == CRITICAL and r["outcome"] not in ("already", "set")]
+        critical_bad = [r["key"] for r in results if r["tier"] == CRITICAL and r["outcome"] not in ("already", "set")]
         report = {
-            "reason": reason, "ok": not critical_bad, "fw": fw, "audit_only": audit_only,
-            "white_lights": self._white_lights_on(), "recording": recording,
-            "critical_unmet": critical_bad, "counts": counts,
+            "reason": reason,
+            "ok": not critical_bad,
+            "fw": fw,
+            "audit_only": audit_only,
+            "white_lights": self._white_lights_on(),
+            "recording": recording,
+            "critical_unmet": critical_bad,
+            "counts": counts,
             "took_ms": round((time.monotonic() - t0) * 1000),
-            "caps_saved": saved, "results": results,
+            "caps_saved": saved,
+            "results": results,
             # Reported, never written — see defaults.NOT_SET.
             "observed": {p: state.get(p) for p in REPORT_ONLY if p in state},
             "not_set": [{"property": p, "why": w} for p, w in NOT_SET],
@@ -354,8 +389,9 @@ class CameraService:
         self.defaults_report = report
         return report
 
-    async def probe_property(self, write: str, values: list[str], *, read: str | None = None,
-                             dwell_s: float = 0.0, restore: bool = True) -> dict:
+    async def probe_property(
+        self, write: str, values: list[str], *, read: str | None = None, dwell_s: float = 0.0, restore: bool = True
+    ) -> dict:
         """Deliberate, operator-driven discovery for a property whose value set or
         semantics are unknown (spec §7) — e.g. whether `LCDPower=OFF` means the
         screen never blanks or the screen stays dark.
@@ -369,17 +405,22 @@ class CameraService:
             # Reading nothing means the read name is wrong, not that the property is
             # empty. Probing on regardless would produce a page of took=false that
             # says nothing about the camera and everything about our guess.
-            return {"write": write, "read": read_name, "original": None, "tried": [],
-                    "restored": None,
-                    "error": f"{read_name} does not read back — pass an explicit `read` name. "
-                             f"Dump the full property list with GET /api/config first."}
+            return {
+                "write": write,
+                "read": read_name,
+                "original": None,
+                "tried": [],
+                "restored": None,
+                "error": f"{read_name} does not read back — pass an explicit `read` name. "
+                f"Dump the full property list with GET /api/config first.",
+            }
         tried = []
         for v in values:
             entry = {"value": v}
             try:
                 await self.cgi.set(write, v)
                 if dwell_s:
-                    await asyncio.sleep(dwell_s)   # give the operator time to watch the camera
+                    await asyncio.sleep(dwell_s)  # give the operator time to watch the camera
                 actual = (await self.cgi.get(read_name)).data.get(read_name)
                 entry.update(accepted=True, read_back=actual, took=_same(actual, v))
             except CgiError as exc:
@@ -396,8 +437,7 @@ class CameraService:
                 restored = (await self.cgi.get(read_name)).data.get(read_name)
             except (CgiError, CameraUnavailable) as exc:
                 restored = f"restore failed: {exc}"
-        return {"write": write, "read": read_name, "original": original,
-                "tried": tried, "restored": restored}
+        return {"write": write, "read": read_name, "original": original, "tried": tried, "restored": restored}
 
     async def _defaults_loop(self) -> None:
         """Keep the camera awake, and keep the critical settings actually asserted.
@@ -413,7 +453,7 @@ class CameraService:
             False→True transition re-runs the whole connect sequence.
           * **drift** — anything that put a critical setting back gets it undone.
         """
-        await asyncio.sleep(1.0)                   # let start()'s own menu read land first
+        await asyncio.sleep(1.0)  # let start()'s own menu read land first
         while True:
             try:
                 menu = await self.refresh_menu(priority=PRIORITY_TELEMETRY)
@@ -421,23 +461,27 @@ class CameraService:
                 if not was_online:
                     log.info("camera online — running the connect sequence")
                     await self.connect_sequence(priority=PRIORITY_TELEMETRY)
-                    rep = await self.apply_defaults(reason="camera-online", include_cold=True,
-                                                    priority=PRIORITY_TELEMETRY)
+                    rep = await self.apply_defaults(
+                        reason="camera-online", include_cold=True, priority=PRIORITY_TELEMETRY
+                    )
                     _log_defaults(rep)
                 elif cam_settings.apply_defaults:
                     # Drift check is free: it reads the menu we just fetched. Cold
                     # settings are excluded because re-asserting them blanks the
                     # picture, and preview properties are not in this dump.
-                    drifted = [s.key for s in self._plan()
-                               if s.hot and s.read.startswith("Camera.Menu.")
-                               and s.read in menu
-                               and not any(_same(menu.get(s.read), v) for v in s.values)
-                               and s.key not in self.caps.ignored
-                               and s.key not in self.caps.rejected]
+                    drifted = [
+                        s.key
+                        for s in self._plan()
+                        if s.hot
+                        and s.read.startswith("Camera.Menu.")
+                        and s.read in menu
+                        and not any(_same(menu.get(s.read), v) for v in s.values)
+                        and s.key not in self.caps.ignored
+                        and s.key not in self.caps.rejected
+                    ]
                     if drifted:
                         log.warning("camera settings drifted (%s) — re-asserting", ", ".join(drifted))
-                        rep = await self.apply_defaults(reason="drift", include_cold=False,
-                                                        priority=PRIORITY_TELEMETRY)
+                        rep = await self.apply_defaults(reason="drift", include_cold=False, priority=PRIORITY_TELEMETRY)
                         _log_defaults(rep)
             except (CgiError, CameraUnavailable) as exc:
                 if self._cam_online:
@@ -453,7 +497,8 @@ class CameraService:
         # spec §4.3: UIMode=VIDEO first, then Video=record (a TOGGLE), then POLL
         # Camera.Preview.MJPEG.status.record until it flips — never optimistic.
         before = (await self.cgi.get("Camera.Preview.MJPEG.status.record")).data.get(
-            "Camera.Preview.MJPEG.status.record", "")
+            "Camera.Preview.MJPEG.status.record", ""
+        )
         await self.cgi.set("Camera.Menu.UIMode", "VIDEO")
         self.menu_cache["Camera.Menu.UIMode"] = "VIDEO"
         await self.cgi.set("Video", "record")
@@ -462,7 +507,8 @@ class CameraService:
         changed = False
         while time.monotonic() < deadline:
             raw = (await self.cgi.get("Camera.Preview.MJPEG.status.record")).data.get(
-                "Camera.Preview.MJPEG.status.record", "")
+                "Camera.Preview.MJPEG.status.record", ""
+            )
             if raw != before:
                 changed = True
                 break
@@ -487,7 +533,7 @@ class CameraService:
         return _parse_dir(xml, kind)
 
     async def delete_file(self, name: str) -> None:
-        dollar = name.replace("/", "$")            # listing uses '/', del uses '$'
+        dollar = name.replace("/", "$")  # listing uses '/', del uses '$'
         await self.cgi.delete(dollar)
 
     async def preflight(self) -> PreflightResult:
@@ -519,19 +565,27 @@ class CameraService:
                 if r["tier"] != CRITICAL:
                     continue
                 actual = r["after"] if r["after"] is not None else r["before"]
-                add(f"{r['property']} (critical)",
+                add(
+                    f"{r['property']} (critical)",
                     r["outcome"] in ("already", "set"),
                     f"{r['outcome']}: {actual!r}"
                     + ("" if _same(actual, r["desired"]) else f" (preferred {r['desired']!r})")
-                    + (f" — {r['detail']}" if r["detail"] else ""))
-            non_critical_bad = [r["property"] for r in rep.get("results", [])
-                                if r["tier"] != CRITICAL and r["outcome"] in ("ignored", "rejected", "unresolved")]
-            add("non-critical defaults applied", True,
-                "all applied" if not non_critical_bad
-                else f"firmware would not take: {', '.join(non_critical_bad)}")
+                    + (f" — {r['detail']}" if r["detail"] else ""),
+                )
+            non_critical_bad = [
+                r["property"]
+                for r in rep.get("results", [])
+                if r["tier"] != CRITICAL and r["outcome"] in ("ignored", "rejected", "unresolved")
+            ]
+            add(
+                "non-critical defaults applied",
+                True,
+                "all applied" if not non_critical_bad else f"firmware would not take: {', '.join(non_critical_bad)}",
+            )
             # 7) warning message => fail if non-empty
             prev = (await self.cgi.get("Camera.Preview.MJPEG.WarningMSG")).data.get(
-                "Camera.Preview.MJPEG.WarningMSG", "")
+                "Camera.Preview.MJPEG.WarningMSG", ""
+            )
             add("WarningMSG empty", prev == "", f"msg={prev!r}")
             # 8) SD ready + remaining
             sd = self.menu_cache.get("Camera.Menu.SD0", "")
@@ -542,16 +596,22 @@ class CameraService:
             #    reported here because it is what the operator actually flies on.
             pv = {r["key"]: r for r in rep.get("results", [])}
             pw, ph = pv.get("preview_w", {}), pv.get("preview_h", {})
-            add("preview 1280x720 (best effort)", True,
+            add(
+                "preview 1280x720 (best effort)",
+                True,
                 f"w={pw.get('after') or pw.get('before')} ({pw.get('outcome')}), "
-                f"h={ph.get('after') or ph.get('before')} ({ph.get('outcome')})")
+                f"h={ph.get('after') or ph.get('before')} ({ph.get('outcome')})",
+            )
             # 10) go2rtc stream health
             gok, gdetail = await self._go2rtc_ok()
             add("go2rtc stream healthy", gok, gdetail)
             # 11) battery
             batt = _to_int((await self.cgi.get("Camera.Battery.Level")).data.get("Camera.Battery.Level"))
-            add(f"battery >= {cam_settings.battery_warn_pct}%",
-                (batt or 0) >= cam_settings.battery_warn_pct, f"battery={batt}%")
+            add(
+                f"battery >= {cam_settings.battery_warn_pct}%",
+                (batt or 0) >= cam_settings.battery_warn_pct,
+                f"battery={batt}%",
+            )
         except (CgiError, CameraUnavailable) as exc:
             add("camera reachable", False, str(exc))
         passed = all(c.ok for c in checks)
@@ -676,19 +736,24 @@ def _parse_dir(xml: str, kind: str) -> list[FileEntry]:
         res = fmt.get("size", "") if fmt is not None else ""
         fps = fmt.get("fps") if fmt is not None else None
         dur = fmt.get("time") if fmt is not None else None
-        out.append(FileEntry(
-            name=name, kind=kind, size=size, resolution=res,
-            fps=float(fps) if fps else None, duration=float(dur) if dur else None,
-            time=(f.findtext("time") or "").strip(),
-        ))
+        out.append(
+            FileEntry(
+                name=name,
+                kind=kind,
+                size=size,
+                resolution=res,
+                fps=float(fps) if fps else None,
+                duration=float(dur) if dur else None,
+                time=(f.findtext("time") or "").strip(),
+            )
+        )
     return out
 
 
 def _check_route() -> tuple[bool, str]:
     """Spec §1: `ip route get 192.72.1.1` must resolve via wlan0; pin if not."""
     try:
-        out = subprocess.run(["ip", "route", "get", cam_settings.camera_ip],
-                             capture_output=True, text=True, timeout=2)
+        out = subprocess.run(["ip", "route", "get", cam_settings.camera_ip], capture_output=True, text=True, timeout=2)
     except (FileNotFoundError, subprocess.SubprocessError) as exc:
         return False, f"ip route unavailable ({exc}) — skip on non-Linux dev host"
     txt = out.stdout
@@ -696,8 +761,12 @@ def _check_route() -> tuple[bool, str]:
         return True, txt.strip().splitlines()[0] if txt.strip() else "ok"
     # attempt to pin (needs privileges)
     try:
-        subprocess.run(["ip", "route", "add", f"{cam_settings.camera_ip}/32", "dev", cam_settings.wlan_iface],
-                       capture_output=True, text=True, timeout=2)
+        subprocess.run(
+            ["ip", "route", "add", f"{cam_settings.camera_ip}/32", "dev", cam_settings.wlan_iface],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
         return _check_route()[0], "pinned route to wlan0"
     except Exception as exc:  # noqa: BLE001
         return False, f"MISROUTED — not via {cam_settings.wlan_iface}; pin failed: {exc}"
@@ -747,8 +816,9 @@ def build_router(svc: CameraService) -> APIRouter:
         return f.model_dump() if f else JSONResponse({"file": None})
 
     @r.get("/api/files")
-    async def files(type: str = Query("video", pattern="^(video|photo)$"),
-                    from_: int = Query(0, alias="from"), count: int = 100):
+    async def files(
+        type: str = Query("video", pattern="^(video|photo)$"), from_: int = Query(0, alias="from"), count: int = 100
+    ):
         try:
             entries = await svc.list_files(type, from_, count)
         except (CgiError, CameraUnavailable) as e:
@@ -762,8 +832,7 @@ def build_router(svc: CameraService) -> APIRouter:
         url = f"{cam_settings.base_url.rstrip('/')}/thumb/{tail}"
         async with httpx.AsyncClient(headers={"Connection": "close"}) as c:
             resp = await c.get(url, timeout=cam_settings.timeout_fast_s)
-        return Response(resp.content, media_type="image/jpeg",
-                        headers={"Cache-Control": "no-cache"})
+        return Response(resp.content, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
 
     @r.post("/api/files/{name:path}/download")
     async def download(name: str):
@@ -776,7 +845,7 @@ def build_router(svc: CameraService) -> APIRouter:
 
     @r.delete("/api/files/{name:path}")
     async def delete(name: str, confirm: bool = Query(False)):
-        if not confirm:                        # destructive: needs explicit confirm (§7.2)
+        if not confirm:  # destructive: needs explicit confirm (§7.2)
             raise HTTPException(400, "refused: destructive delete requires ?confirm=true")
         try:
             await svc.delete_file("/" + name.lstrip("/"))
@@ -786,7 +855,7 @@ def build_router(svc: CameraService) -> APIRouter:
 
     @r.post("/api/config/format-sd")
     async def format_sd(confirm: bool = Query(False)):
-        if not confirm:                        # DESTRUCTIVE: wipes the card
+        if not confirm:  # DESTRUCTIVE: wipes the card
             raise HTTPException(400, "refused: SD format requires ?confirm=true")
         await svc.cgi.set("SD0", "format")
         return {"formatting": True}
@@ -803,15 +872,18 @@ def build_router(svc: CameraService) -> APIRouter:
         verdicts and probes every candidate again — worth doing once after a
         firmware change."""
         try:
-            return await svc.apply_defaults(reason="manual", include_cold=include_cold,
-                                            reprobe=reprobe)
+            return await svc.apply_defaults(reason="manual", include_cold=include_cold, reprobe=reprobe)
         except (CgiError, CameraUnavailable) as e:
             raise HTTPException(502, str(e))
 
     @r.post("/api/camera/probe")
-    async def probe(prop: str = Query(...), values: str = Query(...),
-                    read: str | None = Query(None), dwell: float = Query(0.0),
-                    restore: bool = Query(True)):
+    async def probe(
+        prop: str = Query(...),
+        values: str = Query(...),
+        read: str | None = Query(None),
+        dwell: float = Query(0.0),
+        restore: bool = Query(True),
+    ):
         """Discovery for a property whose valid values or semantics are unknown
         (spec §7) — e.g. whether LCDPower=OFF blanks the screen or stops it blanking.
         Use `dwell` to hold each value long enough to watch the physical camera."""
@@ -823,8 +895,7 @@ def build_router(svc: CameraService) -> APIRouter:
             # it would not look like a mistake until the footage was already gone.
             raise HTTPException(400, "refused: SD0 is destructive — use /api/config/format-sd")
         try:
-            return await svc.probe_property(prop, vals, read=read, dwell_s=min(dwell, 30.0),
-                                            restore=restore)
+            return await svc.probe_property(prop, vals, read=read, dwell_s=min(dwell, 30.0), restore=restore)
         except (CgiError, CameraUnavailable) as e:
             raise HTTPException(502, str(e))
 
@@ -840,7 +911,7 @@ def build_router(svc: CameraService) -> APIRouter:
             st = await svc.status(priority=PRIORITY_TELEMETRY)  # push one immediately
             await ws.send_text(st.model_dump_json())
             while True:
-                await ws.receive_text()   # ignore client input; keep the socket open
+                await ws.receive_text()  # ignore client input; keep the socket open
         except WebSocketDisconnect:
             pass
         except Exception:  # noqa: BLE001

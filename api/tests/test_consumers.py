@@ -47,6 +47,7 @@ pass, and regenerating it IS lowering the bar.
 stdlib unittest only, matching the rest of api/tests — see run.py for why there is no
 framework here.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -88,21 +89,20 @@ os.environ["ROV_LOG_DIR"] = str(_TMP / "log")
 os.environ.setdefault("WOLFANG_T_FAST", "0.25")
 os.environ.setdefault("WOLFANG_T_SLOW", "0.25")
 
-from config import settings                                          # noqa: E402
-from nav import calibrate, cli                                       # noqa: E402
-from nav.config import settings as nav_settings                      # noqa: E402
-from nav.divelog import DiveLog                                      # noqa: E402
-from nav.models import Origin                                        # noqa: E402
-from nav.service import _feature_from_journal, build_router          # noqa: E402
-from protocol import Telemetry                                       # noqa: E402
-from tests.test_liveness import EVERYTHING, Chain                    # noqa: E402
+from config import settings  # noqa: E402
+from nav import calibrate, cli  # noqa: E402
+from nav.config import settings as nav_settings  # noqa: E402
+from nav.divelog import DiveLog  # noqa: E402
+from nav.models import Origin  # noqa: E402
+from nav.service import _feature_from_journal, build_router  # noqa: E402
+from protocol import Telemetry  # noqa: E402
+from tests.test_liveness import EVERYTHING, Chain  # noqa: E402
 
 # Belt and braces on the isolation above. nav.config caches its settings at import,
 # and if any module in this process got there first the environment arrived too late —
 # in which case the boot test would write into the operator's real dive directory. A
 # frozen dataclass is frozen against accident, not against a test that says why.
-for _attr, _sub in (("data_dir", ""), ("dives_dir", "dives"),
-                    ("areas_dir", "areas"), ("speed_lut_dir", "speed_luts")):
+for _attr, _sub in (("data_dir", ""), ("dives_dir", "dives"), ("areas_dir", "areas"), ("speed_lut_dir", "speed_luts")):
     _want = _TMP / _sub if _sub else _TMP
     if Path(getattr(nav_settings, _attr)) != _want:
         object.__setattr__(nav_settings, _attr, _want)
@@ -176,15 +176,18 @@ def fly_a_dive_with_dying_chips(directory: Path, dive_id: str = "dive-consumers"
     c.svc.dive.save(directory)
     if c.tick_errors:
         raise AssertionError(
-            "the dive journal could not even be WRITTEN once the chips stopped:\n  "
-            + "\n  ".join(c.tick_errors))
+            "the dive journal could not even be WRITTEN once the chips stopped:\n  " + "\n  ".join(c.tick_errors)
+        )
     return directory / f"{dive_id}.jsonl"
 
 
 def rows_of(path: Path) -> list[dict]:
     """The sample records in a journal, exactly as calibrate.read_dive would see them."""
-    return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines()
-            if ln.strip() and json.loads(ln).get("type") == "s"]
+    return [
+        json.loads(ln)
+        for ln in path.read_text(encoding="utf-8").splitlines()
+        if ln.strip() and json.loads(ln).get("type") == "s"
+    ]
 
 
 def origin_endpoint(svc):
@@ -201,7 +204,8 @@ def origin_endpoint(svc):
     raise AssertionError(
         "nav/service.py no longer exposes POST /api/origin — capturing the launch point "
         "has moved, and this suite must follow it there rather than quietly stop "
-        "checking the call that has to succeed before any dive can be logged.")
+        "checking the call that has to succeed before any dive can be logged."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -229,37 +233,46 @@ class OriginTest(unittest.TestCase):
         # assertion below and destroy the feature.
         bearing = self.c.svc.last_sample.heading_deg
         self.assertIsNotNone(bearing, "the fixture must have a compass before it kills one")
-        res = asyncio.run(origin_endpoint(self.c.svc)(
-            Origin(lat=52.0, lon=-1.0, accuracy=3.0, source="manual"), False))
+        res = asyncio.run(origin_endpoint(self.c.svc)(Origin(lat=52.0, lon=-1.0, accuracy=3.0, source="manual"), False))
         self.assertTrue(res["ok"])
-        self.assertAlmostEqual(self.c.svc.origin.heading_deg, round(bearing, 1), places=1,
-                               msg="heading0 must be the IMU's own yaw at capture (§4.4)")
+        self.assertAlmostEqual(
+            self.c.svc.origin.heading_deg,
+            round(bearing, 1),
+            places=1,
+            msg="heading0 must be the IMU's own yaw at capture (§4.4)",
+        )
 
     def test_the_origin_can_be_captured_with_no_compass_answering(self):
         self.c.kill("bno085").fly(1.0)
         self.assertIsNone(self.c.svc.last_sample.heading_deg)
         try:
-            res = asyncio.run(origin_endpoint(self.c.svc)(
-                Origin(lat=52.0, lon=-1.0, accuracy=3.0, source="manual"), False))
+            res = asyncio.run(
+                origin_endpoint(self.c.svc)(Origin(lat=52.0, lon=-1.0, accuracy=3.0, source="manual"), False)
+            )
         except Exception as exc:  # noqa: BLE001 — the regression this test exists for
-            self.fail(f"POST /api/origin raised {type(exc).__name__}: {exc} — a dead "
-                      f"BNO085 must not stop the operator setting a launch point. "
-                      f"Capturing the origin is what starts the dive log, so this is a "
-                      f"500 on the one call that has to work before anything can be "
-                      f"recorded at all.")
+            self.fail(
+                f"POST /api/origin raised {type(exc).__name__}: {exc} — a dead "
+                f"BNO085 must not stop the operator setting a launch point. "
+                f"Capturing the origin is what starts the dive log, so this is a "
+                f"500 on the one call that has to work before anything can be "
+                f"recorded at all."
+            )
         self.assertTrue(res["ok"])
 
     def test_the_origin_records_that_it_had_no_bearing(self):
         self.c.kill("bno085").fly(1.0)
-        asyncio.run(origin_endpoint(self.c.svc)(
-            Origin(lat=52.0, lon=-1.0, accuracy=3.0, source="manual"), False))
-        for where, value in (("the stored origin", self.c.svc.origin.heading_deg),
-                             ("the response body", self.c.svc.origin.model_dump()["heading_deg"])):
+        asyncio.run(origin_endpoint(self.c.svc)(Origin(lat=52.0, lon=-1.0, accuracy=3.0, source="manual"), False))
+        for where, value in (
+            ("the stored origin", self.c.svc.origin.heading_deg),
+            ("the response body", self.c.svc.origin.model_dump()["heading_deg"]),
+        ):
             if value == 0.0 and value is not None:
-                self.fail(f"{where}: heading_deg=0.0 with no IMU answering. That is not a "
-                          f"blank, it is DUE NORTH — and heading0 is the datum every track "
-                          f"logged from this origin is rotated against, so it is a "
-                          f"fabricated bearing baked permanently into the record.")
+                self.fail(
+                    f"{where}: heading_deg=0.0 with no IMU answering. That is not a "
+                    f"blank, it is DUE NORTH — and heading0 is the datum every track "
+                    f"logged from this origin is rotated against, so it is a "
+                    f"fabricated bearing baked permanently into the record."
+                )
             self.assertIsNone(value, f"{where}: heading_deg={value!r}, expected null")
 
     def test_a_bearingless_origin_survives_the_dive_journal_and_comes_back(self):
@@ -268,21 +281,25 @@ class OriginTest(unittest.TestCase):
         # cannot hold the null, the null cannot be written; if it cannot be read back,
         # every replay of a dive launched without a compass refuses to load.
         self.c.kill("bno085").fly(1.0)
-        asyncio.run(origin_endpoint(self.c.svc)(
-            Origin(lat=52.0, lon=-1.0, accuracy=3.0, source="manual"), False))
+        asyncio.run(origin_endpoint(self.c.svc)(Origin(lat=52.0, lon=-1.0, accuracy=3.0, source="manual"), False))
         d = Path(_TMP / "origin-null")
         log = DiveLog("dive-noheading", "2026-01-01T00:00:00Z", self.c.svc.origin, directory=d)
         geojson = log.save(d)
         header = json.loads((d / "dive-noheading.jsonl").read_text(encoding="utf-8").splitlines()[0])
-        self.assertIn("heading_deg", header["origin"],
-                      "the key was dropped rather than nulled — a reader cannot tell an "
-                      "old journal from one launched with no compass")
+        self.assertIn(
+            "heading_deg",
+            header["origin"],
+            "the key was dropped rather than nulled — a reader cannot tell an "
+            "old journal from one launched with no compass",
+        )
         self.assertIsNone(header["origin"]["heading_deg"])
         rebuilt = Origin(**header["origin"])
-        self.assertIsNone(rebuilt.heading_deg,
-                          "the journal header round-trips the null or no dive launched "
-                          "without a compass can ever be replayed (cli.load_replay_log "
-                          "rebuilds the origin with exactly this call)")
+        self.assertIsNone(
+            rebuilt.heading_deg,
+            "the journal header round-trips the null or no dive launched "
+            "without a compass can ever be replayed (cli.load_replay_log "
+            "rebuilds the origin with exactly this call)",
+        )
         # And the GeoJSON's own reader. DiveLog.load() does `o.get("heading_deg", 0)`,
         # which is the present-and-null trap again: the default cannot fire on a key that
         # is there, so the None goes into the model and either survives or raises.
@@ -314,17 +331,24 @@ class JournalReadersTest(unittest.TestCase):
         for key in ("depth_m", "heading_deg", "raw_heading_deg", "psi", "mag_cal"):
             with self.subTest(column=key):
                 present = [r for r in self.rows if key in r]
-                self.assertEqual(len(present), len(self.rows),
-                                 f"{key} is MISSING from some rows. A dead chip must null "
-                                 f"its column, never drop it: a missing key and a null are "
-                                 f"different claims and this whole suite turns on the "
-                                 f"difference.")
-                self.assertTrue(any(r[key] is None for r in present),
-                                f"{key} is never null — the kill did not reach the journal, "
-                                f"so nothing below is exercising anything")
-                self.assertTrue(any(r[key] is not None for r in present),
-                                f"{key} is null for the WHOLE log; a reader that refuses "
-                                f"outright would pass every test here for the wrong reason")
+                self.assertEqual(
+                    len(present),
+                    len(self.rows),
+                    f"{key} is MISSING from some rows. A dead chip must null "
+                    f"its column, never drop it: a missing key and a null are "
+                    f"different claims and this whole suite turns on the "
+                    f"difference.",
+                )
+                self.assertTrue(
+                    any(r[key] is None for r in present),
+                    f"{key} is never null — the kill did not reach the journal, "
+                    f"so nothing below is exercising anything",
+                )
+                self.assertTrue(
+                    any(r[key] is not None for r in present),
+                    f"{key} is null for the WHOLE log; a reader that refuses "
+                    f"outright would pass every test here for the wrong reason",
+                )
 
     def test_read_dive_hands_the_null_on_rather_than_defaulting_it(self):
         _header, samples = calibrate.read_dive(self.path)
@@ -338,13 +362,17 @@ class JournalReadersTest(unittest.TestCase):
     def test_replay_loads_a_dive_whose_chips_died(self):
         log = cli.load_replay_log(self.path)
         self.assertGreater(len(log.samples), 100)
-        self.assertTrue(any(s.depth_m is None for s in log.samples),
-                        "the reader coerced a null depth back into a number on the way "
-                        "into the estimator — 0.0 m is AT THE SURFACE, which is the one "
-                        "depth a sub holding ballast is not at")
-        self.assertTrue(any(s.heading_deg is None for s in log.samples),
-                        "the reader coerced a null bearing back into a number — 0.0 is "
-                        "due north, and the dead reckoner runs the track along it")
+        self.assertTrue(
+            any(s.depth_m is None for s in log.samples),
+            "the reader coerced a null depth back into a number on the way "
+            "into the estimator — 0.0 m is AT THE SURFACE, which is the one "
+            "depth a sub holding ballast is not at",
+        )
+        self.assertTrue(
+            any(s.heading_deg is None for s in log.samples),
+            "the reader coerced a null bearing back into a number — 0.0 is "
+            "due north, and the dead reckoner runs the track along it",
+        )
 
     def test_replay_runs_end_to_end_and_scores_it(self):
         out = io.StringIO()
@@ -352,9 +380,11 @@ class JournalReadersTest(unittest.TestCase):
             with redirect_stdout(out):
                 rc = cli.main(["replay", str(self.path), "--filter", "both"])
         except Exception as exc:  # noqa: BLE001 — the regression this test exists for
-            self.fail(f"`nav.cli replay` raised {type(exc).__name__}: {exc} on a dive "
-                      f"whose sensors stopped. That is the dive most worth replaying, and "
-                      f"it is the only one the tool cannot read.\n{out.getvalue()[-1200:]}")
+            self.fail(
+                f"`nav.cli replay` raised {type(exc).__name__}: {exc} on a dive "
+                f"whose sensors stopped. That is the dive most worth replaying, and "
+                f"it is the only one the tool cannot read.\n{out.getvalue()[-1200:]}"
+            )
         self.assertEqual(rc, 0, out.getvalue()[-1200:])
         for expected in ("--- dr ---", "--- filtered ---"):
             self.assertIn(expected, out.getvalue())
@@ -362,11 +392,13 @@ class JournalReadersTest(unittest.TestCase):
     def test_the_score_carries_the_null_instead_of_a_final_depth_of_zero(self):
         log = cli.load_replay_log(self.path)
         sc = cli.score(cli.replay(log, "dr"), log)
-        self.assertIsNone(sc["final_depth"],
-                          f"final_depth={sc['final_depth']!r} for a dive that ended with "
-                          f"the MS5837 dead. A replay summary that prints 0.0 m says the "
-                          f"sub finished at the surface, which is a conclusion nothing "
-                          f"measured.")
+        self.assertIsNone(
+            sc["final_depth"],
+            f"final_depth={sc['final_depth']!r} for a dive that ended with "
+            f"the MS5837 dead. A replay summary that prints 0.0 m says the "
+            f"sub finished at the surface, which is a conclusion nothing "
+            f"measured.",
+        )
 
     # ---- nav.cli calibrate ------------------------------------------------
     def test_calibrate_runs_end_to_end_on_the_same_log(self):
@@ -375,11 +407,13 @@ class JournalReadersTest(unittest.TestCase):
             with redirect_stdout(out):
                 rc = cli.main(["calibrate", str(self.path)])
         except Exception as exc:  # noqa: BLE001 — the regression this test exists for
-            self.fail(f"`nav.cli calibrate` raised {type(exc).__name__}: {exc}. The "
-                      f"journal writes a dead chip as the key PRESENT AND NULL, and "
-                      f"`.get(key, 0.0)` only fires on a MISSING key — so the default "
-                      f"never fired and the None went straight into the arithmetic."
-                      f"\n{out.getvalue()[-1200:]}")
+            self.fail(
+                f"`nav.cli calibrate` raised {type(exc).__name__}: {exc}. The "
+                f"journal writes a dead chip as the key PRESENT AND NULL, and "
+                f"`.get(key, 0.0)` only fires on a MISSING key — so the default "
+                f"never fired and the None went straight into the arithmetic."
+                f"\n{out.getvalue()[-1200:]}"
+            )
         self.assertIn(rc, (0, 1), out.getvalue()[-1200:])
 
     def test_calibrate_selftest_still_passes(self):
@@ -399,22 +433,27 @@ class JournalReadersTest(unittest.TestCase):
         feat = _feature_from_journal(self.path)
         self.assertIsNotNone(feat, "an unfinished dive rebuilt into nothing")
         blanks = [s for s in feat["samples"] if s["depth_m"] is None]
-        self.assertTrue(blanks, "the recovered dive has a depth for every sample, "
-                                "including the stretch nothing was measuring it")
+        self.assertTrue(
+            blanks, "the recovered dive has a depth for every sample, " "including the stretch nothing was measuring it"
+        )
         self.assertIsNone(blanks[-1]["heading_deg"])
 
     def test_the_saved_geojson_keeps_the_nulls(self):
         # The derived artifact — the one somebody opens in a map viewer a year later,
         # by which time it is all that is left of the dive.
         feat = json.loads(self.path.with_suffix(".geojson").read_text(encoding="utf-8"))
-        self.assertTrue(any(s["depth_m"] is None for s in feat["samples"]),
-                        "the GeoJSON filled in a depth nobody measured; a bathymetry "
-                        "raster built from it has a hole punched through it at the surface")
+        self.assertTrue(
+            any(s["depth_m"] is None for s in feat["samples"]),
+            "the GeoJSON filled in a depth nobody measured; a bathymetry "
+            "raster built from it has a hole punched through it at the surface",
+        )
         self.assertTrue(any(s["heading_deg"] is None for s in feat["samples"]))
-        self.assertTrue(any(s.get("no_heading") for s in feat["samples"]),
-                        "a run of identical coordinates with nothing marking it reads as "
-                        "a sub sitting still, when what happened is that the compass "
-                        "stopped and the track was held")
+        self.assertTrue(
+            any(s.get("no_heading") for s in feat["samples"]),
+            "a run of identical coordinates with nothing marking it reads as "
+            "a sub sitting still, when what happened is that the compass "
+            "stopped and the track was held",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -429,12 +468,26 @@ def synthetic_rows(n: int = 60, dt: float = 0.1, **overrides) -> list[dict]:
     """
     rows = []
     for i in range(n):
-        row = {"type": "s", "t": round((i + 1) * dt, 3), "x": 0.0, "y": 0.0,
-               "depth_m": 4.0, "heading_deg": round((i * 4.0) % 360, 3),
-               "snapped": False, "confidence": 1.0,
-               "throttle": 0.5, "steer": 1.0, "left": 0.5, "right": 0.5,
-               "ballast": 1.0, "ballast_tgt": 1.0, "psi": 20.4, "armed": True,
-               "mag_cal": 3, "encoder_m": round(i * 0.05, 3)}
+        row = {
+            "type": "s",
+            "t": round((i + 1) * dt, 3),
+            "x": 0.0,
+            "y": 0.0,
+            "depth_m": 4.0,
+            "heading_deg": round((i * 4.0) % 360, 3),
+            "snapped": False,
+            "confidence": 1.0,
+            "throttle": 0.5,
+            "steer": 1.0,
+            "left": 0.5,
+            "right": 0.5,
+            "ballast": 1.0,
+            "ballast_tgt": 1.0,
+            "psi": 20.4,
+            "armed": True,
+            "mag_cal": 3,
+            "encoder_m": round(i * 0.05, 3),
+        }
         row.update(overrides)
         rows.append(row)
     return rows
@@ -464,10 +517,12 @@ class PresentAndNullTest(unittest.TestCase):
         try:
             tr, why = calibrate.turn_rate(rows)
         except Exception as exc:  # noqa: BLE001 — THE regression
-            self.fail(f"turn_rate raised {type(exc).__name__}: {exc} on a column that is "
-                      f"PRESENT AND NULL. That is what a dive journal looks like after a "
-                      f"chip stops answering, and it is the shape every `.get(key, 0.0)` "
-                      f"in a reader is blind to.")
+            self.fail(
+                f"turn_rate raised {type(exc).__name__}: {exc} on a column that is "
+                f"PRESENT AND NULL. That is what a dive journal looks like after a "
+                f"chip stops answering, and it is the shape every `.get(key, 0.0)` "
+                f"in a reader is blind to."
+            )
         self.assertIsNone(tr, "a turn rate was derived from headings nobody measured")
         self.assertTrue(why, "it refused without saying why")
 
@@ -477,8 +532,9 @@ class PresentAndNullTest(unittest.TestCase):
         try:
             tr, why = calibrate.turn_rate(rows)
         except Exception as exc:  # noqa: BLE001
-            self.fail(f"turn_rate raised {type(exc).__name__}: {exc} on a log that predates "
-                      f"the heading column altogether")
+            self.fail(
+                f"turn_rate raised {type(exc).__name__}: {exc} on a log that predates " f"the heading column altogether"
+            )
         self.assertIsNone(tr)
         self.assertTrue(why)
 
@@ -487,31 +543,41 @@ class PresentAndNullTest(unittest.TestCase):
         try:
             dm, why = calibrate.depth_model(rows)
         except Exception as exc:  # noqa: BLE001
-            self.fail(f"depth_model raised {type(exc).__name__}: {exc} on a present-and-null "
-                      f"depth column")
-        self.assertIsNone(dm, "a ballast->depth constant was fitted to depths nobody took. "
-                              "0.0 m is AT THE SURFACE, so a filled null does not weaken "
-                              "the fit, it moves it — and quietly.")
+            self.fail(f"depth_model raised {type(exc).__name__}: {exc} on a present-and-null " f"depth column")
+        self.assertIsNone(
+            dm,
+            "a ballast->depth constant was fitted to depths nobody took. "
+            "0.0 m is AT THE SURFACE, so a filled null does not weaken "
+            "the fit, it moves it — and quietly.",
+        )
         self.assertTrue(why)
 
     def test_the_replay_reader_makes_the_same_distinction(self):
         # cli._sample_from_row rebuilds a SensorSample from one journal line. It is the
         # only reader that has to be right about BOTH shapes at once, because it feeds
         # the estimators whose whole contract is that a null is not a reading.
-        null_row = synthetic_rows(1)[0] | {"depth_m": None, "raw_heading_deg": None,
-                                           "heading_deg": None, "psi": None, "mag_cal": None,
-                                           "gyro_z_dps": None, "accel_fwd_ms2": None}
+        null_row = synthetic_rows(1)[0] | {
+            "depth_m": None,
+            "raw_heading_deg": None,
+            "heading_deg": None,
+            "psi": None,
+            "mag_cal": None,
+            "gyro_z_dps": None,
+            "accel_fwd_ms2": None,
+        }
         s = cli._sample_from_row(null_row)
-        for field in ("depth_m", "heading_deg", "pressure_psi", "mag_cal",
-                      "gyro_z_dps", "accel_fwd_ms2"):
+        for field in ("depth_m", "heading_deg", "pressure_psi", "mag_cal", "gyro_z_dps", "accel_fwd_ms2"):
             with self.subTest(field=field):
-                self.assertIsNone(getattr(s, field),
-                                  f"{field} came back as {getattr(s, field)!r} from a "
-                                  f"present-and-null column — the estimator is now being "
-                                  f"fed a measurement that was never taken")
-        missing_row = {k: v for k, v in synthetic_rows(1)[0].items()
-                       if k not in ("depth_m", "heading_deg", "psi", "mag_cal")}
-        s2 = cli._sample_from_row(missing_row)      # must not raise
+                self.assertIsNone(
+                    getattr(s, field),
+                    f"{field} came back as {getattr(s, field)!r} from a "
+                    f"present-and-null column — the estimator is now being "
+                    f"fed a measurement that was never taken",
+                )
+        missing_row = {
+            k: v for k, v in synthetic_rows(1)[0].items() if k not in ("depth_m", "heading_deg", "psi", "mag_cal")
+        }
+        s2 = cli._sample_from_row(missing_row)  # must not raise
         self.assertIsNotNone(s2)
 
 
@@ -566,11 +632,12 @@ class TwoSocketsOneVehicleTest(unittest.TestCase):
         for tel_key, nav_key in _SHARED_FACTS:
             t, n = getattr(tel, tel_key), nav.get(nav_key)
             if (t is None) != (n is None):
-                bad.append(f"{tel_key}: /ws/control says {t!r}, /ws/nav says "
-                           f"{nav_key}={n!r} — one of them is a claim and the other is "
-                           f"an admission, about the same vehicle in the same tick")
-        self.assertEqual(bad, [], "\n".join(
-            [f"the two sockets disagree about what is known ({note}):"] + bad))
+                bad.append(
+                    f"{tel_key}: /ws/control says {t!r}, /ws/nav says "
+                    f"{nav_key}={n!r} — one of them is a claim and the other is "
+                    f"an admission, about the same vehicle in the same tick"
+                )
+        self.assertEqual(bad, [], "\n".join([f"the two sockets disagree about what is known ({note}):"] + bad))
 
     def test_a_healthy_hull_is_complete_on_both_sockets(self):
         c = Chain()
@@ -579,10 +646,12 @@ class TwoSocketsOneVehicleTest(unittest.TestCase):
         tel, nav = self._frames(c)
         self.assertIsNotNone(nav, "navigation must be answering, or this proves nothing")
         for tel_key, nav_key in _SHARED_FACTS:
-            self.assertIsNotNone(getattr(tel, tel_key), f"telemetry {tel_key} is null on a "
-                                                        f"vehicle whose sensors all answer")
-            self.assertIsNotNone(nav[nav_key], f"the nav frame's {nav_key} is null on a "
-                                               f"vehicle whose sensors all answer")
+            self.assertIsNotNone(
+                getattr(tel, tel_key), f"telemetry {tel_key} is null on a " f"vehicle whose sensors all answer"
+            )
+            self.assertIsNotNone(
+                nav[nav_key], f"the nav frame's {nav_key} is null on a " f"vehicle whose sensors all answer"
+            )
         self.assertAgree(tel, nav, "everything answering")
 
     def test_a_dead_compass_blanks_the_bearing_on_BOTH_sockets(self):
@@ -601,11 +670,13 @@ class TwoSocketsOneVehicleTest(unittest.TestCase):
         tel, nav = self._frames(c)
         if nav is not None:
             self.assertEqual(
-                tel.gyro_only is None, nav["gyro_only"] is None,
+                tel.gyro_only is None,
+                nav["gyro_only"] is None,
                 f"/ws/control gyro_only={tel.gyro_only!r} but /ws/nav gyro_only="
                 f"{nav['gyro_only']!r} with no bearing on either. false is navigation's "
                 f"REASSURING answer, and the console's RAW COMPASS badge is keyed on "
-                f"telling that apart from 'cannot say'.")
+                f"telling that apart from 'cannot say'.",
+            )
 
     def test_every_combination_of_dead_parts_agrees(self):
         # The combinations are where this breaks: each socket's fields were filled in by
@@ -630,18 +701,40 @@ class TwoSocketsOneVehicleTest(unittest.TestCase):
 # None of these three has a null to spend — their cannot-tell is spelled out instead —
 # and that is exactly why they are easy to forget.
 _REQUIRED_TELEMETRY = {
-    "armed": False, "left": 0.0, "right": 0.0, "ballast_target": 0.0,
-    "magnet": False, "light_green": False, "light_white": False,
-    "light_green_level": 0.0, "light_white_level": 0.0,
-    "leak": True, "leak_state": "UNKNOWN", "signal": -1, "mock": True,
+    "armed": False,
+    "left": 0.0,
+    "right": 0.0,
+    "ballast_target": 0.0,
+    "magnet": False,
+    "light_green": False,
+    "light_white": False,
+    "light_green_level": 0.0,
+    "light_white_level": 0.0,
+    "leak": True,
+    "leak_state": "UNKNOWN",
+    "signal": -1,
+    "mock": True,
 }
 
 # The readings a SENSOR stands behind. Each one can stop mid-dive, so each one must
 # have a null to spend — a required float leaves a dead sensor nowhere to say so, and
 # that is the hole three consecutive rounds fell into, in a different file each time.
-_MUST_BE_NULLABLE = ("depth", "pressure", "heading", "heading_card", "mag_cal",
-                     "battery_v", "current_a", "ballast_level", "speed_ms", "speed_src",
-                     "snagged", "gyro_only", "leak_probe_fault", "link_ms")
+_MUST_BE_NULLABLE = (
+    "depth",
+    "pressure",
+    "heading",
+    "heading_card",
+    "mag_cal",
+    "battery_v",
+    "current_a",
+    "ballast_level",
+    "speed_ms",
+    "speed_src",
+    "snagged",
+    "gyro_only",
+    "leak_probe_fault",
+    "link_ms",
+)
 
 
 def optional_telemetry_fields() -> list[str]:
@@ -669,22 +762,31 @@ class TelemetryContractTest(unittest.TestCase):
     def test_every_reading_that_can_stop_has_a_null_to_spend(self):
         optional = set(optional_telemetry_fields())
         missing = [f for f in _MUST_BE_NULLABLE if f not in optional]
-        self.assertEqual(missing, [], f"{missing} cannot be null on the wire. Each of "
-                                      f"these is measured by a part that can stop "
-                                      f"answering mid-dive, and a required field leaves "
-                                      f"the vehicle no way to say so — which is how a "
-                                      f"frozen 4.33 m and a 0.0 V pack reached an "
-                                      f"operator wearing full confidence.")
+        self.assertEqual(
+            missing,
+            [],
+            f"{missing} cannot be null on the wire. Each of "
+            f"these is measured by a part that can stop "
+            f"answering mid-dive, and a required field leaves "
+            f"the vehicle no way to say so — which is how a "
+            f"frozen 4.33 m and a 0.0 V pack reached an "
+            f"operator wearing full confidence.",
+        )
 
     def test_no_new_required_field_has_appeared_unexamined(self):
         required = {n for n, f in Telemetry.model_fields.items() if f.is_required()}
-        self.assertEqual(required, set(_REQUIRED_TELEMETRY), msg=(
-            "the set of REQUIRED Telemetry fields has changed. This is not busywork: "
-            "the question a new required field has to answer is 'can the thing behind "
-            "it stop answering?', and if it can, a required field gives it nowhere to "
-            "say so. If the new field is a reading, make it Optional and add it to "
-            "_MUST_BE_NULLABLE; if it genuinely cannot be absent, add it here with the "
-            "value a vehicle in trouble would send."))
+        self.assertEqual(
+            required,
+            set(_REQUIRED_TELEMETRY),
+            msg=(
+                "the set of REQUIRED Telemetry fields has changed. This is not busywork: "
+                "the question a new required field has to answer is 'can the thing behind "
+                "it stop answering?', and if it can, a required field gives it nowhere to "
+                "say so. If the new field is a reading, make it Optional and add it to "
+                "_MUST_BE_NULLABLE; if it genuinely cannot be absent, add it here with the "
+                "value a vehicle in trouble would send."
+            ),
+        )
 
     def test_every_optional_field_round_trips_as_null(self):
         optional = optional_telemetry_fields()
@@ -695,16 +797,21 @@ class TelemetryContractTest(unittest.TestCase):
         back = Telemetry.model_validate_json(raw)
         for name in optional:
             with self.subTest(field=name):
-                self.assertIn(name, on_wire,
-                              f"{name} was dropped from the JSON entirely rather than sent "
-                              f"as null. A consumer that asks whether the key is there "
-                              f"then reads a dead sensor as an old vehicle that never had "
-                              f"one — two different faults, one appearance.")
+                self.assertIn(
+                    name,
+                    on_wire,
+                    f"{name} was dropped from the JSON entirely rather than sent "
+                    f"as null. A consumer that asks whether the key is there "
+                    f"then reads a dead sensor as an old vehicle that never had "
+                    f"one — two different faults, one appearance.",
+                )
                 self.assertIsNone(on_wire[name], f"{name} serialised as {on_wire[name]!r}")
-                self.assertIsNone(getattr(back, name),
-                                  f"{name} came back as {getattr(back, name)!r} after "
-                                  f"model_validate_json — the null did not survive a "
-                                  f"round trip through the contract that defines it")
+                self.assertIsNone(
+                    getattr(back, name),
+                    f"{name} came back as {getattr(back, name)!r} after "
+                    f"model_validate_json — the null did not survive a "
+                    f"round trip through the contract that defines it",
+                )
 
     def test_a_frame_that_omits_them_still_validates(self):
         # The other direction: a vehicle older or newer than this contract must not have
@@ -713,17 +820,18 @@ class TelemetryContractTest(unittest.TestCase):
         raw = json.dumps({"type": "telemetry", **_REQUIRED_TELEMETRY})
         tel = Telemetry.model_validate_json(raw)
         for name in _MUST_BE_NULLABLE:
-            self.assertIsNone(getattr(tel, name),
-                              f"{name} defaulted to {getattr(tel, name)!r} on a frame that "
-                              f"never mentioned it — an absent field must land on "
-                              f"cannot-tell, never on a plausible reading")
+            self.assertIsNone(
+                getattr(tel, name),
+                f"{name} defaulted to {getattr(tel, name)!r} on a frame that "
+                f"never mentioned it — an absent field must land on "
+                f"cannot-tell, never on a plausible reading",
+            )
 
     def test_the_cannot_tells_that_are_not_nulls_survive_too(self):
         # leak_state and signal have no null to spend, so their cannot-tell is a value:
         # "UNKNOWN" and -1. A round trip that quietly normalised either one would undo
         # the only way those two readings have of admitting anything.
-        tel = Telemetry.model_validate_json(
-            Telemetry(**_REQUIRED_TELEMETRY).model_dump_json())
+        tel = Telemetry.model_validate_json(Telemetry(**_REQUIRED_TELEMETRY).model_dump_json())
         self.assertEqual(tel.leak_state, "UNKNOWN")
         self.assertEqual(tel.signal, -1)
         self.assertIs(tel.leak, True, "the old single-bit alarm must not read as a dry hull")
@@ -782,7 +890,7 @@ class CleanBootTest(unittest.TestCase):
         root.setLevel(logging.INFO)
         logging.getLogger("neptune").setLevel(logging.NOTSET)
 
-        import main                        # noqa: PLC0415 — deliberately late; see above
+        import main  # noqa: PLC0415 — deliberately late; see above
 
         async def _boot():
             async with main.lifespan(main.app):
@@ -806,7 +914,7 @@ class CleanBootTest(unittest.TestCase):
     def _licensed_prefixes(self) -> tuple[str, ...]:
         out = []
         if self.hw_is_mock:
-            out.append("neptune.hw")          # no GPIO on a bench: the fallback IS the news
+            out.append("neptune.hw")  # no GPIO on a bench: the fallback IS the news
         # "synthetic" belongs here for exactly the reason the other two do: SyntheticCamera
         # is the animated bench pattern, chosen by get_camera() only when there is NO real
         # camera to open. Its two warnings — picamera2 absent, and the WOLFANG CGI not
@@ -817,13 +925,15 @@ class CleanBootTest(unittest.TestCase):
         # one level up. A warning that always fires gets read past; so does a test that
         # always fails.
         if self.camera_kind in ("none", "mock", "synthetic"):
-            out.append("neptune.cam")         # no camera on this network, and it said so
+            out.append("neptune.cam")  # no camera on this network, and it said so
         return tuple(out)
 
     def test_the_boot_actually_came_up(self):
         # Without this, everything below could pass on a boot that never happened.
-        self.assertTrue(any(r.getMessage().startswith("NEPTUNE API up") for r in self.records),
-                        "the lifespan never reached the line that says the api is up")
+        self.assertTrue(
+            any(r.getMessage().startswith("NEPTUNE API up") for r in self.records),
+            "the lifespan never reached the line that says the api is up",
+        )
         self.assertTrue(any("control loop @" in r.getMessage() for r in self.records))
 
     def test_navigation_was_healthy_throughout(self):
@@ -839,23 +949,32 @@ class CleanBootTest(unittest.TestCase):
         licensed = self._licensed_prefixes()
         bad = [r for r in self._warnings() if not r.name.startswith(licensed)]
         self.assertEqual(
-            [], [f"{r.levelname} {r.name}: {r.getMessage()}" for r in bad],
+            [],
+            [f"{r.levelname} {r.name}: {r.getMessage()}" for r in bad],
             "a boot with nothing wrong with it warned anyway. A warning that fires every "
             "time is a warning that gets read past, and the day one of these means "
             "something it will be indistinguishable from today.\n"
             f"(licensed to complain, from the boot's own report: {list(licensed)} — "
-            f"hw_is_mock={self.hw_is_mock}, camera={self.camera_kind!r})")
+            f"hw_is_mock={self.hw_is_mock}, camera={self.camera_kind!r})",
+        )
 
     def test_navigation_is_not_indicted_before_it_has_been_started(self):
         # Named separately from the sweep above because the failure has a specific shape
         # worth recognising on sight: the control loop is created before nav in the
         # lifespan, so nav's own "never-started" reads to it as a subsystem that died.
-        said = [r.getMessage() for r in self.records
-                if r.levelno >= logging.WARNING and "navigation" in r.getMessage().lower()]
-        self.assertEqual(said, [], "navigation was reported as broken during a boot in "
-                                   f"which it came up clean ({self.health}). "
-                                   "'Not started yet' and 'stopped answering' are opposite "
-                                   "facts about a subsystem and must not share a line.")
+        said = [
+            r.getMessage()
+            for r in self.records
+            if r.levelno >= logging.WARNING and "navigation" in r.getMessage().lower()
+        ]
+        self.assertEqual(
+            said,
+            [],
+            "navigation was reported as broken during a boot in "
+            f"which it came up clean ({self.health}). "
+            "'Not started yet' and 'stopped answering' are opposite "
+            "facts about a subsystem and must not share a line.",
+        )
 
 
 if __name__ == "__main__":

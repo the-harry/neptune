@@ -5,6 +5,7 @@ Pure-Python point-to-polyline projection — the equivalent of Shapely's
 isolated Pi. Collapses a 1-D canal to 'distance along the waterway' and kills
 cross-track error for free. Works in local metres (convert the centreline first).
 """
+
 from __future__ import annotations
 
 import math

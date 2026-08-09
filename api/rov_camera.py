@@ -10,6 +10,7 @@ Frames are produced on a background thread (Picamera2's encoder, or the
 synthetic loop) into a thread-safe StreamingOutput; the async MJPEG generator
 hands them to Starlette without blocking the event loop.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -69,13 +70,9 @@ class PiCamera2Camera(CameraBase):
         from picamera2.outputs import FileOutput
 
         self.picam2 = Picamera2()
-        cfg = self.picam2.create_video_configuration(
-            main={"size": (settings.cam_width, settings.cam_height)}
-        )
+        cfg = self.picam2.create_video_configuration(main={"size": (settings.cam_width, settings.cam_height)})
         self.picam2.configure(cfg)
-        self.picam2.start_recording(
-            JpegEncoder(q=settings.cam_jpeg_quality), FileOutput(self.output)
-        )
+        self.picam2.start_recording(JpegEncoder(q=settings.cam_jpeg_quality), FileOutput(self.output))
         log.info("Picamera2 streaming %dx%d", settings.cam_width, settings.cam_height)
 
     def stop(self) -> None:
@@ -126,6 +123,7 @@ class SyntheticCamera(CameraBase):
 
 def get_camera() -> CameraBase:
     import os
+
     choice = os.environ.get("NEPTUNE_CAM", "auto").lower()
 
     def try_pi():
@@ -171,6 +169,5 @@ async def mjpeg_stream(cam: CameraBase):
         yield (
             boundary + b"\r\n"
             b"Content-Type: image/jpeg\r\n"
-            b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n"
-            + frame + b"\r\n"
+            b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n"
         )

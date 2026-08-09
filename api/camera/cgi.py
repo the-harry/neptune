@@ -10,6 +10,7 @@ Design forced by the server's quirks (spec §3.3):
     degraded, so requests don't pile onto a stalled camera.
 Every call is logged with duration for re-validating the timing table.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -74,7 +75,7 @@ def parse_cgi(text: str) -> CgiResponse:
             data[k] = v.rstrip("\r")
             last_key = k
         elif last_key is not None:
-            data[last_key] += "\n" + line.rstrip("\r")   # continuation
+            data[last_key] += "\n" + line.rstrip("\r")  # continuation
     return CgiResponse(code, status, data)
 
 
@@ -129,8 +130,14 @@ class CgiClient:
         return await self._enqueue(priority, {"action": "del", "property": dollar_path}, "del")
 
     async def dir(self, prop: str, frm: int = 0, count: int = 100, *, priority: int = PRIORITY_USER) -> str:
-        params = {"action": "dir", "property": prop, "format": "all",
-                  "from": str(frm), "count": str(count), "backward": ""}
+        params = {
+            "action": "dir",
+            "property": prop,
+            "format": "all",
+            "from": str(frm),
+            "count": str(count),
+            "backward": "",
+        }
         return await self._enqueue(priority, params, prop, raw=True)
 
     async def read_value(self, write_prop: str, *, priority: int = PRIORITY_USER) -> str | None:
@@ -154,15 +161,16 @@ class CgiClient:
         # hung and the server never came up. The worker's own per-request timeouts are
         # in _do(); this is the outer guarantee that a caller ALWAYS gets an answer,
         # including the answer "nothing is draining this queue".
-        budget = (cam_settings.timeout_slow_s if self._is_slow(params)
-                  else cam_settings.timeout_fast_s) * QUEUE_WAIT_FACTOR
+        budget = (
+            cam_settings.timeout_slow_s if self._is_slow(params) else cam_settings.timeout_fast_s
+        ) * QUEUE_WAIT_FACTOR
         try:
             return await asyncio.wait_for(fut, timeout=budget)
         except asyncio.TimeoutError:
             fut.cancel()
             raise CameraUnavailable(
-                f"the camera queue did not answer {prop_for_timing!r} within {budget:.0f}s — "
-                f"nothing is draining it") from None
+                f"the camera queue did not answer {prop_for_timing!r} within {budget:.0f}s — " f"nothing is draining it"
+            ) from None
 
     async def _run(self) -> None:
         while True:
@@ -191,9 +199,14 @@ class CgiClient:
             r = await self._client.get(url, timeout=timeout)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             self._breaker_open_until = time.monotonic() + cam_settings.breaker_cooldown_s
-            log.warning("CGI %s %s FAILED in %.0fms (%s) — breaker open %.0fs",
-                        params.get("action"), prop, (time.monotonic() - t0) * 1000, exc,
-                        cam_settings.breaker_cooldown_s)
+            log.warning(
+                "CGI %s %s FAILED in %.0fms (%s) — breaker open %.0fs",
+                params.get("action"),
+                prop,
+                (time.monotonic() - t0) * 1000,
+                exc,
+                cam_settings.breaker_cooldown_s,
+            )
             raise CameraUnavailable(str(exc)) from exc
         dt_ms = (time.monotonic() - t0) * 1000
 
@@ -205,8 +218,9 @@ class CgiClient:
             return body
 
         resp = parse_cgi(r.text)
-        log.info("CGI %s %s -> code=%d in %.0fms%s",
-                 params.get("action"), prop, resp.code, dt_ms, " [slow]" if slow else "")
+        log.info(
+            "CGI %s %s -> code=%d in %.0fms%s", params.get("action"), prop, resp.code, dt_ms, " [slow]" if slow else ""
+        )
         if slow:
             await asyncio.sleep(cam_settings.settle_after_slow_s)  # let the camera settle
         if not resp.ok:

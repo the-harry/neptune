@@ -21,6 +21,7 @@ The specific failures it exists to prevent:
 
 stdlib unittest only — no pytest, matching the client suite's no-framework ethos.
 """
+
 from __future__ import annotations
 
 import ast
@@ -92,11 +93,24 @@ def frame(hw: HardwareBase) -> Telemetry:
 # Every field Telemetry requires. Used to prove the NEW fields are all optional:
 # an old client, or a frame that genuinely cannot know, must still validate.
 MINIMUM_FRAME = dict(
-    armed=False, left=0.0, right=0.0, ballast_target=0.0, depth=0.0,
-    pressure=14.7, heading=0.0, heading_card="N", magnet=False,
-    light_green=False, light_white=False, light_green_level=0.0,
-    light_white_level=0.0, leak=False, leak_state="NORMAL",
-    battery_v=8.3, signal=4, mock=True,
+    armed=False,
+    left=0.0,
+    right=0.0,
+    ballast_target=0.0,
+    depth=0.0,
+    pressure=14.7,
+    heading=0.0,
+    heading_card="N",
+    magnet=False,
+    light_green=False,
+    light_white=False,
+    light_green_level=0.0,
+    light_white_level=0.0,
+    leak=False,
+    leak_state="NORMAL",
+    battery_v=8.3,
+    signal=4,
+    mock=True,
 )
 
 
@@ -149,6 +163,7 @@ class UnhomedBallastTest(unittest.TestCase):
         # there is no "now". Writing 0.0 here would turn a stop request into a
         # command to empty the ballast.
         from protocol import BallastMsg
+
         rov = RovState(MockHardware())
         rov.apply_ballast(BallastMsg(type="ballast", cmd="fill"))
         self.assertEqual(rov.ballast_target, 1.0)
@@ -165,8 +180,7 @@ class UnhomedBallastTest(unittest.TestCase):
                 hw.update(0.05)
         hw.ballast_pump("hold")
         tel = frame(hw)
-        self.assertTrue(tel.ballast_needs_rehome,
-                        "a counter known to be wrong must say so topside")
+        self.assertTrue(tel.ballast_needs_rehome, "a counter known to be wrong must say so topside")
         self.assertTrue(tel.ballast_homed)
 
 
@@ -248,8 +262,17 @@ class LeakAlarmEdgeTest(unittest.TestCase):
 # The new fields
 # ---------------------------------------------------------------------------
 class NewFieldTest(unittest.TestCase):
-    NEW_FIELDS = ("ballast_homed", "ballast_needs_rehome", "speed_ms", "speed_src",
-                  "snagged", "gyro_only", "mag_cal", "current_a", "leak_probe_fault")
+    NEW_FIELDS = (
+        "ballast_homed",
+        "ballast_needs_rehome",
+        "speed_ms",
+        "speed_src",
+        "snagged",
+        "gyro_only",
+        "mag_cal",
+        "current_a",
+        "leak_probe_fault",
+    )
 
     def test_every_new_field_exists_on_the_contract(self):
         # A rename here is a field the client silently stops receiving.
@@ -337,12 +360,12 @@ def load_battery_band():
     for node in ast.parse(src).body:
         if isinstance(node, ast.FunctionDef) and node.name == "battery_band":
             ns: dict = {"settings": settings}
-            exec(compile(ast.Module(body=[node], type_ignores=[]),  # noqa: S102
-                         str(_API_DIR / "main.py"), "exec"), ns)
+            exec(compile(ast.Module(body=[node], type_ignores=[]), str(_API_DIR / "main.py"), "exec"), ns)  # noqa: S102
             return ns["battery_band"]
     raise AssertionError(
         "api/main.py no longer defines battery_band() — the 2S banding rule has "
-        "moved and this test must follow it rather than quietly stop checking.")
+        "moved and this test must follow it rather than quietly stop checking."
+    )
 
 
 class BatteryBandTest(unittest.TestCase):
@@ -382,9 +405,11 @@ class BatteryBandTest(unittest.TestCase):
 
     def test_a_24v_reading_is_not_special_cased_into_health(self):
         # If anything ever "helpfully" rescaled, this is where it would show.
-        self.assertEqual(self.band(24.8), "ok",
-                         "24.8 V bands as a healthy 2S pack — which is exactly "
-                         "why leaving that number anywhere is dangerous")
+        self.assertEqual(
+            self.band(24.8),
+            "ok",
+            "24.8 V bands as a healthy 2S pack — which is exactly " "why leaving that number anywhere is dangerous",
+        )
 
     def test_the_bench_vehicle_reports_a_2s_voltage(self):
         v = frame(MockHardware()).battery_v
@@ -400,7 +425,8 @@ class NoTwentyFourVoltScaleTest(unittest.TestCase):
     # of writing that explains why 24.8 is gone, and that writing is the point.
     _BATTERY_LITERAL = re.compile(
         r"\b(battery_v|batteryV|battery_volts|batt_v|_voltage|fullV|warnV|critV|floorV)"
-        r"\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)\b")
+        r"\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)\b"
+    )
     _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".pytest_cache"}
     _EXTENSIONS = {".py", ".js", ".html", ".json", ".css", ".md"}
     # A 2S pack is 8.4 V full. Nothing above this can be describing it, and every
@@ -421,9 +447,14 @@ class NoTwentyFourVoltScaleTest(unittest.TestCase):
                     if volts > self._NOT_A_2S_PACK_V:
                         rel = path.relative_to(_REPO_ROOT).as_posix()
                         offenders.append(f"{rel}:{lineno}  {match.group(1)}={volts}  |  {line.strip()}")
-        self.assertEqual(offenders, [], "\n".join(
-            ["battery voltages left on the dead 24 V scale "
-             f"(a 2S pack is {settings.battery_full_v} V full):"] + offenders))
+        self.assertEqual(
+            offenders,
+            [],
+            "\n".join(
+                ["battery voltages left on the dead 24 V scale " f"(a 2S pack is {settings.battery_full_v} V full):"]
+                + offenders
+            ),
+        )
 
 
 if __name__ == "__main__":

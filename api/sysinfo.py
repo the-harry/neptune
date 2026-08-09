@@ -16,6 +16,7 @@ raises, so one missing sensor can never blank the whole reading. `None` means
 "could not read", which the client renders as "--" — it is never conflated with
 a real zero. That distinction matters: "CPU 0 deg C" is a lie, "CPU --" is honest.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -92,7 +93,7 @@ def cpu_pct() -> float | None:
         vals = [float(x) for x in first[1:]]
     except ValueError:
         return None
-    idle = vals[3] + (vals[4] if len(vals) > 4 else 0.0)   # idle + iowait
+    idle = vals[3] + (vals[4] if len(vals) > 4 else 0.0)  # idle + iowait
     total = sum(vals)
     busy = total - idle
     prev, _last_cpu = _last_cpu, (busy, total)
@@ -138,14 +139,14 @@ def mem() -> dict[str, float | int | None]:
         parts = line.split(":")
         if len(parts) == 2:
             try:
-                kv[parts[0]] = int(parts[1].strip().split()[0])   # kB
+                kv[parts[0]] = int(parts[1].strip().split()[0])  # kB
             except (ValueError, IndexError):
                 pass
     total = kv.get("MemTotal")
     avail = kv.get("MemAvailable")
     if not total:
         return {"total_mb": None, "used_mb": None, "pct": None}
-    if avail is None:                                            # very old kernels
+    if avail is None:  # very old kernels
         avail = kv.get("MemFree", 0) + kv.get("Cached", 0) + kv.get("Buffers", 0)
     used = total - avail
     return {
@@ -169,8 +170,7 @@ def swap() -> dict[str, float | int | None]:
     if not total:
         return {"total_mb": 0, "used_mb": 0, "pct": 0.0}
     used = total - kv.get("SwapFree", 0)
-    return {"total_mb": round(total / 1024), "used_mb": round(used / 1024),
-            "pct": round(100.0 * used / total, 1)}
+    return {"total_mb": round(total / 1024), "used_mb": round(used / 1024), "pct": round(100.0 * used / total, 1)}
 
 
 def disk(path: str = "/") -> dict[str, float | None]:
@@ -216,7 +216,7 @@ def _iface_addrs(iface: str) -> dict[str, list[str]]:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             packed = struct.pack("256s", iface.encode()[:15])
-            addr = fcntl.ioctl(s.fileno(), 0x8915, packed)[20:24]   # SIOCGIFADDR
+            addr = fcntl.ioctl(s.fileno(), 0x8915, packed)[20:24]  # SIOCGIFADDR
             v4.append(socket.inet_ntoa(addr))
         finally:
             s.close()
@@ -229,14 +229,14 @@ def _iface_addrs(iface: str) -> dict[str, list[str]]:
         if len(parts) >= 6 and parts[-1] == iface:
             hexa = parts[0]
             try:
-                grouped = ":".join(hexa[i:i + 4] for i in range(0, 32, 4))
+                grouped = ":".join(hexa[i : i + 4] for i in range(0, 32, 4))
                 v6.append(socket.inet_ntop(socket.AF_INET6, socket.inet_pton(socket.AF_INET6, grouped)))
             except Exception:  # noqa: BLE001
                 pass
     return {"v4": v4, "v6": v6}
 
 
-_last_net: dict[str, tuple[float, int, int]] = {}   # iface -> (t, rx, tx)
+_last_net: dict[str, tuple[float, int, int]] = {}  # iface -> (t, rx, tx)
 
 
 def iface(name: str) -> dict:
@@ -245,9 +245,9 @@ def iface(name: str) -> dict:
     if not os.path.isdir(base):
         return {"name": name, "present": False, "up": False}
 
-    operstate = _read(f"{base}/operstate")          # up | down | unknown
-    carrier = _read_int(f"{base}/carrier")          # 1 = cable/assoc present
-    speed = _read_int(f"{base}/speed")              # Mb/s, -1 when unknown
+    operstate = _read(f"{base}/operstate")  # up | down | unknown
+    carrier = _read_int(f"{base}/carrier")  # 1 = cable/assoc present
+    speed = _read_int(f"{base}/speed")  # Mb/s, -1 when unknown
     mac = _read(f"{base}/address")
     rx = _read_int(f"{base}/statistics/rx_bytes")
     tx = _read_int(f"{base}/statistics/tx_bytes")
@@ -259,7 +259,7 @@ def iface(name: str) -> dict:
         _last_net[name] = (now, rx, tx)
         if prev:
             dt = now - prev[0]
-            if dt > 0.2:                            # ignore jittery sub-tick deltas
+            if dt > 0.2:  # ignore jittery sub-tick deltas
                 rx_bps = max(0, round((rx - prev[1]) / dt))
                 tx_bps = max(0, round((tx - prev[2]) / dt))
 
@@ -393,8 +393,7 @@ class DeepProbe:
 
     def __init__(self, period_s: float = 10.0) -> None:
         self.period_s = period_s
-        self.data: dict = {"services": {}, "throttled": None, "ssid": None,
-                           "camera_reachable": None, "model": None}
+        self.data: dict = {"services": {}, "throttled": None, "ssid": None, "camera_reachable": None, "model": None}
         self._task: asyncio.Task | None = None
 
     def _collect(self) -> dict:
@@ -402,7 +401,7 @@ class DeepProbe:
             "services": services(),
             "throttled": throttled(),
             "ssid": wifi_ssid(),
-            "camera_reachable": tcp_reachable(CAMERA_IP, 554),   # RTSP
+            "camera_reachable": tcp_reachable(CAMERA_IP, 554),  # RTSP
             "model": model(),
         }
 

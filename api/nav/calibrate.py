@@ -31,6 +31,7 @@ WHAT IT CAN AND CANNOT TELL YOU — read this before trusting a number
     Where the data cannot support a number, this says so and returns nothing for
     it. A calibration tool that always produces an answer is worse than none.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -39,8 +40,8 @@ import math
 from pathlib import Path
 
 # A steady segment: control input held still enough, for long enough, to mean anything.
-MIN_RUN_S = 3.0            # shorter than this and startup transients dominate
-CTRL_TOLERANCE = 0.05      # how much the input may wander and still count as "held"
+MIN_RUN_S = 3.0  # shorter than this and startup transients dominate
+CTRL_TOLERANCE = 0.05  # how much the input may wander and still count as "held"
 MIN_SAMPLES = 8
 
 
@@ -54,7 +55,7 @@ def read_dive(path: Path):
                 continue
             try:
                 rec = json.loads(line)
-            except Exception:      # noqa: BLE001 — a crashed process ends mid-write
+            except Exception:  # noqa: BLE001 — a crashed process ends mid-write
                 continue
             if rec.get("type") == "header":
                 header = rec
@@ -93,11 +94,11 @@ def _column_state(samples, key) -> str:
     """'absent' | 'silent' | 'partial' | 'complete' for one measured column."""
     present = [s for s in samples if key in s]
     if not present:
-        return "absent"                                   # no such column in this log
+        return "absent"  # no such column in this log
     if all(s[key] is None for s in present):
-        return "silent"                                   # there, and never once answered
+        return "silent"  # there, and never once answered
     if any(s[key] is None for s in present):
-        return "partial"                                  # answered, then stopped
+        return "partial"  # answered, then stopped
     return "complete"
 
 
@@ -114,15 +115,21 @@ def _why_null(samples, key, part, dropped, segment, quantity) -> str:
     """
     state = _column_state(samples, key)
     if state == "absent":
-        return (f"this log has no {key} column at all — it predates that channel, so "
-                f"{quantity} is not derivable from it (the {part} may well have been "
-                f"fitted and fine; nothing here recorded it)")
+        return (
+            f"this log has no {key} column at all — it predates that channel, so "
+            f"{quantity} is not derivable from it (the {part} may well have been "
+            f"fitted and fine; nothing here recorded it)"
+        )
     if state == "silent":
-        return (f"the {key} column is present and null on every sample — the {part} never "
-                f"answered once in this dive, so {quantity} is not measurable from it")
-    return (f"the {part} was null inside every {segment} ({dropped} of them) — it answered "
-            f"for part of this dive and then stopped, so {quantity} is not measurable from "
-            f"what is left")
+        return (
+            f"the {key} column is present and null on every sample — the {part} never "
+            f"answered once in this dive, so {quantity} is not measurable from it"
+        )
+    return (
+        f"the {part} was null inside every {segment} ({dropped} of them) — it answered "
+        f"for part of this dive and then stopped, so {quantity} is not measurable from "
+        f"what is left"
+    )
 
 
 def _runs(samples, key, tol=CTRL_TOLERANCE):
@@ -208,20 +215,24 @@ def turn_rate(samples):
             # Naming the count matters: "no steady steer segments" would send someone
             # to fly the dive again, when the dive was flown correctly and the compass
             # died in the middle of it. Those are different jobs.
-            return None, _why_null(samples, "heading_deg", "compass", dropped,
-                                   "steady steer segment", "turn rate")
+            return None, _why_null(samples, "heading_deg", "compass", dropped, "steady steer segment", "turn rate")
         return None, "no steady steer segments with a moving heading"
     # Rate should be proportional to steer, so per-unit is the quantity to average.
     per_unit = [r / s for s, r, _n, _d in pts]
     if max(per_unit) <= 0.01:
-        return None, ("heading never changed under steer — no IMU fitted, or the sub "
-                      "was never armed. Turn rate is not measurable from this log.")
+        return None, (
+            "heading never changed under steer — no IMU fitted, or the sub "
+            "was never armed. Turn rate is not measurable from this log."
+        )
     mean = sum(per_unit) / len(per_unit)
     spread = max(per_unit) - min(per_unit)
-    return {"deg_per_s_per_unit_steer": round(mean, 1),
-            "segments": len(pts), "spread": round(spread, 1),
-            "dropped_null": dropped,
-            "detail": [(round(s, 2), round(r, 1)) for s, r, _n, _d in pts]}, None
+    return {
+        "deg_per_s_per_unit_steer": round(mean, 1),
+        "segments": len(pts),
+        "spread": round(spread, 1),
+        "dropped_null": dropped,
+        "detail": [(round(s, 2), round(r, 1)) for s, r, _n, _d in pts],
+    }, None
 
 
 def depth_model(samples):
@@ -240,14 +251,15 @@ def depth_model(samples):
             continue
         # Settled = depth no longer moving; anything else is the transient, not the target.
         d = [s["depth_m"] for s in run]
-        tail = d[max(0, len(d) - 5):]
+        tail = d[max(0, len(d) - 5) :]
         if len(tail) < 3 or (max(tail) - min(tail)) > 0.05:
             continue
         pts.append((run[0]["ballast"], sum(tail) / len(tail), len(run)))
     if not pts:
         if dropped:
-            return None, _why_null(samples, "depth_m", "pressure sensor", dropped,
-                                   "settled ballast segment", "the depth model")
+            return None, _why_null(
+                samples, "depth_m", "pressure sensor", dropped, "settled ballast segment", "the depth model"
+            )
         return None, "no settled ballast segments (needs the depth to stop changing)"
     if len(pts) < 2:
         # ONE POINT IS NOT A CURVE — AND IT IS NOT EVIDENCE OF A DEAD SENSOR EITHER.
@@ -262,13 +274,17 @@ def depth_model(samples):
             # The nulls are the reason there is only one, so they lead. "The dive did
             # not hold enough settings" would be false here — it held them, and the
             # sensor was not there for them.
-            return None, (f"only one settled ballast setting SURVIVES (ballast {b:.2f} at "
-                          f"{d:.2f} m) — the other {dropped} were skipped because the depth "
-                          f"was null inside them. The sensor answered for part of this dive "
-                          f"and then stopped, and a ballast->depth curve needs at least two.")
-        return None, (f"only one settled ballast setting in this log (ballast {b:.2f} at "
-                      f"{d:.2f} m) — a ballast->depth curve needs at least two. The sensor "
-                      f"answered; the dive did not hold enough settings to fit against.")
+            return None, (
+                f"only one settled ballast setting SURVIVES (ballast {b:.2f} at "
+                f"{d:.2f} m) — the other {dropped} were skipped because the depth "
+                f"was null inside them. The sensor answered for part of this dive "
+                f"and then stopped, and a ballast->depth curve needs at least two."
+            )
+        return None, (
+            f"only one settled ballast setting in this log (ballast {b:.2f} at "
+            f"{d:.2f} m) — a ballast->depth curve needs at least two. The sensor "
+            f"answered; the dive did not hold enough settings to fit against."
+        )
     if max(p[1] for p in pts) - min(p[1] for p in pts) < 0.05:
         # "NO PRESSURE SENSOR FITTED" IS A DIAGNOSIS, AND IT MUST NOT BE HANDED TO A
         # DIVE WHOSE SENSOR WAS FITTED AND DIED. Once the null segments are skipped, a
@@ -278,20 +294,27 @@ def depth_model(samples):
         # completely different things (go and fit the part, versus go and find out why
         # the part stopped), so the count decides which sentence is printed.
         if dropped:
-            return None, (f"the settled ballast segments that survived are all at the same "
-                          f"depth — the {dropped} that would have shown the sub descending "
-                          f"were skipped because the pressure sensor was null inside them. "
-                          f"It answered for part of this dive and then stopped; the depth "
-                          f"model is not measurable from what is left.")
-        return None, ("depth never changed with ballast — no pressure sensor fitted. "
-                      "The depth model is not measurable from this log.")
+            return None, (
+                f"the settled ballast segments that survived are all at the same "
+                f"depth — the {dropped} that would have shown the sub descending "
+                f"were skipped because the pressure sensor was null inside them. "
+                f"It answered for part of this dive and then stopped; the depth "
+                f"model is not measurable from what is left."
+            )
+        return None, (
+            "depth never changed with ballast — no pressure sensor fitted. "
+            "The depth model is not measurable from this log."
+        )
     # depth = k * ballast, through the origin: k is maxDepthM at full ballast.
     num = sum(b * dd for b, dd, _ in pts)
     den = sum(b * b for b, _dd, _ in pts)
     k = (num / den) if den > 0 else 0.0
-    return {"max_depth_m_at_full_ballast": round(k, 2), "points": len(pts),
-            "dropped_null": dropped,
-            "detail": [(round(b, 2), round(dd, 2)) for b, dd, _ in pts]}, None
+    return {
+        "max_depth_m_at_full_ballast": round(k, 2),
+        "points": len(pts),
+        "dropped_null": dropped,
+        "detail": [(round(b, 2), round(dd, 2)) for b, dd, _ in pts],
+    }, None
 
 
 def speed_from_ground_truth(samples, distance_m):
@@ -310,10 +333,14 @@ def speed_from_ground_truth(samples, distance_m):
     if dt <= 0:
         return None, "the steady segment has no duration"
     v = distance_m / dt
-    return {"throttle": round(thr, 2), "seconds": round(dt, 1),
-            "distance_m": distance_m, "speed_ms": round(v, 3),
-            "speed_at_full_throttle_ms": round(v / thr, 3) if thr > 0 else None,
-            "other_runs": len(runs) - 1}, None
+    return {
+        "throttle": round(thr, 2),
+        "seconds": round(dt, 1),
+        "distance_m": distance_m,
+        "speed_ms": round(v, 3),
+        "speed_at_full_throttle_ms": round(v / thr, 3) if thr > 0 else None,
+        "other_runs": len(runs) - 1,
+    }, None
 
 
 def encoder_speed(samples):
@@ -365,16 +392,16 @@ def _gaps(samples) -> list[str]:
     for key, label, cost in MEASURED_COLUMNS:
         present = [s for s in samples if key in s]
         if not present:
-            out.append(f"{label}: no {key} column in this log at all — {cost} is not "
-                       f"derivable from it")
+            out.append(f"{label}: no {key} column in this log at all — {cost} is not " f"derivable from it")
             continue
         nulls = [s["t"] for s in present if s[key] is None]
         if not nulls:
             continue
-        where = ("never answered once" if len(nulls) == len(present)
-                 else f"first at t={nulls[0]:.1f}s")
-        out.append(f"{label}: null in {len(nulls)} of {len(present)} samples "
-                   f"({100.0 * len(nulls) / len(present):.0f}%), {where}")
+        where = "never answered once" if len(nulls) == len(present) else f"first at t={nulls[0]:.1f}s"
+        out.append(
+            f"{label}: null in {len(nulls)} of {len(present)} samples "
+            f"({100.0 * len(nulls) / len(present):.0f}%), {where}"
+        )
     return out
 
 
@@ -413,8 +440,10 @@ def report(path: Path, ground_truth: float | None = None) -> int:
     print("\n--- TURN RATE (from measured heading) ---")
     tr, why = turn_rate(samples)
     if tr:
-        print(f"  {tr['deg_per_s_per_unit_steer']} deg/s per unit steer "
-              f"({tr['segments']} segments, spread {tr['spread']} deg/s)")
+        print(
+            f"  {tr['deg_per_s_per_unit_steer']} deg/s per unit steer "
+            f"({tr['segments']} segments, spread {tr['spread']} deg/s)"
+        )
         print(f"  -> client CONFIG.sim.headingRatePerS = {tr['deg_per_s_per_unit_steer']}")
         if tr["spread"] > tr["deg_per_s_per_unit_steer"] * 0.5:
             print("  NOTE: the spread is wide — treat this as a first estimate, not a constant.")
@@ -444,10 +473,13 @@ def report(path: Path, ground_truth: float | None = None) -> int:
     elif ground_truth:
         gt, why = speed_from_ground_truth(samples, ground_truth)
         if gt:
-            print(f"  {gt['distance_m']} m in {gt['seconds']} s at throttle {gt['throttle']}"
-                  f"  =  {gt['speed_ms']} m/s")
-            print(f"  -> client CONFIG.map.subMaxSpeedMs = {gt['speed_at_full_throttle_ms']}"
-                  f"   (extrapolated to full throttle)")
+            print(
+                f"  {gt['distance_m']} m in {gt['seconds']} s at throttle {gt['throttle']}" f"  =  {gt['speed_ms']} m/s"
+            )
+            print(
+                f"  -> client CONFIG.map.subMaxSpeedMs = {gt['speed_at_full_throttle_ms']}"
+                f"   (extrapolated to full throttle)"
+            )
             if gt["other_runs"]:
                 print(f"  NOTE: {gt['other_runs']} other steady runs in this log — re-run with the")
                 print("        distance for each throttle step to build a proper LUT.")
@@ -472,19 +504,35 @@ def _synthetic(turn=40.0, max_depth=9.0, speed=0.8, dt=0.1):
             t += dt
             hdg = (hdg + steer * turn * dt) % 360
             payout += abs(thr) * speed * dt
-            out.append({"type": "s", "t": round(t, 3), "x": 0.0, "y": 0.0,
-                        "depth_m": round(depth, 3), "heading_deg": round(hdg, 3),
-                        "snapped": False, "confidence": 1.0,
-                        "throttle": thr, "steer": steer, "left": thr, "right": thr,
-                        "ballast": ballast, "ballast_tgt": ballast,
-                        "psi": 14.7 + depth * 1.42, "armed": True, "mag_cal": 3,
-                        "encoder_m": round(payout, 3)})
-    emit(100, 0.5, 0.0, 0.0, 0.0)                       # straight, half throttle
-    emit(100, 0.0, 1.0, 0.0, 0.0)                       # full right, stationary
-    emit(100, 0.0, 0.5, 0.0, 0.0)                       # half right
-    emit(100, 0.0, 0.0, 0.5, max_depth * 0.5)           # settled at half ballast
-    emit(100, 0.0, 0.0, 1.0, max_depth)                 # settled at full ballast
-    emit(100, 1.0, 0.0, 1.0, max_depth)                 # straight, full throttle
+            out.append(
+                {
+                    "type": "s",
+                    "t": round(t, 3),
+                    "x": 0.0,
+                    "y": 0.0,
+                    "depth_m": round(depth, 3),
+                    "heading_deg": round(hdg, 3),
+                    "snapped": False,
+                    "confidence": 1.0,
+                    "throttle": thr,
+                    "steer": steer,
+                    "left": thr,
+                    "right": thr,
+                    "ballast": ballast,
+                    "ballast_tgt": ballast,
+                    "psi": 14.7 + depth * 1.42,
+                    "armed": True,
+                    "mag_cal": 3,
+                    "encoder_m": round(payout, 3),
+                }
+            )
+
+    emit(100, 0.5, 0.0, 0.0, 0.0)  # straight, half throttle
+    emit(100, 0.0, 1.0, 0.0, 0.0)  # full right, stationary
+    emit(100, 0.0, 0.5, 0.0, 0.0)  # half right
+    emit(100, 0.0, 0.0, 0.5, max_depth * 0.5)  # settled at half ballast
+    emit(100, 0.0, 0.0, 1.0, max_depth)  # settled at full ballast
+    emit(100, 1.0, 0.0, 1.0, max_depth)  # straight, full throttle
     return out
 
 
@@ -510,8 +558,10 @@ def selftest() -> int:
     gote = enc and dict(enc["lut_points"]).get(1.0)
     good = enc is not None and gote is not None and abs(gote - truth["speed"]) <= 0.05
     ok &= good
-    print(f"  {'pass' if good else 'FAIL'}  speed from encoder at full throttle: got {gote}, "
-          f"truth {truth['speed']} ({why or ''})")
+    print(
+        f"  {'pass' if good else 'FAIL'}  speed from encoder at full throttle: got {gote}, "
+        f"truth {truth['speed']} ({why or ''})"
+    )
 
     # And the honesty case: a log with no sensors must refuse, not invent.
     flat = [dict(x, heading_deg=0.0, depth_m=0.0, encoder_m=None) for x in _synthetic()]
@@ -539,7 +589,8 @@ def selftest() -> int:
     half = _synthetic(**truth)
     cut = len(half) // 2
     dead = [dict(s) for s in half[:cut]] + [
-        dict(s, heading_deg=None, depth_m=None, psi=None, mag_cal=None) for s in half[cut:]]
+        dict(s, heading_deg=None, depth_m=None, psi=None, mag_cal=None) for s in half[cut:]
+    ]
     try:
         tr3, why4 = turn_rate(dead)
         dm3, why5 = depth_model(dead)
@@ -549,8 +600,10 @@ def selftest() -> int:
         crashed = f"{type(exc).__name__}: {exc}"
     good = crashed is None
     ok &= good
-    print(f"  {'pass' if good else 'FAIL'}  a log whose chips died mid-dive is read at all "
-          f"({crashed or 'no exception'})")
+    print(
+        f"  {'pass' if good else 'FAIL'}  a log whose chips died mid-dive is read at all "
+        f"({crashed or 'no exception'})"
+    )
 
     # The synthetic dive turns in its first half and ballasts in its second, so killing
     # the sensors at the midpoint leaves turn rate measurable and takes the depth model
@@ -558,32 +611,38 @@ def selftest() -> int:
     # the truth it was built from, and the other must refuse.
     good = tr3 is not None and abs(tr3["deg_per_s_per_unit_steer"] - truth["turn"]) <= 1.0
     ok &= good
-    print(f"  {'pass' if good else 'FAIL'}  ...and the half that was measured still reads "
-          f"{tr3 and tr3['deg_per_s_per_unit_steer']}, not a heading of 0.0 dragged in "
-          f"({why4 or ''})")
+    print(
+        f"  {'pass' if good else 'FAIL'}  ...and the half that was measured still reads "
+        f"{tr3 and tr3['deg_per_s_per_unit_steer']}, not a heading of 0.0 dragged in "
+        f"({why4 or ''})"
+    )
 
     good = dm3 is None and "null" in (why5 or "")
     ok &= good
-    print(f"  {'pass' if good else 'FAIL'}  ...and the half that was not is refused, naming "
-          f"the null rather than fitting 0.0 m as 'the surface' ({why5 or ''})")
+    print(
+        f"  {'pass' if good else 'FAIL'}  ...and the half that was not is refused, naming "
+        f"the null rather than fitting 0.0 m as 'the surface' ({why5 or ''})"
+    )
 
     # A skip that is not reported is a quiet lie about what the number covers.
     reported = [g for g in _gaps(dead) if g.startswith(("heading:", "depth:"))]
     good = len(reported) == 2 and all("null in" in g for g in reported)
     ok &= good
-    print(f"  {'pass' if good else 'FAIL'}  ...and the gap is REPORTED, not silently "
-          f"stepped over ({len(reported)} of 2 channels named)")
+    print(
+        f"  {'pass' if good else 'FAIL'}  ...and the gap is REPORTED, not silently "
+        f"stepped over ({len(reported)} of 2 channels named)"
+    )
 
     print("\nselftest " + ("passed" if ok else "FAILED"))
     return 0 if ok else 1
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="nav.calibrate", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        prog="nav.calibrate", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("dive", nargs="?", help="path to a dive .jsonl")
-    ap.add_argument("--ground-truth", type=float,
-                    help="metres of a measured straight run, for the speed model")
+    ap.add_argument("--ground-truth", type=float, help="metres of a measured straight run, for the speed model")
     ap.add_argument("--selftest", action="store_true", help="check the maths against a known dive")
     a = ap.parse_args(argv)
     if a.selftest:

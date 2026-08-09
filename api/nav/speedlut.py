@@ -4,6 +4,7 @@ Built once per hull ('measure 20 m, run each throttle step, time the traverse').
 This is the single largest accuracy win in the whole system, so it's a first-class
 object stored per hull config — not a magic constant.
 """
+
 from __future__ import annotations
 
 import json

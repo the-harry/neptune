@@ -10,8 +10,10 @@ __all__ = ["BlackBox", "build_router"]
 def __getattr__(name):
     if name == "BlackBox":
         from .recorder import BlackBox
+
         return BlackBox
     if name == "build_router":
         from .service import build_router
+
         return build_router
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

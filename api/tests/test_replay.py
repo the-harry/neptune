@@ -26,6 +26,7 @@ To see the numbers rather than just the verdict:
     python -m nav.cli sim
     python -m nav.cli replay data/dives/sim-*.jsonl --filter both
 """
+
 from __future__ import annotations
 
 import io
@@ -93,58 +94,76 @@ class ReplayAcceptance(unittest.TestCase):
 
     def _ab(self, path: Path) -> tuple[dict, dict, cli.ReplayLog]:
         log = cli.load_replay_log(path)
-        self.assertTrue(log.has_truth, "the simulator's ground truth did not reach the journal, "
-                                       "so nothing below can be scored")
-        return (cli.score(cli.replay(log, "dr"), log),
-                cli.score(cli.replay(log, "filtered"), log), log)
+        self.assertTrue(
+            log.has_truth, "the simulator's ground truth did not reach the journal, " "so nothing below can be scored"
+        )
+        return (cli.score(cli.replay(log, "dr"), log), cli.score(cli.replay(log, "filtered"), log), log)
 
     # ---- ACCEPTANCE TEST 1 ------------------------------------------------
     def test_filtered_beats_dr_through_the_magnetic_disturbance(self):
         dr, ft, _log = self._ab(self.disturbed)
-        detail = (f"\n  mean track error : dr {dr['truth_mean']:.2f} m   "
-                  f"filtered {ft['truth_mean']:.2f} m"
-                  f"\n  final position   : dr {dr['truth_final']:.2f} m   "
-                  f"filtered {ft['truth_final']:.2f} m"
-                  f"\n  worst            : dr {dr['truth_worst']:.2f} m   "
-                  f"filtered {ft['truth_worst']:.2f} m"
-                  f"\n  gyro-only        : filtered {ft['gyro_only_pct']:.1f}% of samples"
-                  f"\n  path flown       : {self.disturbed_len:.1f} m")
+        detail = (
+            f"\n  mean track error : dr {dr['truth_mean']:.2f} m   "
+            f"filtered {ft['truth_mean']:.2f} m"
+            f"\n  final position   : dr {dr['truth_final']:.2f} m   "
+            f"filtered {ft['truth_final']:.2f} m"
+            f"\n  worst            : dr {dr['truth_worst']:.2f} m   "
+            f"filtered {ft['truth_worst']:.2f} m"
+            f"\n  gyro-only        : filtered {ft['gyro_only_pct']:.1f}% of samples"
+            f"\n  path flown       : {self.disturbed_len:.1f} m"
+        )
 
-        self.assertLess(ft["truth_mean"], dr["truth_mean"],
-                        "filtered did NOT beat dead reckoning on mean track error through the "
-                        "mag disturbance — this is the scenario the filter exists for." + detail)
+        self.assertLess(
+            ft["truth_mean"],
+            dr["truth_mean"],
+            "filtered did NOT beat dead reckoning on mean track error through the "
+            "mag disturbance — this is the scenario the filter exists for." + detail,
+        )
         self.assertLessEqual(
-            ft["truth_mean"], DISTURBED_MAX_ERROR_RATIO * dr["truth_mean"],
+            ft["truth_mean"],
+            DISTURBED_MAX_ERROR_RATIO * dr["truth_mean"],
             f"filtered won, but by less than the {1 - DISTURBED_MAX_ERROR_RATIO:.0%} margin a "
-            f"real improvement should show on this path — that is within luck on one seed."
-            + detail)
-        self.assertLess(ft["truth_final"], dr["truth_final"],
-                        "filtered ended FURTHER from truth than dead reckoning did." + detail)
+            f"real improvement should show on this path — that is within luck on one seed." + detail,
+        )
+        self.assertLess(
+            ft["truth_final"], dr["truth_final"], "filtered ended FURTHER from truth than dead reckoning did." + detail
+        )
         # The filter can only have won by ignoring the poisoned compass, so if it never
         # went gyro-only it won for some other reason and this test is not measuring
         # what it claims to.
-        self.assertGreater(ft["gyro_only_pct"], 10.0,
-                           "filtered never coasted on the gyro, so whatever it beat dr with, it "
-                           "was not the trust gate this test is supposed to exercise." + detail)
+        self.assertGreater(
+            ft["gyro_only_pct"],
+            10.0,
+            "filtered never coasted on the gyro, so whatever it beat dr with, it "
+            "was not the trust gate this test is supposed to exercise." + detail,
+        )
 
     # ---- ACCEPTANCE TEST 2 ------------------------------------------------
     def test_filtered_is_not_worse_on_a_clean_log(self):
         dr, ft, _log = self._ab(self.clean)
         allowance = CLEAN_TOLERANCE_FRACTION * self.clean_len
-        detail = (f"\n  mean track error : dr {dr['truth_mean']:.2f} m   "
-                  f"filtered {ft['truth_mean']:.2f} m"
-                  f"\n  final position   : dr {dr['truth_final']:.2f} m   "
-                  f"filtered {ft['truth_final']:.2f} m"
-                  f"\n  allowance        : {allowance:.2f} m "
-                  f"({CLEAN_TOLERANCE_FRACTION:.0%} of {self.clean_len:.1f} m flown)")
+        detail = (
+            f"\n  mean track error : dr {dr['truth_mean']:.2f} m   "
+            f"filtered {ft['truth_mean']:.2f} m"
+            f"\n  final position   : dr {dr['truth_final']:.2f} m   "
+            f"filtered {ft['truth_final']:.2f} m"
+            f"\n  allowance        : {allowance:.2f} m "
+            f"({CLEAN_TOLERANCE_FRACTION:.0%} of {self.clean_len:.1f} m flown)"
+        )
 
-        self.assertLessEqual(ft["truth_mean"], dr["truth_mean"] + allowance,
-                             "on a clean log filtered is worse than dead reckoning by more than "
-                             "the allowance — the filter is costing metres in the ordinary "
-                             "case." + detail)
-        self.assertLessEqual(ft["truth_final"], dr["truth_final"] + allowance,
-                             "on a clean log filtered ends further from truth than dead "
-                             "reckoning by more than the allowance." + detail)
+        self.assertLessEqual(
+            ft["truth_mean"],
+            dr["truth_mean"] + allowance,
+            "on a clean log filtered is worse than dead reckoning by more than "
+            "the allowance — the filter is costing metres in the ordinary "
+            "case." + detail,
+        )
+        self.assertLessEqual(
+            ft["truth_final"],
+            dr["truth_final"] + allowance,
+            "on a clean log filtered ends further from truth than dead "
+            "reckoning by more than the allowance." + detail,
+        )
 
 
 class ReplayHarness(unittest.TestCase):
@@ -163,25 +182,33 @@ class ReplayHarness(unittest.TestCase):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def _rows(self):
-        return [json.loads(ln) for ln in self.path.read_text(encoding="utf-8").splitlines()
-                if json.loads(ln).get("type") == "s"]
+        return [
+            json.loads(ln)
+            for ln in self.path.read_text(encoding="utf-8").splitlines()
+            if json.loads(ln).get("type") == "s"
+        ]
 
     def test_journal_carries_the_measured_channels_and_truth(self):
         rows = self._rows()
         self.assertGreater(len(rows), 100)
-        for key in ("raw_heading_deg", "gyro_z_dps", "accel_fwd_ms2", "encoder_m",
-                    "true_x", "true_y"):
-            self.assertIn(key, rows[0], f"{key} never reached the journal — a dive missing it "
-                                        f"cannot be replayed through the filter")
+        for key in ("raw_heading_deg", "gyro_z_dps", "accel_fwd_ms2", "encoder_m", "true_x", "true_y"):
+            self.assertIn(
+                key,
+                rows[0],
+                f"{key} never reached the journal — a dive missing it " f"cannot be replayed through the filter",
+            )
         # The paddlewheel is the whole reason the speed filter and the snag detector
         # exist. A log where it is null everywhere is a log where neither was tested.
-        self.assertTrue(any(r.get("speed_ms_measured") is not None for r in rows),
-                        "the paddlewheel column is null for the entire log")
+        self.assertTrue(
+            any(r.get("speed_ms_measured") is not None for r in rows),
+            "the paddlewheel column is null for the entire log",
+        )
         # ...and it must still be null somewhere: below ~0.1 m/s the wheel stalls, and
         # a log that never shows that has quietly stopped modelling the stall.
-        self.assertTrue(any(r.get("speed_ms_measured") is None for r in rows),
-                        "the paddlewheel never went stale, so the stale branches of the "
-                        "speed filter were never exercised")
+        self.assertTrue(
+            any(r.get("speed_ms_measured") is None for r in rows),
+            "the paddlewheel never went stale, so the stale branches of the " "speed filter were never exercised",
+        )
 
     def test_replaying_dr_reproduces_the_track_it_logged(self):
         """The reader rebuilds the samples faithfully — or every score above is fiction.
@@ -192,9 +219,12 @@ class ReplayHarness(unittest.TestCase):
         log = cli.load_replay_log(self.path)
         sc = cli.score(cli.replay(log, "dr"), log)
         self.assertIsNotNone(sc["logged_mean"])
-        self.assertLessEqual(sc["logged_mean"], 0.01,
-                             f"replaying the recording backend did not reproduce its own track: "
-                             f"mean {sc['logged_mean']:.3f} m, final {sc['logged_final']:.3f} m")
+        self.assertLessEqual(
+            sc["logged_mean"],
+            0.01,
+            f"replaying the recording backend did not reproduce its own track: "
+            f"mean {sc['logged_mean']:.3f} m, final {sc['logged_final']:.3f} m",
+        )
 
     def test_a_geojson_on_its_own_is_refused(self):
         """A GeoJSON stores conclusions, not sensor readings. Refusing is the only
@@ -231,8 +261,7 @@ class ReplayHarness(unittest.TestCase):
         with redirect_stdout(out):
             cli._print_side_by_side(sc_dr, sc_ft)
         text = out.getvalue()
-        self.assertNotIn("VERDICT", text,
-                         "a winner was declared with no ground truth to declare it against")
+        self.assertNotIn("VERDICT", text, "a winner was declared with no ground truth to declare it against")
         self.assertIn("no ground truth", text)
 
     def test_the_replay_command_runs_end_to_end(self):
@@ -242,8 +271,7 @@ class ReplayHarness(unittest.TestCase):
             rc = cli.main(["replay", str(self.path), "--filter", "both"])
         text = out.getvalue()
         self.assertEqual(rc, 0, text)
-        for expected in ("--- dr ---", "--- filtered ---", "gyro-only", "speed source",
-                         "snag", "VERDICT"):
+        for expected in ("--- dr ---", "--- filtered ---", "gyro-only", "speed source", "snag", "VERDICT"):
             self.assertIn(expected, text)
 
 

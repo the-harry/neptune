@@ -19,6 +19,7 @@ vehicle and not a stand-in.
 
 stdlib unittest only — no pytest, matching the client suite's no-framework ethos.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -120,7 +121,7 @@ class LeakDebounceTest(unittest.TestCase):
             d.sample(True)
         d.reset()
         self.assertFalse(d.latched)
-        self.assertFalse(d.sample(True))     # and the count starts over from zero
+        self.assertFalse(d.sample(True))  # and the count starts over from zero
 
     def test_the_debounce_count_is_the_configured_five_samples(self):
         # 5 samples at the sensor thread's 10 Hz leak tick ≈ 0.5 s, which is the
@@ -154,8 +155,8 @@ class LeakStageTest(unittest.TestCase):
         for _ in range(5):
             warn.sample(False)
             flood.sample(True)
-        self.assertTrue(flood.latched)      # rose on its own evidence
-        self.assertTrue(warn.latched)       # and did not clear the other
+        self.assertTrue(flood.latched)  # rose on its own evidence
+        self.assertTrue(warn.latched)  # and did not clear the other
 
     def test_a_dry_hull_reports_normal(self):
         self.assertEqual(self.hw.read_leak(), "NORMAL")
@@ -205,8 +206,8 @@ class LeakProbeFaultTest(unittest.TestCase):
         self.assertEqual(leak_probe_fault_from(False, False, warn_wet_at_boot=True), "warn")
         self.assertEqual(leak_probe_fault_from(False, False, flood_wet_at_boot=True), "flood")
         self.assertEqual(
-            leak_probe_fault_from(False, False, warn_wet_at_boot=True, flood_wet_at_boot=True),
-            "warn+flood")
+            leak_probe_fault_from(False, False, warn_wet_at_boot=True, flood_wet_at_boot=True), "warn+flood"
+        )
 
     def test_the_fault_vocabulary_is_exactly_the_three_agreed_strings(self):
         # The client renders this string; anything outside the contract's
@@ -245,26 +246,25 @@ class LeakRearmTest(unittest.TestCase):
         """THE GUARD. Without it this is a dismiss-the-alarm button."""
         self.hw._set_probe_wet(warn=True, flood=False)
         got = self.hw.reset_leak_latches()
-        self.assertFalse(got["ok"],
-                         f"re-arm was ACCEPTED with the warn probe wet — this clears "
-                         f"live water, not the memory of it: {got}")
-        self.assertIn("warn", got.get("wet_now", []),
-                      f"the refusal does not name which probe is wet: {got}")
-        self.assertGreater(len(str(got.get("why") or "")), 40,
-                           f"a refusal with no sentence is a button that does nothing: {got}")
+        self.assertFalse(
+            got["ok"],
+            f"re-arm was ACCEPTED with the warn probe wet — this clears " f"live water, not the memory of it: {got}",
+        )
+        self.assertIn("warn", got.get("wet_now", []), f"the refusal does not name which probe is wet: {got}")
+        self.assertGreater(
+            len(str(got.get("why") or "")), 40, f"a refusal with no sentence is a button that does nothing: {got}"
+        )
 
     def test_a_flood_refuses_too(self):
         self.hw._set_probe_wet(warn=True, flood=True)
-        self.assertFalse(self.hw.reset_leak_latches()["ok"],
-                         "re-arm accepted DURING A FLOOD")
+        self.assertFalse(self.hw.reset_leak_latches()["ok"], "re-arm accepted DURING A FLOOD")
 
     def test_the_state_does_not_move_when_the_rearm_is_refused(self):
         """A refused re-arm must change nothing at all — no partial clear."""
         self.hw._set_probe_wet(warn=True, flood=False)
         before = self.hw.read_leak()
         self.hw.reset_leak_latches()
-        self.assertEqual(self.hw.read_leak(), before,
-                         "a REFUSED re-arm still moved the leak state")
+        self.assertEqual(self.hw.read_leak(), before, "a REFUSED re-arm still moved the leak state")
 
     def test_a_dry_probe_wet_at_boot_can_be_rearmed_back_to_normal(self):
         """The case that sent us here: powering up with a wet probe pins the
@@ -272,23 +272,25 @@ class LeakRearmTest(unittest.TestCase):
         sealed dry cannot certify anything. Drying it and re-arming is exactly the
         human inspection the latch was waiting for."""
         self.hw._set_probe_wet_at_boot(warn=True, flood=False)
-        self.assertEqual(self.hw.read_leak(), "UNKNOWN",
-                         "a probe wet at boot should not be certifying the hull dry")
+        self.assertEqual(self.hw.read_leak(), "UNKNOWN", "a probe wet at boot should not be certifying the hull dry")
         got = self.hw.reset_leak_latches()
         self.assertTrue(got["ok"], f"re-arm refused with both probes dry: {got}")
-        self.assertIn("warn-wet-at-boot", got["cleared"],
-                      f"the boot verdict was not cleared, so this is still stuck: {got}")
-        self.assertEqual(self.hw.read_leak(), "NORMAL",
-                         "after a re-arm with both probes dry the hull reads NORMAL")
+        self.assertIn(
+            "warn-wet-at-boot", got["cleared"], f"the boot verdict was not cleared, so this is still stuck: {got}"
+        )
+        self.assertEqual(self.hw.read_leak(), "NORMAL", "after a re-arm with both probes dry the hull reads NORMAL")
 
     def test_rearms_are_counted_so_the_console_can_say_it_happened(self):
         """NORMAL restored by hand and NORMAL never in doubt are different claims."""
         self.assertEqual(self.hw._leak_rearms, 0)
         self.hw.reset_leak_latches()
         self.hw.reset_leak_latches()
-        self.assertEqual(self.hw._leak_rearms, 2,
-                         "re-arms are not counted, so the console cannot tell an "
-                         "operator that the reassurance on screen was restored by hand")
+        self.assertEqual(
+            self.hw._leak_rearms,
+            2,
+            "re-arms are not counted, so the console cannot tell an "
+            "operator that the reassurance on screen was restored by hand",
+        )
 
     def test_the_base_class_declines_rather_than_pretending(self):
         """A backend with no latches has nothing to re-arm, and saying so is a real
@@ -380,7 +382,7 @@ class BallastSkippedStepTest(unittest.TestCase):
     def test_a_full_switch_beyond_the_tolerance_flags_needs_rehome(self):
         axis = BallastAxis(4000, 0.05)
         axis.mark_empty_limit()
-        axis.steps = 4000 + 201        # 5.025 % out — past the 5 % tolerance
+        axis.steps = 4000 + 201  # 5.025 % out — past the 5 % tolerance
         with self.assertLogs("neptune.hw", level="WARNING"):
             self.assertTrue(axis.mark_full_limit())
         self.assertTrue(axis.needs_rehome)
@@ -420,7 +422,7 @@ class BallastSkippedStepTest(unittest.TestCase):
         self.assertFalse(hw.ballast_needs_rehome(), "the lie is invisible until a switch closes")
         hw.ballast_pump("fill")
         with self.assertLogs("neptune.hw", level="WARNING"):
-            advance(hw, 15.0)            # 4000 steps at 400 steps/s = 10 s of stroke
+            advance(hw, 15.0)  # 4000 steps at 400 steps/s = 10 s of stroke
         hw.ballast_pump("hold")
         self.assertTrue(hw.ballast_needs_rehome())
         self.assertTrue(hw.ballast_homed())
@@ -439,7 +441,7 @@ class BallastSkippedStepTest(unittest.TestCase):
     def test_a_mismatch_inside_the_tolerance_does_not_raise_the_flag(self):
         hw = MockHardware()
         hw.ballast_home()
-        hw._force_skipped_steps(100)     # 2.5 % of the default 4000-step span
+        hw._force_skipped_steps(100)  # 2.5 % of the default 4000-step span
         hw.ballast_pump("fill")
         advance(hw, 15.0)
         hw.ballast_pump("hold")
@@ -457,7 +459,7 @@ class BallastSkippedStepTest(unittest.TestCase):
 # Paddlewheel
 # ---------------------------------------------------------------------------
 class PaddleWheelTest(unittest.TestCase):
-    """"No pulses" is not "no speed" — the difference is the snag detector."""
+    """ "No pulses" is not "no speed" — the difference is the snag detector."""
 
     def wheel(self) -> PaddleWheel:
         return PaddleWheel(m_per_pulse=0.05, window_s=0.5, stale_s=2.0)
@@ -498,7 +500,7 @@ class PaddleWheelTest(unittest.TestCase):
     def test_speed_is_the_pulses_in_the_window_over_the_window(self):
         w = self.wheel()
         for i in range(10):
-            w.pulse(0.5 + i * 0.01)      # ten pulses inside one 0.5 s window
+            w.pulse(0.5 + i * 0.01)  # ten pulses inside one 0.5 s window
         speed, fresh = w.read(0.6)
         self.assertTrue(fresh)
         self.assertAlmostEqual(speed, 10 * 0.05 / 0.5)
@@ -683,8 +685,7 @@ class BackendSelectionTest(unittest.TestCase):
     def _with_backend(name: str):
         # settings is a frozen dataclass read at call time, so a replaced copy is
         # the whole override. No env mutation, so tests cannot leak into each other.
-        return mock.patch.object(hardware, "settings",
-                                 dataclasses.replace(settings, hardware_backend=name))
+        return mock.patch.object(hardware, "settings", dataclasses.replace(settings, hardware_backend=name))
 
     def test_auto_lands_on_the_bench_mock_with_no_gpio_wired(self):
         # And it must SAY so. A silent downgrade to simulation is how a bench run

@@ -6,6 +6,7 @@ advances the mock sim, and produces telemetry snapshots.
 
 Single-threaded: all methods run on the asyncio event loop, so no locking.
 """
+
 from __future__ import annotations
 
 import logging
@@ -14,10 +15,10 @@ import time
 from config import settings
 from hardware import HardwareBase
 from protocol import (
+    COMMAND_NAMES,
     BallastMsg,
     CameraMsg,
     CommandMsg,
-    COMMAND_NAMES,
     ControlMsg,
     Telemetry,
 )
@@ -199,8 +200,7 @@ class RovState:
             self._failsafe = True
             self.left = self.right = 0.0
             self.hw.set_thrusters(0.0, 0.0)
-            log.warning("watchdog: no control for >%.2fs — thrusters zeroed",
-                        settings.watchdog_timeout_s)
+            log.warning("watchdog: no control for >%.2fs — thrusters zeroed", settings.watchdog_timeout_s)
 
     def update(self, dt: float) -> None:
         self.hw.update(dt)
@@ -316,8 +316,11 @@ class RovState:
         # provenance.
         raw_psi = self.hw.read_pressure()
         pressure = None if raw_psi is None else round(raw_psi, 1)
-        depth = None if pressure is None else max(
-            0.0, round((pressure - settings.surface_pressure_psi) / settings.psi_per_meter, 2))
+        depth = (
+            None
+            if pressure is None
+            else max(0.0, round((pressure - settings.surface_pressure_psi) / settings.psi_per_meter, 2))
+        )
         leak_state = self.hw.read_leak()
         # `leak` stays the old single bit so a client that only knows about the bool
         # keeps working, and `leak_state` carries which stage it is; the two travel
@@ -380,8 +383,7 @@ class RovState:
         try:
             pitch, roll = self.hw.read_pitch_roll()
         except Exception:  # noqa: BLE001 — not a pair; the backend is broken, not the sub
-            log.debug("read_pitch_roll() did not return a pair; reporting cannot-tell",
-                      exc_info=True)
+            log.debug("read_pitch_roll() did not return a pair; reporting cannot-tell", exc_info=True)
             pitch, roll = None, None
         return Telemetry(
             armed=self.armed,

@@ -17,6 +17,7 @@ the SUB's output or it does not move at all"). So the position is HELD, confiden
 drops to the floor, and NavState.no_heading says why. A held track is visibly
 stale; a moving one is invisibly false, and the operator drives it.
 """
+
 from __future__ import annotations
 
 import math
@@ -64,8 +65,7 @@ class DeadReckoner:
         self.payout = 0.0
         self._prev_t: float | None = None
 
-    def update(self, s: SensorSample, speed_ms: float | None = None,
-               speed_src: str | None = None) -> NavState:
+    def update(self, s: SensorSample, speed_ms: float | None = None, speed_src: str | None = None) -> NavState:
         """One tick.
 
         `speed_ms` is the hook for an estimator that has already decided what the speed
@@ -120,8 +120,8 @@ class DeadReckoner:
             hdg = math.radians(s.heading_deg)
             cur = math.radians(self.current.bearing_deg)
             # compass heading (0=N, 90=E): east=sin, north=cos. + current compensation (§5.4)
-            vx = v * math.sin(hdg) + self.current.speed_ms * math.sin(cur)   # east
-            vy = v * math.cos(hdg) + self.current.speed_ms * math.cos(cur)   # north
+            vx = v * math.sin(hdg) + self.current.speed_ms * math.sin(cur)  # east
+            vy = v * math.cos(hdg) + self.current.speed_ms * math.cos(cur)  # north
             self.x += vx * dt
             self.y += vy * dt
         else:
@@ -148,7 +148,7 @@ class DeadReckoner:
         # worse of the two, and it must not be compared with < or it raises. The
         # no-heading floor above already dominates when they arrive together (one
         # chip), but they are separable in principle and each is checked on its own.
-        if s.mag_cal is None or s.mag_cal < 2:         # heading quietly gone bad (§5.6)
+        if s.mag_cal is None or s.mag_cal < 2:  # heading quietly gone bad (§5.6)
             confidence = min(confidence, 0.6)
 
         raw_lat, raw_lon = to_latlon(self.x, self.y, self.origin.lat, self.origin.lon)
@@ -158,18 +158,26 @@ class DeadReckoner:
             if near and near[2] <= settings.snap_max_dist_m:
                 lat, lon = to_latlon(near[0], near[1], self.origin.lat, self.origin.lon)
                 snapped, snap_off = True, near[2]
-                if snap_off > 8.0:                     # raw↔snapped divergence = drift → surface & re-fix
+                if snap_off > 8.0:  # raw↔snapped divergence = drift → surface & re-fix
                     confidence = min(confidence, 0.7)
 
         return NavState(
-            t=s.t, lat=round(lat, 7), lon=round(lon, 7),
+            t=s.t,
+            lat=round(lat, 7),
+            lon=round(lon, 7),
             depth_m=None if self.depth is None else round(self.depth, 2),
             heading_deg=None if s.heading_deg is None else round(s.heading_deg, 1),
-            x_m=round(self.x, 2), y_m=round(self.y, 2),
-            raw_lat=round(raw_lat, 7), raw_lon=round(raw_lon, 7),
-            snapped=snapped, snap_offset_m=round(snap_off, 2),
-            range_m=round(rng, 2), payout_m=round(s.encoder_m, 2),
-            confidence=round(confidence, 2), mag_cal=s.mag_cal, speed_ms=round(v, 3),
+            x_m=round(self.x, 2),
+            y_m=round(self.y, 2),
+            raw_lat=round(raw_lat, 7),
+            raw_lon=round(raw_lon, 7),
+            snapped=snapped,
+            snap_offset_m=round(snap_off, 2),
+            range_m=round(rng, 2),
+            payout_m=round(s.encoder_m, 2),
+            confidence=round(confidence, 2),
+            mag_cal=s.mag_cal,
+            speed_ms=round(v, 3),
             speed_src=src,
             no_heading=no_heading,
             has_origin=True,

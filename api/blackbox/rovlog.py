@@ -13,6 +13,7 @@ logged clock offsets, never by rewriting timestamps) and reports where they dive
 
 Run: python -m blackbox.rovlog <cmd> ...   (or via the installed console entry)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -44,6 +45,7 @@ def _resolve_dir(log_dir: str | None) -> Path:
     if log_dir:
         return Path(log_dir)
     from .recorder import _resolve_log_dir
+
     return _resolve_log_dir()
 
 
@@ -93,7 +95,7 @@ class Offset:
         if not self.samples:
             return False
         near = min(self.samples, key=lambda s: abs(s[0] - ct))
-        if abs(near[0] - ct) > 30_000:          # >30 s from any sync → extrapolating
+        if abs(near[0] - ct) > 30_000:  # >30 s from any sync → extrapolating
             return False
         meta = near[2]
         return meta.get("jitter_ms", 0) <= 50 and meta.get("samples", 0) >= 3
@@ -165,7 +167,7 @@ def diverge(nav: list[dict], client: list[dict]) -> dict:
     confirmed = _cid_times(client, "cmd_confirm")
     rep["commands"] = {
         "sent": len(sent),
-        "lost_outbound": sorted(set(sent) - set(recv)),         # send, never received
+        "lost_outbound": sorted(set(sent) - set(recv)),  # send, never received
         "lost_ack_inbound": sorted(set(ack_send) - set(ack_recv)),  # acked, ack never arrived
         "applied_not_confirmed": sorted(set(applied) - set(confirmed)),  # did it, no observed effect
     }
@@ -176,15 +178,19 @@ def diverge(nav: list[dict], client: list[dict]) -> dict:
     missing = tx - rx
     worst = 0
     if missing:
-        ms = sorted(missing); run = 1
+        ms = sorted(missing)
+        run = 1
         for i in range(1, len(ms)):
             run = run + 1 if ms[i] == ms[i - 1] + 1 else 1
             worst = max(worst, run)
         worst = max(worst, 1)
     rep["telemetry"] = {
-        "sent": len(tx), "received_of_sent": len(tx & rx),
-        "lost": len(missing), "loss_pct": round(100 * len(missing) / len(tx), 2) if tx else 0.0,
-        "worst_contiguous_gap": worst, "client_reported_gaps": len(rx_gaps),
+        "sent": len(tx),
+        "received_of_sent": len(tx & rx),
+        "lost": len(missing),
+        "loss_pct": round(100 * len(missing) / len(tx), 2) if tx else 0.0,
+        "worst_contiguous_gap": worst,
+        "client_reported_gaps": len(rx_gaps),
     }
 
     # --- latency per stage (§6), cross-side stages aligned via offset ---
@@ -198,23 +204,40 @@ def diverge(nav: list[dict], client: list[dict]) -> dict:
             bb = tb + (off.at(tb) if b_side == "client" else 0)
             vals.append(bb - aa)
         return vals
+
     intent = _cid_times(client, "cmd_intent")
-    lat_ia = stage(intent, applied, "client", "pi")           # intent → apply
-    lat_aa = stage(applied, ack_send, "pi", "pi")             # apply  → ack
-    lat_ac = stage(applied, confirmed, "pi", "client")        # apply  → confirm
+    lat_ia = stage(intent, applied, "client", "pi")  # intent → apply
+    lat_aa = stage(applied, ack_send, "pi", "pi")  # apply  → ack
+    lat_ac = stage(applied, confirmed, "pi", "client")  # apply  → confirm
     rep["latency_ms"] = {
-        "intent_to_apply": {"p50": _pct(lat_ia, 50), "p95": _pct(lat_ia, 95), "max": _pct(lat_ia, 100), "n": len(lat_ia)},
-        "apply_to_ack":    {"p50": _pct(lat_aa, 50), "p95": _pct(lat_aa, 95), "max": _pct(lat_aa, 100), "n": len(lat_aa)},
-        "apply_to_confirm":{"p50": _pct(lat_ac, 50), "p95": _pct(lat_ac, 95), "max": _pct(lat_ac, 100), "n": len(lat_ac)},
+        "intent_to_apply": {
+            "p50": _pct(lat_ia, 50),
+            "p95": _pct(lat_ia, 95),
+            "max": _pct(lat_ia, 100),
+            "n": len(lat_ia),
+        },
+        "apply_to_ack": {"p50": _pct(lat_aa, 50), "p95": _pct(lat_aa, 95), "max": _pct(lat_aa, 100), "n": len(lat_aa)},
+        "apply_to_confirm": {
+            "p50": _pct(lat_ac, 50),
+            "p95": _pct(lat_ac, 95),
+            "max": _pct(lat_ac, 100),
+            "n": len(lat_ac),
+        },
     }
 
     # --- staleness (§4) ---
-    ages = [e["d"]["max_age_ms"] for e in _by_event(client, "tlm_rx")
-            if isinstance(e.get("d"), dict) and "max_age_ms" in e["d"]]
+    ages = [
+        e["d"]["max_age_ms"]
+        for e in _by_event(client, "tlm_rx")
+        if isinstance(e.get("d"), dict) and "max_age_ms" in e["d"]
+    ]
     THRESH = 500
     rep["staleness_ms"] = {
-        "p50": _pct(ages, 50), "p95": _pct(ages, 95), "max": _pct(ages, 100),
-        "windows_over_%dms" % THRESH: sum(1 for a in ages if a > THRESH), "n": len(ages),
+        "p50": _pct(ages, 50),
+        "p95": _pct(ages, 95),
+        "max": _pct(ages, 100),
+        "windows_over_%dms" % THRESH: sum(1 for a in ages if a > THRESH),
+        "n": len(ages),
     }
 
     # --- video divergence (§4.2) — consumer stats; producer side not logged here ---
@@ -243,6 +266,7 @@ def diverge(nav: list[dict], client: list[dict]) -> dict:
 def _one_sided(nav, client, off, gap_s):
     def times(evs, aligned):
         return sorted((e["t"] + (off.at(e["t"]) if aligned else 0)) for e in evs if "t" in e)
+
     pi_t = times(nav, False)
     cl_t = times(client, True)
     if not pi_t or not cl_t:
@@ -255,9 +279,11 @@ def _one_sided(nav, client, off, gap_s):
             gap = ts[i] - ts[i - 1]
             if gap > gap_s * 1000:
                 lo, hi = ts[i - 1], ts[i]
-                if any(lo < o < hi for o in other):     # the other side WAS active in that window
-                    out.append({"side_silent": label, "from": round(lo, 1), "to": round(hi, 1),
-                                "gap_ms": round(gap, 1)})
+                if any(lo < o < hi for o in other):  # the other side WAS active in that window
+                    out.append(
+                        {"side_silent": label, "from": round(lo, 1), "to": round(hi, 1), "gap_ms": round(gap, 1)}
+                    )
+
     find_silence(pi_t, cl_t, "pi")
     find_silence(cl_t, pi_t, "client")
     return out
@@ -272,13 +298,19 @@ def _clock_anomalies(off: Offset):
     jumps = []
     for i in range(1, len(s)):
         d = offs[i] - offs[i - 1]
-        if abs(d) > 100:                                 # >100 ms step between adjacent syncs
+        if abs(d) > 100:  # >100 ms step between adjacent syncs
             jumps.append({"at": round(ts[i], 1), "delta_ms": round(d, 1)})
     span = ts[-1] - ts[0]
     drift = round((offs[-1] - offs[0]) / (span / 1000), 3) if span > 0 else 0.0  # ms per second
     sync_gaps = [round(ts[i] - ts[i - 1], 1) for i in range(1, len(s)) if ts[i] - ts[i - 1] > 15_000]
-    return {"samples": len(s), "offset_first_ms": round(offs[0], 1), "offset_last_ms": round(offs[-1], 1),
-            "drift_ms_per_s": drift, "jumps": jumps, "sync_gaps_ms": sync_gaps}
+    return {
+        "samples": len(s),
+        "offset_first_ms": round(offs[0], 1),
+        "offset_last_ms": round(offs[-1], 1),
+        "drift_ms_per_s": drift,
+        "jumps": jumps,
+        "sync_gaps_ms": sync_gaps,
+    }
 
 
 # ---- telemetry replay (§5) -------------------------------------------------
@@ -287,17 +319,39 @@ def _clock_anomalies(off: Offset):
 # them entirely, and "0 snag events" out of a log that never knew what a snag was
 # is a lie of exactly the kind this tool exists to catch.
 TLM_FIELDS = (
-    "armed", "depth", "heading", "left", "right", "pressure",
-    "ballast_level", "ballast_target", "ballast_homed", "ballast_needs_rehome",
-    "leak", "leak_state", "leak_probe_fault",
-    "battery_v", "battery_band", "current_a",
-    "speed_ms", "speed_src", "snagged", "gyro_only", "mag_cal",
+    "armed",
+    "depth",
+    "heading",
+    "left",
+    "right",
+    "pressure",
+    "ballast_level",
+    "ballast_target",
+    "ballast_homed",
+    "ballast_needs_rehome",
+    "leak",
+    "leak_state",
+    "leak_probe_fault",
+    "battery_v",
+    "battery_band",
+    "current_a",
+    "speed_ms",
+    "speed_src",
+    "snagged",
+    "gyro_only",
+    "mag_cal",
     # THE INERTIAL READINGS, which main.py started journalling when they reached the
     # wire and this list did not follow. An unlisted-but-journalled field is the one
     # case the "missing" report cannot catch: it is present in the log and absent from
     # the question, so nobody is ever told it went unrecorded on an older recorder.
-    "gyro_z_dps", "accel_fwd_ms2", "pitch_deg", "roll_deg",
-    "magnet", "light_green", "light_white", "signal",
+    "gyro_z_dps",
+    "accel_fwd_ms2",
+    "pitch_deg",
+    "roll_deg",
+    "magnet",
+    "light_green",
+    "light_white",
+    "signal",
     # WHICH CHIP STOPPED, and WHETHER NAVIGATION WAS ANSWERING. Both were being
     # journalled and neither was listed, so a report could not distinguish "no
     # sensor ever faulted" from "this recorder had no idea a sensor could fault" —
@@ -306,7 +360,11 @@ TLM_FIELDS = (
     # died and a dive where the compass was fine look identical in every other
     # column, because the whole point of the null is that no number is left behind.
     "sensor_faults",
-    "nav_loop", "nav_answering", "nav_used", "nav_reads_vehicle", "nav_faults",
+    "nav_loop",
+    "nav_answering",
+    "nav_used",
+    "nav_reads_vehicle",
+    "nav_faults",
 )
 
 
@@ -352,8 +410,12 @@ def _key(v) -> str:
 def _stats(vals: list[float]) -> dict:
     if not vals:
         return {"n": 0, "note": "never reported — treat as not fitted, not as zero"}
-    return {"n": len(vals), "min": round(min(vals), 3), "max": round(max(vals), 3),
-            "mean": round(statistics.fmean(vals), 3)}
+    return {
+        "n": len(vals),
+        "min": round(min(vals), 3),
+        "max": round(max(vals), 3),
+        "mean": round(statistics.fmean(vals), 3),
+    }
 
 
 def _transitions(rows, key: str) -> list[dict]:
@@ -396,8 +458,9 @@ def _episodes_where(rows, pred) -> list[dict]:
             start = None
     if start is not None and rows:
         end = rows[-1][0] + rows[-1][1]
-        out.append({"from": round(start, 1), "to": round(end, 1), "ms": round(end - start, 1),
-                    "open_at_end": True})       # still asserted when the log stopped
+        out.append(
+            {"from": round(start, 1), "to": round(end, 1), "ms": round(end - start, 1), "open_at_end": True}
+        )  # still asserted when the log stopped
     return out
 
 
@@ -406,9 +469,11 @@ def telemetry_report(nav: list[dict]) -> dict:
     rows = _tlm_rows(nav)
     alarms = [{"at": round(e.get("t", 0.0), 1), **(e.get("d") or {})} for e in _by_event(nav, "alarm")]
     if not rows:
-        return {"note": "no tlm/tlm_state records — this log cannot be replayed",
-                "hint": "telemetry journalling is written by the control loop in api/main.py",
-                "alarms": alarms}
+        return {
+            "note": "no tlm/tlm_state records — this log cannot be replayed",
+            "hint": "telemetry journalling is written by the control loop in api/main.py",
+            "alarms": alarms,
+        }
     total = sum(dt for _, dt, _ in rows)
     seen: set[str] = set()
     for _t, _dt, d in rows:
@@ -422,8 +487,7 @@ def telemetry_report(nav: list[dict]) -> dict:
         for _t, dt, d in rows:
             k = _key(d.get(key))
             acc[k] = acc.get(k, 0.0) + dt
-        return {k: round(100 * v / total, 1)
-                for k, v in sorted(acc.items(), key=lambda kv: -kv[1])}
+        return {k: round(100 * v / total, 1) for k, v in sorted(acc.items(), key=lambda kv: -kv[1])}
 
     def pct_where(pred) -> float | None:
         if total <= 0:
@@ -431,9 +495,11 @@ def telemetry_report(nav: list[dict]) -> dict:
         return round(100 * sum(dt for _t, dt, d in rows if pred(d)) / total, 1)
 
     def values(key: str, pred=None) -> list[float]:
-        return [float(d[key]) for _t, _dt, d in rows
-                if isinstance(d.get(key), (int, float)) and not isinstance(d.get(key), bool)
-                and (pred is None or pred(d))]
+        return [
+            float(d[key])
+            for _t, _dt, d in rows
+            if isinstance(d.get(key), (int, float)) and not isinstance(d.get(key), bool) and (pred is None or pred(d))
+        ]
 
     homed = next((t for t, _dt, d in rows if d.get("ballast_homed")), None)
     faults = _transitions(rows, "leak_probe_fault")
@@ -514,8 +580,7 @@ def telemetry_report(nav: list[dict]) -> dict:
         "sensors": {
             "any_fault_pct": pct_where(lambda d: bool(d.get("sensor_faults"))),
             "chips_faulted": chips,
-            "outages": {c: _episodes_where(rows, lambda d, c=c: c in (d.get("sensor_faults") or []))
-                        for c in chips},
+            "outages": {c: _episodes_where(rows, lambda d, c=c: c in (d.get("sensor_faults") or [])) for c in chips},
         },
         # NAVIGATION'S OWN STATE, replayed. nav_answering is what navigation
         # claimed; nav_used is what the frame actually took from it, and they part
@@ -529,8 +594,9 @@ def telemetry_report(nav: list[dict]) -> dict:
             "outages": _episodes_where(rows, lambda d: "nav_used" in d and not d["nav_used"]),
             "loop_transitions": _transitions(rows, "nav_loop"),
             "not_this_hull_pct": pct_where(lambda d: d.get("nav_reads_vehicle") is False),
-            "tick_faults": max((d["nav_faults"] for _t, _dt, d in rows
-                                if isinstance(d.get("nav_faults"), int)), default=None),
+            "tick_faults": max(
+                (d["nav_faults"] for _t, _dt, d in rows if isinstance(d.get("nav_faults"), int)), default=None
+            ),
         },
         "armed_pct": pct_where(lambda d: bool(d.get("armed"))),
     }
@@ -541,12 +607,16 @@ def telemetry_report(nav: list[dict]) -> dict:
     # are replaced by the reason there are none, in the same spirit as
     # fields_never_logged below.
     if "sensor_faults" not in seen:
-        rep["sensors"] = {"note": "this log never carried sensor_faults — treat it as "
-                                  "no information about the chips, not as none faulted"}
+        rep["sensors"] = {
+            "note": "this log never carried sensor_faults — treat it as "
+            "no information about the chips, not as none faulted"
+        }
     if "nav_used" not in seen:
-        rep["navigation"] = {"note": "this log never carried nav_* records — navigation was "
-                                     "not running in that process, or the recorder predates "
-                                     "it. Not the same as navigation never answering"}
+        rep["navigation"] = {
+            "note": "this log never carried nav_* records — navigation was "
+            "not running in that process, or the recorder predates "
+            "it. Not the same as navigation never answering"
+        }
     missing = [f for f in TLM_FIELDS if f not in seen]
     if missing:
         # Say it out loud rather than reporting confident zeros for signals the log
@@ -567,6 +637,7 @@ def _tlm_brief(d: dict) -> str:
     of having a timeline at all. These are the fields you actually scan for while
     working out what killed a dive; the full record is in the raw log next to it.
     """
+
     # "?" for every reading that was not taken, so a scan down the column shows
     # cannot-tell as one recognisable shape rather than as the word None appearing
     # in six different spellings. It is NOT interchangeable with a number: `depth=?`
@@ -584,8 +655,7 @@ def _tlm_brief(d: dict) -> str:
         f"ball={q('ballast_level')}",
         f"spd={q('speed_ms')}/{q('speed_src')}",
     ]
-    for flag, tag in (("snagged", "SNAGGED"), ("gyro_only", "gyro-only"),
-                      ("ballast_needs_rehome", "REHOME")):
+    for flag, tag in (("snagged", "SNAGGED"), ("gyro_only", "gyro-only"), ("ballast_needs_rehome", "REHOME")):
         if d.get(flag):
             parts.append(tag)
     if d.get("leak_probe_fault"):
@@ -637,22 +707,28 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     m = sub.add_parser("merge", parents=[common], help="time-align both logs into one stream")
-    m.add_argument("nav"); m.add_argument("client")
+    m.add_argument("nav")
+    m.add_argument("client")
 
     dv = sub.add_parser("diverge", parents=[common], help="report where the two logs disagree")
     dv.add_argument("session")
 
-    tm = sub.add_parser("telemetry", parents=[common],
-                        help="replay recorded vehicle state: leak stages, ballast truth, "
-                             "speed source, snags, heading trust, battery bands")
+    tm = sub.add_parser(
+        "telemetry",
+        parents=[common],
+        help="replay recorded vehicle state: leak stages, ballast truth, "
+        "speed source, snags, heading trust, battery bands",
+    )
     tm.add_argument("session")
 
     tl = sub.add_parser("timeline", parents=[common], help="side-by-side text timeline around an incident")
-    tl.add_argument("session"); tl.add_argument("--around", type=float, required=True)
+    tl.add_argument("session")
+    tl.add_argument("--around", type=float, required=True)
     tl.add_argument("--window", type=float, default=30.0)
 
     bd = sub.add_parser("bundle", parents=[common], help="incident zip: both logs + reports + config + track")
-    bd.add_argument("session"); bd.add_argument("-o", "--out", default=None)
+    bd.add_argument("session")
+    bd.add_argument("-o", "--out", default=None)
 
     args = p.parse_args(argv)
 

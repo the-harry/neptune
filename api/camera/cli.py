@@ -16,6 +16,7 @@ Examples:
 
 Point at a host with --base (default http://127.0.0.1:8000).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -45,13 +46,20 @@ def main(argv=None) -> int:
     c = sub.add_parser("config")
     csub = c.add_subparsers(dest="op", required=True)
     csub.add_parser("get")
-    cset = csub.add_parser("set"); cset.add_argument("property"); cset.add_argument("value")
+    cset = csub.add_parser("set")
+    cset.add_argument("property")
+    cset.add_argument("value")
 
-    f = sub.add_parser("files"); f.add_argument("--type", default="video", choices=["video", "photo"])
-    f.add_argument("--from", dest="frm", type=int, default=0); f.add_argument("--count", type=int, default=100)
+    f = sub.add_parser("files")
+    f.add_argument("--type", default="video", choices=["video", "photo"])
+    f.add_argument("--from", dest="frm", type=int, default=0)
+    f.add_argument("--count", type=int, default=100)
 
-    d = sub.add_parser("download"); d.add_argument("name")
-    dl = sub.add_parser("delete"); dl.add_argument("name"); dl.add_argument("--confirm", action="store_true")
+    d = sub.add_parser("download")
+    d.add_argument("name")
+    dl = sub.add_parser("delete")
+    dl.add_argument("name")
+    dl.add_argument("--confirm", action="store_true")
 
     args = p.parse_args(argv)
     base = args.base.rstrip("/")
@@ -62,8 +70,10 @@ def main(argv=None) -> int:
         elif args.cmd == "preflight":
             r = httpx.post(f"{base}/api/preflight", timeout=30).json()
             for c_ in r["checks"]:
-                print(f"  [{'ok ' if c_['ok'] else 'FAIL'}] {c_['step']}"
-                      + (f"  — {c_['detail']}" if c_.get("detail") else ""))
+                print(
+                    f"  [{'ok ' if c_['ok'] else 'FAIL'}] {c_['step']}"
+                    + (f"  — {c_['detail']}" if c_.get("detail") else "")
+                )
             print(f"\nPREFLIGHT: {'PASS' if r['passed'] else 'FAIL'}")
             return 0 if r["passed"] else 1
         elif args.cmd == "menu":
@@ -77,14 +87,21 @@ def main(argv=None) -> int:
         elif args.cmd == "capture":
             _pp(httpx.post(f"{base}/api/capture", timeout=15).json())
         elif args.cmd == "files":
-            _pp(httpx.get(f"{base}/api/files", params={"type": args.type, "from": args.frm, "count": args.count}, timeout=15).json())
+            _pp(
+                httpx.get(
+                    f"{base}/api/files", params={"type": args.type, "from": args.frm, "count": args.count}, timeout=15
+                ).json()
+            )
         elif args.cmd == "download":
             _pp(httpx.post(f"{base}/api/files{args.name}/download", timeout=15).json())
         elif args.cmd == "downloads":
             _pp(httpx.get(f"{base}/api/downloads", timeout=10).json())
         elif args.cmd == "delete":
-            _pp(httpx.request("DELETE", f"{base}/api/files{args.name}",
-                              params={"confirm": str(args.confirm).lower()}, timeout=15).json())
+            _pp(
+                httpx.request(
+                    "DELETE", f"{base}/api/files{args.name}", params={"confirm": str(args.confirm).lower()}, timeout=15
+                ).json()
+            )
         elif args.cmd == "watch":
             _watch(base)
     except httpx.HTTPError as exc:
@@ -95,6 +112,7 @@ def main(argv=None) -> int:
 
 def _watch(base: str) -> None:
     import asyncio
+
     import websockets  # provided by uvicorn[standard]
 
     ws_url = base.replace("http", "ws", 1) + "/ws/telemetry"

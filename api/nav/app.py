@@ -1,5 +1,6 @@
 """Navigation app — standalone (uvicorn nav.app:app) or embedded via the ROV
 main app (create_nav_service() + build_router(); main drives start()/stop())."""
+
 from __future__ import annotations
 
 import contextlib

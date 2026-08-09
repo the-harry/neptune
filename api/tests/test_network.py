@@ -57,6 +57,7 @@ end of the protocol on purpose.
 stdlib unittest only, matching the rest of api/tests — see run.py for why there is no
 framework here.
 """
+
 from __future__ import annotations
 
 import base64
@@ -111,10 +112,11 @@ os.environ.setdefault("NAV_CRT_NATIONAL_AUTO", "0")
 os.environ.setdefault("WOLFANG_T_FAST", "0.25")
 os.environ.setdefault("WOLFANG_T_SLOW", "0.25")
 
-import uvicorn                                                       # noqa: E402
-from config import settings                                          # noqa: E402
-from nav.config import settings as nav_settings                      # noqa: E402
-from protocol import COMMAND_NAMES                                   # noqa: E402
+import uvicorn  # noqa: E402
+
+from config import settings  # noqa: E402
+from nav.config import settings as nav_settings  # noqa: E402
+from protocol import COMMAND_NAMES  # noqa: E402
 
 
 def _load_app_under_test():
@@ -148,7 +150,7 @@ def _load_app_under_test():
     """
     path = Path(__file__).resolve().parent.parent / "main.py"
     spec = importlib.util.spec_from_file_location("neptune_main_under_test", path)
-    if spec is None or spec.loader is None:      # pragma: no cover — main.py is right there
+    if spec is None or spec.loader is None:  # pragma: no cover — main.py is right there
         raise ImportError(f"could not load the app under test from {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -181,8 +183,7 @@ finally:
 # if any module in this process got there first the environment arrived too late — in
 # which case this suite would write into the operator's real dive directory. A frozen
 # dataclass is frozen against accident, not against a test that says why.
-for _attr, _sub in (("data_dir", ""), ("dives_dir", "dives"),
-                    ("areas_dir", "areas"), ("speed_lut_dir", "speed_luts")):
+for _attr, _sub in (("data_dir", ""), ("dives_dir", "dives"), ("areas_dir", "areas"), ("speed_lut_dir", "speed_luts")):
     _want = _TMP / _sub if _sub else _TMP
     if not str(getattr(nav_settings, _attr)).startswith(tempfile.gettempdir()):
         object.__setattr__(nav_settings, _attr, _want)
@@ -191,17 +192,17 @@ for _attr, _sub in (("data_dir", ""), ("dives_dir", "dives"),
 # ---------------------------------------------------------------------------
 # The knobs, named once
 # ---------------------------------------------------------------------------
-BIND_HOST = "127.0.0.1"                 # loopback only — a test must not serve a network
+BIND_HOST = "127.0.0.1"  # loopback only — a test must not serve a network
 CONTROL_PATH = "/ws/control"
 # Paths this vehicle does NOT route a socket on. `/ws/nav` and `/ws/telemetry` are real
 # and are deliberately absent from this list.
 UNROUTED_PATHS = ("/ws/does-not-exist", "/ws/control/extra", "/ws", "/nope")
 
-DEFAULT_TIMEOUT_S = 5.0                 # ~75 telemetry periods at the shipped rate
-SERVER_START_TIMEOUT_S = 45.0           # a cold boot brings up nav + the camera probe
+DEFAULT_TIMEOUT_S = 5.0  # ~75 telemetry periods at the shipped rate
+SERVER_START_TIMEOUT_S = 45.0  # a cold boot brings up nav + the camera probe
 SERVER_STOP_TIMEOUT_S = 30.0
-CLIENT_SETTLE_S = 3.0                   # how long the server may take to notice a drop
-RECONNECT_CHURN = 4                     # connect/serve/drop cycles, alternating the drop
+CLIENT_SETTLE_S = 3.0  # how long the server may take to notice a drop
+RECONNECT_CHURN = 4  # connect/serve/drop cycles, alternating the drop
 
 # THE SLOW-CONSUMER WINDOW, AND WHY IT IS THIS LONG. Backpressure is not instant: before
 # a stopped reader can push back on the server, the client's receive buffer, the
@@ -218,14 +219,14 @@ RECONNECT_CHURN = 4                     # connect/serve/drop cycles, alternating
 # slow socket had queued are drained and reported for exactly that reason, so a green
 # result can be read for what it is worth rather than taken on trust.
 SLOW_HOLD_S = 15.0
-SLOW_RCVBUF = 512                       # ask the kernel for the smallest window it will give
-SLOW_RESUME_S = 5.0                     # after the slow reader drains, telemetry must return
+SLOW_RCVBUF = 512  # ask the kernel for the smallest window it will give
+SLOW_RESUME_S = 5.0  # after the slow reader drains, telemetry must return
 # The largest silence a still-connected client may see on a still-running loop. Two
 # seconds is ~30 telemetry periods at the shipped rate: far beyond scheduling jitter,
 # far short of "the loop has stopped".
 MAX_TELEMETRY_GAP_S = 2.0
 
-WATCHDOG_SETTLE_S = 0.6                 # loop periods of slack on top of watchdog_timeout_s
+WATCHDOG_SETTLE_S = 0.6  # loop periods of slack on top of watchdog_timeout_s
 
 # Frame opcodes (RFC 6455 §5.2), spelled out because this file writes them by hand.
 OP_TEXT, OP_BINARY, OP_CLOSE, OP_PING, OP_PONG = 0x1, 0x2, 0x8, 0x9, 0xA
@@ -240,18 +241,18 @@ GARBAGE_BYTES = bytes(range(256))
 JSON_THAT_IS_NOT_A_MESSAGE = (
     '{"hello": "world"}',
     '{"type": 17}',
-    '[1, 2, 3]',
+    "[1, 2, 3]",
     '"a bare string"',
-    '42',
-    'null',
-    '{}',
+    "42",
+    "null",
+    "{}",
 )
 
 # Well-formed JSON objects carrying a `type` this vehicle does not serve.
 UNKNOWN_MESSAGE_TYPES = (
     '{"type": "nonsense"}',
     '{"type": "control_v2", "throttle": 1.0}',
-    '{"type": "telemetry", "armed": true}',      # an OUTBOUND name, sent inbound
+    '{"type": "telemetry", "armed": true}',  # an OUTBOUND name, sent inbound
 )
 
 
@@ -278,8 +279,9 @@ class Ws:
     of them is a thing api/main.py claims to survive.
     """
 
-    def __init__(self, port: int, path: str = CONTROL_PATH, *,
-                 rcvbuf: int | None = None, timeout: float = DEFAULT_TIMEOUT_S) -> None:
+    def __init__(
+        self, port: int, path: str = CONTROL_PATH, *, rcvbuf: int | None = None, timeout: float = DEFAULT_TIMEOUT_S
+    ) -> None:
         self.port = port
         self.path = path
         self.timeout = timeout
@@ -315,7 +317,8 @@ class Ws:
             "Upgrade: websocket\r\n"
             "Connection: Upgrade\r\n"
             f"Sec-WebSocket-Key: {key}\r\n"
-            "Sec-WebSocket-Version: 13\r\n\r\n".encode("ascii"))
+            "Sec-WebSocket-Version: 13\r\n\r\n".encode("ascii")
+        )
         head = b""
         while b"\r\n\r\n" not in head:
             chunk = self.sock.recv(4096)
@@ -386,8 +389,8 @@ class Ws:
             n = struct.unpack("!Q", self._buf[2:10])[0]
             off = 10
         self._need(off + n, deadline)
-        payload = self._buf[off:off + n]
-        self._buf = self._buf[off + n:]
+        payload = self._buf[off : off + n]
+        self._buf = self._buf[off + n :]
         return opcode, payload
 
     def recv_json(self, timeout: float | None = None) -> dict:
@@ -463,8 +466,7 @@ class Ws:
         """
         for layout in ("ii", "hh"):
             try:
-                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
-                                     struct.pack(layout, 1, 0))
+                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack(layout, 1, 0))
                 break
             except OSError:
                 continue
@@ -514,19 +516,24 @@ class Server:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.bind((BIND_HOST, 0))
         self.port = self.sock.getsockname()[1]
-        self._server = uvicorn.Server(uvicorn.Config(
-            neptune.app,
-            # Nothing printed by the server itself: this runner prints the report, and
-            # log_config=None so a test does not reconfigure logging for the process.
-            log_config=None, log_level="critical", access_log=False,
-            lifespan="on", loop="asyncio",
-        ))
+        self._server = uvicorn.Server(
+            uvicorn.Config(
+                neptune.app,
+                # Nothing printed by the server itself: this runner prints the report, and
+                # log_config=None so a test does not reconfigure logging for the process.
+                log_config=None,
+                log_level="critical",
+                access_log=False,
+                lifespan="on",
+                loop="asyncio",
+            )
+        )
         self._thread: threading.Thread | None = None
 
     def start(self) -> "Server":
         self._thread = threading.Thread(
-            target=self._server.run, kwargs={"sockets": [self.sock]},
-            name="neptune-test-server", daemon=True)
+            target=self._server.run, kwargs={"sockets": [self.sock]}, name="neptune-test-server", daemon=True
+        )
         self._thread.start()
         deadline = time.monotonic() + SERVER_START_TIMEOUT_S
         while not self._server.started:
@@ -542,7 +549,8 @@ class Server:
                 self.stop()
                 raise RuntimeError(
                     f"the app did not come up within {SERVER_START_TIMEOUT_S:.0f}s; the "
-                    f"server thread was here:\n{where}")
+                    f"server thread was here:\n{where}"
+                )
             time.sleep(0.02)
         return self
 
@@ -626,8 +634,9 @@ def setUpModule() -> None:
     # suite prints a page of warnings that are the fixtures working correctly. A test
     # module that permanently silences the vehicle's logger would be a worse bug than
     # the noise, so the level is restored.
-    _SAVED["log_levels"] = {name: logging.getLogger(name).level for name in
-                            ("neptune", "uvicorn.error", "uvicorn.access", "uvicorn.asgi")}
+    _SAVED["log_levels"] = {
+        name: logging.getLogger(name).level for name in ("neptune", "uvicorn.error", "uvicorn.access", "uvicorn.asgi")
+    }
     for name in _SAVED["log_levels"]:
         logging.getLogger(name).setLevel(logging.CRITICAL)
     try:
@@ -647,8 +656,7 @@ def _restore_globals() -> None:
     if "hardware_backend" in _SAVED:
         object.__setattr__(settings, "hardware_backend", _SAVED.pop("hardware_backend"))
     if "crt_national_auto" in _SAVED:
-        object.__setattr__(nav_settings, "crt_national_auto",
-                           _SAVED.pop("crt_national_auto"))
+        object.__setattr__(nav_settings, "crt_national_auto", _SAVED.pop("crt_national_auto"))
 
 
 def tearDownModule() -> None:
@@ -665,8 +673,8 @@ def tearDownModule() -> None:
     # finished" is not the same claim as "the server it started is gone".
     if not stopped:
         raise RuntimeError(
-            f"the test server was asked to stop and was still running "
-            f"{SERVER_STOP_TIMEOUT_S:.0f}s later")
+            f"the test server was asked to stop and was still running " f"{SERVER_STOP_TIMEOUT_S:.0f}s later"
+        )
 
 
 def quiesce() -> None:
@@ -755,28 +763,32 @@ class ControlSocketTest(SocketCase):
         client = self.ws()
         seqs = [client.next_of("telemetry")["seq"] for _ in range(6)]
         self.assertTrue(all(isinstance(s, int) for s in seqs), seqs)
-        self.assertEqual([seqs[0] + i for i in range(len(seqs))], seqs,
-                         "a client that never left was given a gap in the sequence, "
-                         "which its own gap detector will report as lost packets")
+        self.assertEqual(
+            [seqs[0] + i for i in range(len(seqs))],
+            seqs,
+            "a client that never left was given a gap in the sequence, "
+            "which its own gap detector will report as lost packets",
+        )
 
     def test_c_a_clean_close_is_answered_and_the_server_lets_go(self):
         client = self.ws()
         client.next_of("telemetry")
         code = client.close_clean(1000)
-        self.assertIn(code, (1000, None),
-                      f"the server answered a clean close with {code}")
-        self.assertEqual(0, self.server.wait_for_clients(0),
-                         "the server is still counting a client that said goodbye")
+        self.assertIn(code, (1000, None), f"the server answered a clean close with {code}")
+        self.assertEqual(0, self.server.wait_for_clients(0), "the server is still counting a client that said goodbye")
 
     def test_d_an_abrupt_drop_is_noticed_and_let_go_of(self):
         client = self.ws()
         client.next_of("telemetry")
         self.assertEqual(1, self.server.wait_for_clients(1))
         client.drop_abruptly()
-        self.assertEqual(0, self.server.wait_for_clients(0),
-                         "a socket that was reset is still being counted and broadcast "
-                         "to; a client list that only shrinks on a polite goodbye grows "
-                         "for the whole of a flaky dive")
+        self.assertEqual(
+            0,
+            self.server.wait_for_clients(0),
+            "a socket that was reset is still being counted and broadcast "
+            "to; a client list that only shrinks on a polite goodbye grows "
+            "for the whole of a flaky dive",
+        )
 
     def test_e_telemetry_resumes_and_seq_stays_monotonic_across_reconnect_churn(self):
         """Connect, be served, drop — alternating polite and violent — and again.
@@ -792,12 +804,13 @@ class ControlSocketTest(SocketCase):
             try:
                 seen = [client.next_of("telemetry")["seq"] for _ in range(3)]
                 self.assertGreater(
-                    seen[0], highest,
+                    seen[0],
+                    highest,
                     f"cycle {cycle}: telemetry came back numbered {seen[0]}, at or below "
                     f"the {highest} the last connection had already been shown — a "
-                    "sequence that repeats is a gap detector that cannot work")
-                self.assertEqual([seen[0] + i for i in range(len(seen))], seen,
-                                 f"cycle {cycle}: {seen}")
+                    "sequence that repeats is a gap detector that cannot work",
+                )
+                self.assertEqual([seen[0] + i for i in range(len(seen))], seen, f"cycle {cycle}: {seen}")
                 highest = seen[-1]
             finally:
                 if cycle % 2:
@@ -836,7 +849,7 @@ class MalformedInputTest(SocketCase):
     def test_b_bytes_that_are_not_utf8_do_not_take_the_app_down(self):
         client = self.ws()
         client.next_of("telemetry")
-        client.send_frame(OP_TEXT, GARBAGE_BYTES)      # a TEXT frame that is not text
+        client.send_frame(OP_TEXT, GARBAGE_BYTES)  # a TEXT frame that is not text
         with contextlib.suppress(Exception):
             client.recv_json(1.0)
         self.assert_app_is_still_serving("a text frame carrying invalid UTF-8")
@@ -844,7 +857,7 @@ class MalformedInputTest(SocketCase):
     def test_c_bytes_that_are_not_a_frame_at_all_do_not_take_the_app_down(self):
         client = self.ws()
         client.next_of("telemetry")
-        client.send_raw(GARBAGE_BYTES * 4)             # no framing whatsoever
+        client.send_raw(GARBAGE_BYTES * 4)  # no framing whatsoever
         with contextlib.suppress(Exception):
             client.recv_json(1.0)
         self.assert_app_is_still_serving("raw bytes that are not a websocket frame")
@@ -863,9 +876,9 @@ class MalformedInputTest(SocketCase):
         for blob in JSON_THAT_IS_NOT_A_MESSAGE:
             client.send_text(blob)
         after = client.next_of("telemetry")
-        self.assertGreater(after["seq"], before,
-                           "the socket stopped being served after JSON the vehicle "
-                           "could not interpret")
+        self.assertGreater(
+            after["seq"], before, "the socket stopped being served after JSON the vehicle " "could not interpret"
+        )
         self.assert_app_is_still_serving("valid JSON that is not an inbound message")
 
     def test_e_an_unknown_message_type_costs_a_frame_not_the_connection(self):
@@ -874,8 +887,7 @@ class MalformedInputTest(SocketCase):
         for blob in UNKNOWN_MESSAGE_TYPES:
             client.send_text(blob)
         after = client.next_of("telemetry")
-        self.assertGreater(after["seq"], before,
-                           "an unknown message type ended the connection")
+        self.assertGreater(after["seq"], before, "an unknown message type ended the connection")
         self.assert_app_is_still_serving("an unknown message type")
 
     def test_f_an_unknown_command_name_is_refused_with_a_reason(self):
@@ -893,8 +905,7 @@ class MalformedInputTest(SocketCase):
         client.send_json({"type": "command", "name": name, "c_id": "unknown-1"})
         ack = client.next_ack("unknown-1")
         self.assertFalse(ack["ok"], ack)
-        self.assertTrue(ack.get("reason"), "a refusal with no reason is a button that "
-                                           "silently does nothing")
+        self.assertTrue(ack.get("reason"), "a refusal with no reason is a button that " "silently does nothing")
         self.assertEqual(name, ack["name"])
 
     def test_g_a_websocket_upgrade_to_an_unrouted_path_is_refused_not_crashed(self):
@@ -908,15 +919,21 @@ class MalformedInputTest(SocketCase):
         for path in UNROUTED_PATHS:
             with self.subTest(path=path):
                 client = self.ws(path)
-                self.assertNotEqual(101, client.status,
-                                    f"{path} accepted a websocket upgrade; this vehicle "
-                                    "serves /ws/control, /ws/nav and /ws/telemetry")
-                self.assertLess(client.status, 500,
-                                f"{path} answered {client.status_line!r} — a 5xx is the "
-                                "vehicle reporting itself broken over a client's typo")
-                self.assertGreaterEqual(client.status, 400,
-                                        f"{path} answered {client.status_line!r}, which "
-                                        "is not a refusal")
+                self.assertNotEqual(
+                    101,
+                    client.status,
+                    f"{path} accepted a websocket upgrade; this vehicle "
+                    "serves /ws/control, /ws/nav and /ws/telemetry",
+                )
+                self.assertLess(
+                    client.status,
+                    500,
+                    f"{path} answered {client.status_line!r} — a 5xx is the "
+                    "vehicle reporting itself broken over a client's typo",
+                )
+                self.assertGreaterEqual(
+                    client.status, 400, f"{path} answered {client.status_line!r}, which " "is not a refusal"
+                )
         self.assert_app_is_still_serving("websocket upgrades to unrouted paths")
 
 
@@ -952,22 +969,25 @@ class FailsafeWatchdogTest(SocketCase):
         time.sleep(settings.watchdog_timeout_s + WATCHDOG_SETTLE_S)
 
         rov = neptune.app.state.rov
-        self.assertTrue(rov._failsafe,
-                        "the control frames stopped and the failsafe never latched")
+        self.assertTrue(rov._failsafe, "the control frames stopped and the failsafe never latched")
         # The reading the operator would see, over a NEW real socket — the failsafe is
         # only worth anything if it reaches the wire.
         back = self.ws()
         frame = back.next_of("telemetry")
-        self.assertEqual((0.0, 0.0), (frame["left"], frame["right"]),
-                         "the tether died at full throttle and the vehicle is still "
-                         f"driving: {frame['left']} / {frame['right']}")
+        self.assertEqual(
+            (0.0, 0.0),
+            (frame["left"], frame["right"]),
+            "the tether died at full throttle and the vehicle is still " f"driving: {frame['left']} / {frame['right']}",
+        )
         # ARMED STAYS TRUE ON PURPOSE. The watchdog zeroes the thrusters; it does not
         # quietly disarm, because "the vehicle is armed and the failsafe is holding it"
         # and "the vehicle is disarmed" are different states and the operator who
         # reconnects has to be told which one they have.
-        self.assertTrue(frame["armed"],
-                        "the failsafe disarmed the vehicle instead of zeroing it; the "
-                        "operator who reconnects cannot tell what state they are in")
+        self.assertTrue(
+            frame["armed"],
+            "the failsafe disarmed the vehicle instead of zeroing it; the "
+            "operator who reconnects cannot tell what state they are in",
+        )
 
     def test_b_control_resuming_clears_the_failsafe(self):
         """Recovery is half the contract, and the half that gets skipped.
@@ -990,8 +1010,7 @@ class FailsafeWatchdogTest(SocketCase):
             if frame["left"] > 0.5:
                 self.assertFalse(neptune.app.state.rov._failsafe)
                 return
-        self.fail("the vehicle never came back after the failsafe, on a reconnected "
-                  "socket sending control frames")
+        self.fail("the vehicle never came back after the failsafe, on a reconnected " "socket sending control frames")
 
 
 # ---------------------------------------------------------------------------
@@ -1009,8 +1028,10 @@ class LeakResetTest(SocketCase):
         super().setUp()
         hw = neptune.app.state.hw
         if not hasattr(hw, "_set_leak"):
-            self.skipTest("this vehicle's hardware backend has no bench hook for wetting "
-                          "a probe, so the refusal-while-wet rule cannot be reached here")
+            self.skipTest(
+                "this vehicle's hardware backend has no bench hook for wetting "
+                "a probe, so the refusal-while-wet rule cannot be reached here"
+            )
         self.hw = hw
 
     def _leak_reset(self, client: Ws, c_id: str) -> dict:
@@ -1024,21 +1045,22 @@ class LeakResetTest(SocketCase):
             frame = client.next_of("telemetry")
             if frame["leak_state"] == stage:
                 return frame
-        raise AssertionError(f"the hull never reported {stage} "
-                             f"(last: {frame.get('leak_state')!r})")
+        raise AssertionError(f"the hull never reported {stage} " f"(last: {frame.get('leak_state')!r})")
 
     def test_a_a_re_arm_on_a_dry_hull_is_acked_ok_and_counted(self):
         client = self.ws()
         before = self._wait_for_stage(client, "NORMAL")
         ack = self._leak_reset(client, "dry-1")
         self.assertTrue(ack["ok"], ack)
-        self.assertIsNone(ack["reason"],
-                          "an accepted command carries no refusal reason")
+        self.assertIsNone(ack["reason"], "an accepted command carries no refusal reason")
         after = self._wait_for_stage(client, "NORMAL")
-        self.assertEqual(before["leak_rearms"] + 1, after["leak_rearms"],
-                         "the re-arm was acked ok and the vehicle did not count it; "
-                         "leak_rearms is on the wire so the console can say whether the "
-                         "NORMAL it is showing was restored by hand or never in doubt")
+        self.assertEqual(
+            before["leak_rearms"] + 1,
+            after["leak_rearms"],
+            "the re-arm was acked ok and the vehicle did not count it; "
+            "leak_rearms is on the wire so the console can say whether the "
+            "NORMAL it is showing was restored by hand or never in doubt",
+        )
 
     def test_b_a_re_arm_is_refused_while_a_probe_is_wet_and_the_ack_says_why(self):
         client = self.ws()
@@ -1047,21 +1069,19 @@ class LeakResetTest(SocketCase):
         wet = self._wait_for_stage(client, "WARN")
 
         ack = self._leak_reset(client, "wet-1")
-        self.assertFalse(ack["ok"],
-                         "the vehicle acked ok=true for a re-arm it was standing in "
-                         "water for; the console now believes the detector is armed")
+        self.assertFalse(
+            ack["ok"],
+            "the vehicle acked ok=true for a re-arm it was standing in "
+            "water for; the console now believes the detector is armed",
+        )
         reason = ack.get("reason") or ""
         self.assertTrue(reason, "the refusal reached the console with no reason at all")
-        self.assertIn("wet", reason.lower(),
-                      f"the ack refused without saying that water is the cause: {reason!r}")
+        self.assertIn("wet", reason.lower(), f"the ack refused without saying that water is the cause: {reason!r}")
 
         after = self._wait_for_stage(client, "WARN")
-        self.assertEqual(wet["leak_rearms"], after["leak_rearms"],
-                         "a refused re-arm was counted as one anyway")
-        self.assertEqual("WARN", after["leak_state"],
-                         "the refused re-arm cleared the stage regardless")
-        self.assertTrue(after["leak"],
-                        "the single-bit alarm went quiet while a probe was still wet")
+        self.assertEqual(wet["leak_rearms"], after["leak_rearms"], "a refused re-arm was counted as one anyway")
+        self.assertEqual("WARN", after["leak_state"], "the refused re-arm cleared the stage regardless")
+        self.assertTrue(after["leak"], "the single-bit alarm went quiet while a probe was still wet")
 
     def test_c_the_hull_dries_and_the_re_arm_is_accepted_again(self):
         client = self.ws()
@@ -1071,8 +1091,7 @@ class LeakResetTest(SocketCase):
         self.hw._set_leak("NORMAL")
         self._wait_for_stage(client, "NORMAL")
         ack = self._leak_reset(client, "dry-2")
-        self.assertTrue(ack["ok"],
-                        f"the hull dried and the re-arm is still refused: {ack}")
+        self.assertTrue(ack["ok"], f"the hull dried and the re-arm is still refused: {ack}")
 
 
 # ---------------------------------------------------------------------------
@@ -1154,8 +1173,7 @@ class SlowConsumerTest(SocketCase):
                     status = 0
                 probes.append((status, time.monotonic() - t0))
 
-        poller = threading.Thread(target=_poll_health, name="neptune-test-health",
-                                  daemon=True)
+        poller = threading.Thread(target=_poll_health, name="neptune-test-health", daemon=True)
         try:
             healthy.next_of("telemetry", timeout=DEFAULT_TIMEOUT_S)
             # ---- hold the condition, and watch the loop through the good socket ----
@@ -1174,7 +1192,7 @@ class SlowConsumerTest(SocketCase):
                 gaps.append(now - last)
                 last = now
                 frames += 1
-            gaps.append(time.monotonic() - last)   # the silence the window ended in
+            gaps.append(time.monotonic() - last)  # the silence the window ended in
             stop_probing.set()
             poller.join(timeout=CLIENT_SETTLE_S)
             cls.gaps, cls.frames, cls.http_probes = gaps, frames, list(probes)
@@ -1204,8 +1222,7 @@ class SlowConsumerTest(SocketCase):
             # ---- end the condition, and see whether the vehicle comes back ----
             cls.queued_bytes = slow.drain()
             try:
-                cls.resumed_seq = healthy.next_of(
-                    "telemetry", timeout=SLOW_RESUME_S)["seq"]
+                cls.resumed_seq = healthy.next_of("telemetry", timeout=SLOW_RESUME_S)["seq"]
             except Exception as exc:  # noqa: BLE001 — recorded, asserted on below
                 cls.resume_error = f"{type(exc).__name__}: {exc}"
         finally:
@@ -1214,20 +1231,24 @@ class SlowConsumerTest(SocketCase):
             healthy.close()
 
     def _evidence(self) -> str:
-        return (f"(held {SLOW_HOLD_S:.0f}s; telemetry frames reaching the healthy client: "
-                f"{self.frames}; the stalled socket had {self.queued_bytes} bytes waiting "
-                f"when it finally read, with SO_RCVBUF={self.rcvbuf})")
+        return (
+            f"(held {SLOW_HOLD_S:.0f}s; telemetry frames reaching the healthy client: "
+            f"{self.frames}; the stalled socket had {self.queued_bytes} bytes waiting "
+            f"when it finally read, with SO_RCVBUF={self.rcvbuf})"
+        )
 
     def test_a_telemetry_kept_reaching_a_client_that_was_reading(self):
         self.assertTrue(self.gaps, "the experiment recorded nothing at all")
         worst = max(self.gaps)
         self.assertLessEqual(
-            worst, MAX_TELEMETRY_GAP_S,
+            worst,
+            MAX_TELEMETRY_GAP_S,
             f"a client that stopped reading stalled the control loop for {worst:.1f}s. "
             "Everything on that loop stops together — telemetry to every OTHER client, "
             "the blackbox, and the thruster watchdog — so this is not a rendering "
             f"problem, it is one stranger's socket holding the failsafe still. "
-            f"{self._evidence()}")
+            f"{self._evidence()}",
+        )
 
     def test_b_the_http_plane_kept_answering(self):
         """Which half stopped? This is how the report says so.
@@ -1238,31 +1259,39 @@ class SlowConsumerTest(SocketCase):
         """
         self.assertTrue(self.http_probes, "no health probes were taken")
         bad = [p for p in self.http_probes if p[0] != 200]
-        self.assertEqual([], bad,
-                         f"/healthz stopped answering 200 while one client was not "
-                         f"reading: {self.http_probes} {self._evidence()}")
+        self.assertEqual(
+            [],
+            bad,
+            f"/healthz stopped answering 200 while one client was not "
+            f"reading: {self.http_probes} {self._evidence()}",
+        )
 
     def test_c_the_failsafe_still_ran_while_a_client_was_not_reading(self):
-        self.assertIsNotNone(self.failsafe_after_stall,
-                             "the experiment never reached the failsafe check")
+        self.assertIsNotNone(self.failsafe_after_stall, "the experiment never reached the failsafe check")
         # The premise, checked first: a watchdog that did not fire on a vehicle that was
         # never driving is a watchdog working correctly, and the finding below would be
         # this suite misreading its own setup.
-        self.assertGreater(min(self.drove_before_stall), 0.5,
-                           "the thrusters were never driving, so there was nothing for "
-                           f"the failsafe to catch: {self.drove_before_stall}")
+        self.assertGreater(
+            min(self.drove_before_stall),
+            0.5,
+            "the thrusters were never driving, so there was nothing for "
+            f"the failsafe to catch: {self.drove_before_stall}",
+        )
         self.assertTrue(
             self.failsafe_after_stall,
             "the thrusters were driven and the control frames then stopped, and the "
             f"watchdog never latched — thrusters left at {self.thrust_after_stall}. A "
             "client that simply stops reading its socket therefore disables the one "
-            f"mechanism that stops a runaway vehicle. {self._evidence()}")
+            f"mechanism that stops a runaway vehicle. {self._evidence()}",
+        )
 
     def test_d_the_vehicle_comes_back_when_the_slow_client_drains(self):
         """Whatever the answer above, the app must not be permanently poisoned."""
-        self.assertIsNone(self.resume_error,
-                          f"telemetry never returned after the stalled client drained "
-                          f"{self.queued_bytes} bytes: {self.resume_error}")
+        self.assertIsNone(
+            self.resume_error,
+            f"telemetry never returned after the stalled client drained "
+            f"{self.queued_bytes} bytes: {self.resume_error}",
+        )
         self.assertIsNotNone(self.resumed_seq)
 
 

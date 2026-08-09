@@ -50,6 +50,7 @@ COVERAGE IS A MEASUREMENT, NOT A GATE
             that never loaded, a suite that never reported. Not success. Non-zero
             on purpose, so a pre-push gate stops either way.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -72,8 +73,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CLIENT = HERE.parent
 SUITES = HERE / "suites"
-SHOTS = HERE / "screenshots"      # what this run saw (gitignored)
-BASELINE = HERE / "baseline"      # what it is supposed to look like (committed)
+SHOTS = HERE / "screenshots"  # what this run saw (gitignored)
+BASELINE = HERE / "baseline"  # what it is supposed to look like (committed)
 
 # Fraction of pixels that may differ before a layout is called a regression.
 #
@@ -82,7 +83,7 @@ BASELINE = HERE / "baseline"      # what it is supposed to look like (committed)
 # antialiasing. Measure the floor with --shot-noise and set this just above it. Set it
 # "safely high" instead and the check stops working: at 2% a 28 px button growing to
 # 44 px went completely unnoticed, because it is only 0.13% of the screen.
-SHOT_TOLERANCE = 0.001   # measured floor is 0.000-0.016%; this is ~6x it
+SHOT_TOLERANCE = 0.001  # measured floor is 0.000-0.016%; this is ~6x it
 VERBOSE_SHOTS = False
 
 # The suites whose picture is ABOUT the map. Satellite tiles arrive from the network and
@@ -131,9 +132,9 @@ _CANDIDATES = {
         "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     ],
     "linux": [
-        "/usr/bin/chromium",                              # Raspberry Pi OS Bookworm
-        "/usr/bin/chromium-browser",                      # Bullseye and older
-        "/usr/lib/chromium-browser/chromium-browser",     # the real binary behind the wrapper
+        "/usr/bin/chromium",  # Raspberry Pi OS Bookworm
+        "/usr/bin/chromium-browser",  # Bullseye and older
+        "/usr/lib/chromium-browser/chromium-browser",  # the real binary behind the wrapper
         "/usr/lib/chromium/chromium",
         "/snap/bin/chromium",
         "/usr/bin/google-chrome-stable",
@@ -142,8 +143,15 @@ _CANDIDATES = {
         "/usr/bin/microsoft-edge",
     ],
 }
-_ON_PATH = ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable",
-            "chrome", "msedge", "brave-browser")
+_ON_PATH = (
+    "chromium",
+    "chromium-browser",
+    "google-chrome",
+    "google-chrome-stable",
+    "chrome",
+    "msedge",
+    "brave-browser",
+)
 
 
 # Prepended to every suite. A suite that throws must REPORT, not sit there until the
@@ -208,8 +216,11 @@ def find_chrome(explicit: str | None) -> str | None:
         # variable read a green result from a browser they had not chosen, with their
         # typo mentioned once in a line scrolled off the top. An explicit choice that
         # cannot be honoured is a could-not-run, not a detail.
-        print(f"NEPTUNE_CHROME={env} does not exist - refusing to silently use another "
-              f"browser. Fix the path or unset it to auto-detect.", file=sys.stderr)
+        print(
+            f"NEPTUNE_CHROME={env} does not exist - refusing to silently use another "
+            f"browser. Fix the path or unset it to auto-detect.",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
     for p in chrome_candidates():
         if Path(p).exists():
@@ -234,8 +245,7 @@ def browser_version(path: str) -> str:
     """
     if os.name != "nt":
         try:
-            out = subprocess.run([path, "--version"], capture_output=True, text=True,
-                                 timeout=20).stdout.strip()
+            out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=20).stdout.strip()
         except Exception:  # noqa: BLE001 — a browser that will not answer is not a failure
             out = ""
         if out:
@@ -245,8 +255,7 @@ def browser_version(path: str) -> str:
     # The version is on disk instead — every Chrome and Edge install keeps its payload
     # in a sibling directory named for it.
     try:
-        vers = [d.name for d in Path(path).resolve().parent.iterdir()
-                if d.is_dir() and _VERSION_DIR.fullmatch(d.name)]
+        vers = [d.name for d in Path(path).resolve().parent.iterdir() if d.is_dir() and _VERSION_DIR.fullmatch(d.name)]
         if vers:
             newest = max(vers, key=lambda v: tuple(int(x) for x in v.split(".")))
             return f"{Path(path).stem} {newest}"
@@ -281,8 +290,7 @@ def _no_sandbox_reason() -> str | None:
         return None
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         return "running as root"
-    for probe in ("/proc/sys/kernel/unprivileged_userns_clone",
-                  "/proc/sys/user/max_user_namespaces"):
+    for probe in ("/proc/sys/kernel/unprivileged_userns_clone", "/proc/sys/user/max_user_namespaces"):
         try:
             if Path(probe).read_text().strip() == "0":
                 return f"user namespaces disabled ({probe} is 0)"
@@ -291,27 +299,32 @@ def _no_sandbox_reason() -> str | None:
     return None
 
 
-def launch_args(chrome: str, version: str, profile: str, url: str,
-                headed: bool) -> list[str]:
+def launch_args(chrome: str, version: str, profile: str, url: str, headed: bool) -> list[str]:
     """The full command line, assembled where it can be read and reasoned about.
 
     A pure function on purpose: the Pi-only flags below cannot be exercised from a
     Windows handheld any other way, and a flag list built inline inside run_suite is a
     flag list nobody can check without a Raspberry Pi in front of them.
     """
-    args = [chrome, f"--user-data-dir={profile}", "--no-first-run",
-            "--no-default-browser-check", "--disable-background-networking",
-            # The suites are TIMING code — `await sleep(2500)`, 100 ms telemetry feeds.
-            # A headless window counts as occluded, and an occluded window gets its
-            # timers throttled to once a minute, which turns a passing suite into a
-            # twenty-minute timeout on a machine slow enough to be backgrounded.
-            "--disable-background-timer-throttling",
-            "--disable-backgrounding-occluded-windows",
-            "--disable-renderer-backgrounding",
-            # Port 0 = "pick one and write it down" (see cdp.devtools_port). Asking for
-            # a specific port means racing every other process on the box for it.
-            "--remote-debugging-port=0",
-            "--window-size=1280,800", url]
+    args = [
+        chrome,
+        f"--user-data-dir={profile}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-networking",
+        # The suites are TIMING code — `await sleep(2500)`, 100 ms telemetry feeds.
+        # A headless window counts as occluded, and an occluded window gets its
+        # timers throttled to once a minute, which turns a passing suite into a
+        # twenty-minute timeout on a machine slow enough to be backgrounded.
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        # Port 0 = "pick one and write it down" (see cdp.devtools_port). Asking for
+        # a specific port means racing every other process on the box for it.
+        "--remote-debugging-port=0",
+        "--window-size=1280,800",
+        url,
+    ]
     if not headed:
         # --headless=new is what every current build wants; Chromium before 109 has no
         # such mode and reads the whole switch as a plain --headless, but an image old
@@ -412,27 +425,34 @@ def suite_url_suffix(suite: Path) -> str:
 # The four ways a suite can end without a usable result, and the one where it works.
 # Named rather than passed around as bare strings so that the difference between them
 # survives being read six months later.
-REPORTED = "reported"       # it posted checks; they may pass or fail, that is a finding
-CRASHED = "crashed"         # it threw: the checks after the throw never happened
-INCOMPLETE = "incomplete"   # it loaded and never said what it verified
-NEVER = "never"             # the browser never even fetched it
+REPORTED = "reported"  # it posted checks; they may pass or fail, that is a finding
+CRASHED = "crashed"  # it threw: the checks after the throw never happened
+INCOMPLETE = "incomplete"  # it loaded and never said what it verified
+NEVER = "never"  # the browser never even fetched it
 
 
 class Outcome:
-    __slots__ = ("status", "checks", "note", "evidence", "shot_err", "leaked",
-                 "coverage", "cov_err")
+    __slots__ = ("status", "checks", "note", "evidence", "shot_err", "leaked", "coverage", "cov_err")
 
-    def __init__(self, status: str, checks=None, note: str = "", evidence=(),
-                 shot_err=None, leaked: str | None = None, coverage=None,
-                 cov_err: str | None = None):
+    def __init__(
+        self,
+        status: str,
+        checks=None,
+        note: str = "",
+        evidence=(),
+        shot_err=None,
+        leaked: str | None = None,
+        coverage=None,
+        cov_err: str | None = None,
+    ):
         self.status = status
         self.checks = checks
-        self.note = note              # ONE line: what happened
+        self.note = note  # ONE line: what happened
         self.evidence = list(evidence)  # supporting lines, which are not the same thing
         self.shot_err = shot_err
-        self.leaked = leaked          # a profile directory that would not delete
-        self.coverage = coverage      # raw V8 coverage entries, one per script
-        self.cov_err = cov_err        # why there are none, if there are none
+        self.leaked = leaked  # a profile directory that would not delete
+        self.coverage = coverage  # raw V8 coverage entries, one per script
+        self.cov_err = cov_err  # why there are none, if there are none
 
 
 def kill_browser(proc: subprocess.Popen) -> None:
@@ -467,8 +487,12 @@ def kill_browser(proc: subprocess.Popen) -> None:
     if os.name == "nt":
         # /T for the tree, /F because a wedged renderer ignores anything politer.
         # taskkill ships with every Windows since XP, so this needs nothing installed.
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
     else:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -489,6 +513,7 @@ def _rmtree_stubborn(path: str, tries: int = 5) -> bool:
     directory per suite per run. Retry briefly (the handles go within a second of the
     process actually exiting), then say so out loud.
     """
+
     def _chmod_retry(func, target, _exc):
         # A read-only file on Windows refuses unlink until the flag is cleared.
         try:
@@ -542,8 +567,7 @@ def _tail(path: Path, n: int = 4) -> list[str]:
     perfectly clear — it was just being written to /dev/null.
     """
     try:
-        lines = [ln.strip() for ln in path.read_text(errors="replace").splitlines()
-                 if ln.strip()]
+        lines = [ln.strip() for ln in path.read_text(errors="replace").splitlines() if ln.strip()]
     except OSError:
         return []
     return lines[-n:]
@@ -560,7 +584,7 @@ def _read_checks(raw: str):
     if not text:
         return None, "posted an empty body"
     if text.startswith("SUITE CRASHED") or text.startswith("THREW"):
-        return None, text            # a crash, recognised by the caller
+        return None, text  # a crash, recognised by the caller
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
@@ -575,8 +599,16 @@ def _read_checks(raw: str):
     return parsed, None
 
 
-def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bool,
-              keep: bool, shots: bool = True, coverage: bool = False) -> Outcome:
+def run_suite(
+    suite: Path,
+    chrome: str,
+    version: str,
+    timeout: float,
+    headed: bool,
+    keep: bool,
+    shots: bool = True,
+    coverage: bool = False,
+) -> Outcome:
     result_box: dict = {}
     seen: dict = {}
     done = threading.Event()
@@ -597,13 +629,11 @@ def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bo
     # of the time: the console boots before the profiler starts and its whole boot path
     # reads as never executed. Nothing else about the run changes - same flags, same
     # URL, same page, one navigation later.
-    args = launch_args(chrome, version, profile,
-                       "about:blank" if coverage else url, headed)
+    args = launch_args(chrome, version, profile, "about:blank" if coverage else url, headed)
     # start_new_session so kill_browser can take the whole process group; ignored on
     # Windows, which has no such thing and uses taskkill /T instead.
     with open(errlog, "wb") as elog:
-        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=elog,
-                                start_new_session=(os.name != "nt"))
+        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=elog, start_new_session=(os.name != "nt"))
 
     shot_err = None
     browser_rc = None
@@ -617,6 +647,7 @@ def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bo
             # deadline below so a suite is not charged for the setup.
             try:
                 import cdp
+
                 cov_ws = cdp.start_coverage(cdp.devtools_port(profile))
             except Exception as exc:  # noqa: BLE001 — a measurement, never a verdict
                 cov_err = f"could not start: {exc}"
@@ -629,8 +660,7 @@ def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bo
                 # THIS one is not just a missing measurement: the page is still sitting
                 # on about:blank and the suite below will report that it never loaded.
                 # Say which of the two happened, in the line the operator will read.
-                cov_err = (f"{cov_err + '; ' if cov_err else ''}"
-                           f"the page was never sent to {url}: {exc}")
+                cov_err = f"{cov_err + '; ' if cov_err else ''}" f"the page was never sent to {url}: {exc}"
         # Poll instead of one long wait(). A browser that refuses to start — no
         # sandbox on a Pi, a bad flag, killed from outside — used to cost the FULL
         # timeout per suite before anyone was told, which on a 13-suite run is 26
@@ -639,7 +669,7 @@ def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bo
         while not done.wait(0.25):
             if proc.poll() is not None:
                 browser_rc = proc.returncode
-                done.wait(1.0)      # a result already in flight still counts
+                done.wait(1.0)  # a result already in flight still counts
                 break
             if time.time() > deadline:
                 break
@@ -653,6 +683,7 @@ def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bo
         if shots and proc.poll() is None:
             try:
                 from cdp import capture_png, devtools_port
+
                 cdp_port = devtools_port(profile)
                 SHOTS.mkdir(parents=True, exist_ok=True)
                 # TWO shots, on purpose:
@@ -661,9 +692,8 @@ def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bo
                 #                       hidden — the only version stable enough to
                 #                       compare, and where layout regressions show
                 (SHOTS / f"{suite.stem}.png").write_bytes(capture_png(cdp_port))
-                (SHOTS / f"{suite.stem}.layout.png").write_bytes(
-                    capture_png(cdp_port, hide_live=True))
-            except Exception as exc:   # noqa: BLE001 — never fail a suite over its portrait
+                (SHOTS / f"{suite.stem}.layout.png").write_bytes(capture_png(cdp_port, hide_live=True))
+            except Exception as exc:  # noqa: BLE001 — never fail a suite over its portrait
                 shot_err = str(exc)
         # Taken last, and only while the browser is still up: the numbers live in the
         # renderer and go with it. Taken even when the suite never reported, because
@@ -671,6 +701,7 @@ def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bo
         if cov_ws is not None and proc.poll() is None:
             try:
                 import cdp
+
                 cov_entries = cdp.take_coverage(cov_ws)
             except Exception as exc:  # noqa: BLE001
                 cov_err = f"nothing came back: {exc}"
@@ -679,8 +710,8 @@ def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bo
             cov_ws.close()
         kill_browser(proc)
         srv.shutdown()
-        srv.server_close()      # the listening socket, not just the serve loop: 13
-                                # suites leaked 13 sockets for the life of the run
+        srv.server_close()  # the listening socket, not just the serve loop: 13
+        # suites leaked 13 sockets for the life of the run
         stderr_tail = _tail(errlog)
         leaked = None
         if not keep and not _rmtree_stubborn(profile):
@@ -697,30 +728,50 @@ def run_suite(suite: Path, chrome: str, version: str, timeout: float, headed: bo
             # a Pi the sandbox and namespace refusals do land here, which is the whole
             # point of keeping them instead of /dev/null.
             if stderr_tail:
-                evidence = ["the browser's last words on stderr (the exit code is the "
-                            "fact; these may be noise):"]
+                evidence = ["the browser's last words on stderr (the exit code is the " "fact; these may be noise):"]
                 evidence += [f"  {line[:200]}" for line in stderr_tail[-3:]]
         else:
             why = f"timed out after {timeout:.0f}s"
         if not seen.get("suite"):
-            where = ("the page was served, but the injected suite was never fetched"
-                     if seen.get("index") else "nothing was ever fetched from the server")
-            return Outcome(NEVER, note=f"{why} - {where}", evidence=evidence,
-                           shot_err=shot_err, leaked=leaked, coverage=cov_entries,
-                           cov_err=cov_err)
-        return Outcome(INCOMPLETE, note=f"loaded, then {why}", evidence=evidence,
-                       shot_err=shot_err, leaked=leaked, coverage=cov_entries,
-                       cov_err=cov_err)
+            where = (
+                "the page was served, but the injected suite was never fetched"
+                if seen.get("index")
+                else "nothing was ever fetched from the server"
+            )
+            return Outcome(
+                NEVER,
+                note=f"{why} - {where}",
+                evidence=evidence,
+                shot_err=shot_err,
+                leaked=leaked,
+                coverage=cov_entries,
+                cov_err=cov_err,
+            )
+        return Outcome(
+            INCOMPLETE,
+            note=f"loaded, then {why}",
+            evidence=evidence,
+            shot_err=shot_err,
+            leaked=leaked,
+            coverage=cov_entries,
+            cov_err=cov_err,
+        )
 
     checks, why = _read_checks(result_box.get("raw", ""))
     if checks is None:
         why = why or ""
         status = CRASHED if why.startswith(("SUITE CRASHED", "THREW")) else INCOMPLETE
         lines = why[:800].splitlines() or [""]
-        return Outcome(status, note=lines[0], evidence=lines[1:6], shot_err=shot_err,
-                       leaked=leaked, coverage=cov_entries, cov_err=cov_err)
-    return Outcome(REPORTED, checks=checks, shot_err=shot_err, leaked=leaked,
-                   coverage=cov_entries, cov_err=cov_err)
+        return Outcome(
+            status,
+            note=lines[0],
+            evidence=lines[1:6],
+            shot_err=shot_err,
+            leaked=leaked,
+            coverage=cov_entries,
+            cov_err=cov_err,
+        )
+    return Outcome(REPORTED, checks=checks, shot_err=shot_err, leaked=leaked, coverage=cov_entries, cov_err=cov_err)
 
 
 def check_shot(name: str, bless: bool):
@@ -744,14 +795,17 @@ def check_shot(name: str, bless: bool):
         return f"no baseline yet - run with --bless to accept {cur.name}", False
     try:
         from png import diff
+
         frac, note = diff(base.read_bytes(), cur.read_bytes())
-    except Exception as exc:   # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         return f"screenshot compare failed: {exc}", False
     if frac is None:
         return f"VISUAL: cannot compare - {note}", True
     if frac > SHOT_TOLERANCE:
-        return (f"VISUAL DRIFT {frac*100:.2f}% of pixels ({note}, tolerance "
-                f"{SHOT_TOLERANCE*100:.2f}%) - see {cur}, --bless if intended"), True
+        return (
+            f"VISUAL DRIFT {frac*100:.2f}% of pixels ({note}, tolerance "
+            f"{SHOT_TOLERANCE*100:.2f}%) - see {cur}, --bless if intended"
+        ), True
     return (f"visual ok ({frac*100:.3f}% differ)" if VERBOSE_SHOTS else None), False
 
 
@@ -769,7 +823,7 @@ def _js_name(url: str) -> str | None:
     path = urllib.parse.urlsplit(url).path
     if not path.startswith("/js/") or not path.endswith(".js"):
         return None
-    name = path[len("/js/"):]
+    name = path[len("/js/") :]
     if "/" in name or not (JS / name).is_file():
         return None
     return name
@@ -791,15 +845,16 @@ class LineCoverage:
 
     def __init__(self):
         self._sources: dict = {}
-        self.hit: dict[str, set[int]] = {}     # file -> lines that ran, any suite
-        self.measured: set[str] = set()        # files V8 actually reported on
-        self.mismatched: set[str] = set()      # ran, but not the file we read
-        self.errors: list[str] = []            # suite -> why it contributed nothing
+        self.hit: dict[str, set[int]] = {}  # file -> lines that ran, any suite
+        self.measured: set[str] = set()  # files V8 actually reported on
+        self.mismatched: set[str] = set()  # ran, but not the file we read
+        self.errors: list[str] = []  # suite -> why it contributed nothing
 
     def source(self, name: str):
         """The scanned file, read once per run however many suites mention it."""
         if name not in self._sources:
             import cdp
+
             # Bytes, then decode: text mode would silently turn this repo's CRLF files
             # into LF and shift every offset V8 reports by one per line before it.
             self._sources[name] = cdp.Source((JS / name).read_bytes().decode("utf-8"))
@@ -874,22 +929,19 @@ def write_coverage_json(cov: "LineCoverage", path: str) -> None:
         entry = {"code_lines": code, "measured": measured}
         if measured:
             entry["covered"] = ran
-            entry["uncovered"] = sorted(set(cov.source(name).code_lines)
-                                        - cov.hit.get(name, set()))
+            entry["uncovered"] = sorted(set(cov.source(name).code_lines) - cov.hit.get(name, set()))
         files[name] = entry
     Path(path).write_text(json.dumps({"files": files}, indent=1), encoding="utf-8")
 
 
-def print_header(chrome: str | None, version: str, n_suites: int,
-                 coverage: bool = False) -> None:
+def print_header(chrome: str | None, version: str, n_suites: int, coverage: bool = False) -> None:
     """Say which machine and which engine this run is about, before it runs.
 
     A result is only evidence if it can be traced back to what produced it: this suite
     is quoted in four documents and none of them could say whether the number came off
     the handheld, a laptop or a Pi, or out of Chrome or Chromium.
     """
-    print(f"machine : {platform_mod.platform()}  ({sys.platform}, "
-          f"{platform_mod.machine() or 'unknown arch'})")
+    print(f"machine : {platform_mod.platform()}  ({sys.platform}, " f"{platform_mod.machine() or 'unknown arch'})")
     print(f"python  : {sys.version.split()[0]}  {sys.executable}")
     if chrome:
         print(f"browser : {chrome}" + (f"  ({version})" if version else "  (version unknown)"))
@@ -906,8 +958,7 @@ def print_header(chrome: str | None, version: str, n_suites: int,
         # differently (at about:blank, then navigated) so that V8's profiler is running
         # before the console boots. A reader comparing two runs should not have to work
         # out from the flags why one of them took a different path to the same page.
-        print("coverage: ON - V8 precise coverage; Chrome starts at about:blank and is "
-              "navigated to the suite")
+        print("coverage: ON - V8 precise coverage; Chrome starts at about:blank and is " "navigated to the suite")
     print(f"suites  : {n_suites}\n")
 
 
@@ -921,17 +972,23 @@ def main():
     ap.add_argument("--list", action="store_true", help="list the suites and exit")
     ap.add_argument("-v", "--verbose", action="store_true", help="print every check, not just failures")
     ap.add_argument("--no-shots", action="store_true", help="skip the screenshots")
-    ap.add_argument("--bless", action="store_true",
-                    help="accept the current screenshots as the new baseline")
-    ap.add_argument("--shot-noise", action="store_true",
-                    help="print the drift percentage even when it passes (to set the tolerance)")
-    ap.add_argument("--loose-visual", action="store_true",
-                    help="report visual drift without failing the run (see check_shot)")
-    ap.add_argument("--coverage", action="store_true",
-                    help="measure which lines of client/js the run executes (printed, "
-                         "never gated)")
-    ap.add_argument("--coverage-json", metavar="PATH",
-                    help="with --coverage: write the uncovered line numbers per file there")
+    ap.add_argument("--bless", action="store_true", help="accept the current screenshots as the new baseline")
+    ap.add_argument(
+        "--shot-noise",
+        action="store_true",
+        help="print the drift percentage even when it passes (to set the tolerance)",
+    )
+    ap.add_argument(
+        "--loose-visual", action="store_true", help="report visual drift without failing the run (see check_shot)"
+    )
+    ap.add_argument(
+        "--coverage",
+        action="store_true",
+        help="measure which lines of client/js the run executes (printed, " "never gated)",
+    )
+    ap.add_argument(
+        "--coverage-json", metavar="PATH", help="with --coverage: write the uncovered line numbers per file there"
+    )
     # Kept so anything that already passes it still works; it is now the default.
     ap.add_argument("--strict-visual", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
@@ -962,12 +1019,11 @@ def main():
 
     swept = sweep_stale_profiles()
     if swept:
-        print(f"swept {swept} leaked Chrome profile(s) from an earlier run "
-              f"out of {tempfile.gettempdir()}\n")
+        print(f"swept {swept} leaked Chrome profile(s) from an earlier run " f"out of {tempfile.gettempdir()}\n")
 
     total = passed = failed = 0
-    never: dict[str, str] = {}         # suite -> why it never loaded
-    incomplete: dict[str, str] = {}    # suite -> what it did instead of reporting
+    never: dict[str, str] = {}  # suite -> why it never loaded
+    incomplete: dict[str, str] = {}  # suite -> what it did instead of reporting
     crashed: list[str] = []
     drifted: list[str] = []
     leaked: list[str] = []
@@ -994,8 +1050,16 @@ def main():
         # out. A run that loses its findings to an unrelated I/O error has told the
         # operator nothing, which is exactly the silence this runner exists to refuse.
         try:
-            out = run_suite(suite, chrome, version, args.timeout, args.headed,
-                            args.keep, shots=not args.no_shots, coverage=args.coverage)
+            out = run_suite(
+                suite,
+                chrome,
+                version,
+                args.timeout,
+                args.headed,
+                args.keep,
+                shots=not args.no_shots,
+                coverage=args.coverage,
+            )
         except Exception as exc:  # noqa: BLE001
             print(f"  {name:<24} CRASH {'-':>3}/-   the runner itself failed: {exc}")
             never[name] = f"the runner failed on this suite: {exc}"
@@ -1063,8 +1127,11 @@ def main():
 
     dt = time.time() - t0
     ran = len(wanted) - len(never) - len(incomplete) - len(crashed)
-    across = (f"{ran} of {len(wanted)} suites" if ran != len(wanted)
-              else f"{len(wanted)} suite{'' if len(wanted) == 1 else 's'}")
+    across = (
+        f"{ran} of {len(wanted)} suites"
+        if ran != len(wanted)
+        else f"{len(wanted)} suite{'' if len(wanted) == 1 else 's'}"
+    )
     print(f"\n{passed}/{total} checks passed in {dt:.0f}s across {across}")
 
     if shot_notes:
@@ -1091,14 +1158,17 @@ def main():
     if never or incomplete or crashed:
         print("\nINCOMPLETE - this run certifies nothing about the console as a whole.")
         if never:
-            print(f"  {len(never)} of {len(wanted)} suites never loaded: "
-                  f"{', '.join(sorted(never))}")
+            print(f"  {len(never)} of {len(wanted)} suites never loaded: " f"{', '.join(sorted(never))}")
         if incomplete:
-            print(f"  {len(incomplete)} of {len(wanted)} suites loaded and never reported "
-                  f"a result: {', '.join(sorted(incomplete))}")
+            print(
+                f"  {len(incomplete)} of {len(wanted)} suites loaded and never reported "
+                f"a result: {', '.join(sorted(incomplete))}"
+            )
         if crashed:
-            print(f"  {len(crashed)} of {len(wanted)} suites threw partway through: "
-                  f"{', '.join(sorted(crashed))} - the checks after the throw never ran")
+            print(
+                f"  {len(crashed)} of {len(wanted)} suites threw partway through: "
+                f"{', '.join(sorted(crashed))} - the checks after the throw never ran"
+            )
         print("  the total above is short by those suites; it is not a whole-console pass")
         if chrome is None:
             print("\n  No Chrome, Chromium or Edge on this machine. The client IS a browser")

@@ -23,6 +23,7 @@ EXPLICITLY OUT OF SCOPE (§4d) — written here so a future pass does not "impro
 That is a scope decision, not an oversight. The next person to want a position EKF
 should arrive carrying dive logs and a replay score, not an intuition.
 """
+
 from __future__ import annotations
 
 
@@ -96,19 +97,19 @@ class HeadingFilter:
     the filter returns None rather than its last opinion.
     """
 
-    TAU_S = 2.0                     # first-order blend time constant
-    SLEW_DPS = 5.0                  # hard cap on how fast a correction may walk the heading
-    K_B = 0.01                      # gyro bias learning rate, per second
-    B_MAX_DPS = 3.0                 # a "bias" larger than this is a fault, not a bias
-    MIN_MAG_CAL = 2                 # BNO085 calibration status 0..3; <2 = suspect (§5.6)
-    MAX_TRUSTED_THRUST = 0.5        # above this the thrusters own the magnetometer
+    TAU_S = 2.0  # first-order blend time constant
+    SLEW_DPS = 5.0  # hard cap on how fast a correction may walk the heading
+    K_B = 0.01  # gyro bias learning rate, per second
+    B_MAX_DPS = 3.0  # a "bias" larger than this is a fault, not a bias
+    MIN_MAG_CAL = 2  # BNO085 calibration status 0..3; <2 = suspect (§5.6)
+    MAX_TRUSTED_THRUST = 0.5  # above this the thrusters own the magnetometer
     MAX_BIAS_INNOVATION_DEG = 10.0  # a big error is a disturbance, never evidence about bias
-    GAP_S = 0.5                     # longer than this between samples is a gap, not a tick
+    GAP_S = 0.5  # longer than this between samples is a gap, not a tick
 
     def __init__(self) -> None:
-        self.h: float = 0.0                 # filtered heading, degrees, 0..360
-        self.b: float = 0.0                 # estimated gyro bias, deg/s
-        self.gyro_only: bool = False        # the compass is being ignored ON PURPOSE
+        self.h: float = 0.0  # filtered heading, degrees, 0..360
+        self.b: float = 0.0  # estimated gyro bias, deg/s
+        self.gyro_only: bool = False  # the compass is being ignored ON PURPOSE
         # No heading could be produced at all this tick — no compass AND no gyro.
         # Distinct from gyro_only, which is a working estimate running on one
         # instrument; this is the absence of an estimate.
@@ -309,7 +310,7 @@ class SpeedKF:
     integration that turns a small bias into a kilometre of imaginary track.
     """
 
-    SIGMA_A = 0.15          # accelerometer noise, m/s² — drives Q's velocity term
+    SIGMA_A = 0.15  # accelerometer noise, m/s² — drives Q's velocity term
     # What the velocity's uncertainty grows on when NO accelerometer is answering.
     # The predict step then carries v forward unchanged, and "unchanged" is not a
     # measurement of steady speed — it is the absence of one, so the process noise
@@ -318,14 +319,14 @@ class SpeedKF:
     # figure. Without this the filter would grow CONFIDENT while blind, and stop
     # listening to the one instrument still talking to it, the paddlewheel.
     SIGMA_A_NO_ACCEL = 1.0
-    Q_B = 1e-4              # bias random walk per second
-    P0_V = 0.25             # initial variance on v (m/s)² — 0.5 m/s of "no idea"
-    P0_B = 0.01             # initial variance on b_a
-    R_PADDLE_FLOOR = 0.03   # the wheel is never better than this, whatever the maths says
-    R_AT_REST = 0.05        # how firmly a stopped, unpowered sub is believed to be stopped
-    REST_THROTTLE = 0.1     # below this the throttle is not asking for motion
-    B_A_MAX = 0.5           # m/s²; beyond this it is a broken accelerometer, not a bias
-    SIGN_TOL_MS = 0.05      # how far v may sit on the wrong side of the throttle's sign
+    Q_B = 1e-4  # bias random walk per second
+    P0_V = 0.25  # initial variance on v (m/s)² — 0.5 m/s of "no idea"
+    P0_B = 0.01  # initial variance on b_a
+    R_PADDLE_FLOOR = 0.03  # the wheel is never better than this, whatever the maths says
+    R_AT_REST = 0.05  # how firmly a stopped, unpowered sub is believed to be stopped
+    REST_THROTTLE = 0.1  # below this the throttle is not asking for motion
+    B_A_MAX = 0.5  # m/s²; beyond this it is a broken accelerometer, not a bias
+    SIGN_TOL_MS = 0.05  # how far v may sit on the wrong side of the throttle's sign
 
     def __init__(self, m_per_pulse: float = 0.05, window_s: float = 0.5) -> None:
         # Defaults mirror NAV_M_PER_PULSE / NAV_PADDLE_WINDOW_S so this class stays
@@ -339,7 +340,7 @@ class SpeedKF:
         # to the speed itself, and a filter that does not know its measurement is
         # coarse will chase the staircase instead of the water.
         self.quantization: float = (m_per_pulse / window_s) if window_s > 0 else self.R_PADDLE_FLOOR
-        self.source: str = "kf-lut"     # "kf-paddle" once a real measurement lands
+        self.source: str = "kf-lut"  # "kf-paddle" once a real measurement lands
 
     def update(
         self,
@@ -389,7 +390,7 @@ class SpeedKF:
             # zero-lock, b_a wanders during every pause and the next burst of thrust
             # starts from a velocity that was never real.
             z = 0.0
-            r = self.R_AT_REST ** 2
+            r = self.R_AT_REST**2
             self.source = "kf-lut"
         else:
             # Stale wheel while thrusting: fall back to the speed model, but as a WEAK
@@ -445,9 +446,9 @@ class SnagDetector:
     estimate currently corrected by one) counts.
     """
 
-    THRUST = 0.5            # above this the sub should be visibly moving
-    STOPPED_MS = 0.05       # below this it is not
-    SUSTAIN_S = 2.0         # long enough that a kick off a wall or a weed does not count
+    THRUST = 0.5  # above this the sub should be visibly moving
+    STOPPED_MS = 0.05  # below this it is not
+    SUSTAIN_S = 2.0  # long enough that a kick off a wall or a weed does not count
 
     def __init__(self) -> None:
         self.snagged: bool = False
@@ -475,7 +476,7 @@ class SnagDetector:
 
         if pushing and stopped:
             if self._since is None or t < self._since:
-                self._since = t          # also re-seeds if time went backwards (replay seek)
+                self._since = t  # also re-seeds if time went backwards (replay seek)
             self.snagged = (t - self._since) > self.SUSTAIN_S
         else:
             self._since = None

@@ -11,6 +11,7 @@ snapping target) and a reverse-geocoded area name via Nominatim (§4).
 Pure stdlib (urllib + sqlite3) — no third-party deps. All network calls go
 through the module-level _http_get, which tests monkeypatch to run offline.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -41,8 +42,8 @@ def tiles_for_bbox(bbox: list[float], zmin: int, zmax: int):
     """Yield (z, x, y) for every tile covering bbox=[minlon,minlat,maxlon,maxlat]."""
     minlon, minlat, maxlon, maxlat = bbox
     for z in range(zmin, zmax + 1):
-        xa, ya = deg2num(minlat, minlon, z)      # bottom-left: x small, y large
-        xb, yb = deg2num(maxlat, maxlon, z)      # top-right:   x large, y small
+        xa, ya = deg2num(minlat, minlon, z)  # bottom-left: x small, y large
+        xb, yb = deg2num(maxlat, maxlon, z)  # top-right:   x large, y small
         for x in range(min(xa, xb), max(xa, xb) + 1):
             for y in range(min(ya, yb), max(ya, yb) + 1):
                 yield z, x, y
@@ -81,13 +82,12 @@ async def _fetch_retry(url: str, tries: int = 3) -> bytes | None:
             if attempt == tries - 1:
                 log.warning("tile fetch failed (%s): %s", url, exc)
                 return None
-            await asyncio.sleep(0.5 * (2 ** attempt))
+            await asyncio.sleep(0.5 * (2**attempt))
     return None
 
 
 def _tile_url(z: int, x: int, y: int) -> str:
-    return (settings.sat_tile_url
-            .replace("{z}", str(z)).replace("{x}", str(x)).replace("{y}", str(y)))
+    return settings.sat_tile_url.replace("{z}", str(z)).replace("{x}", str(x)).replace("{y}", str(y))
 
 
 # ---- MBTiles ----------------------------------------------------------------
@@ -143,9 +143,11 @@ async def reverse_geocode(lat: float, lon: float) -> str | None:
 async def fetch_centreline(bbox: list[float]) -> dict | None:
     """Waterway centreline as GeoJSON via Overpass (§3.5). Online only; None on failure."""
     minlon, minlat, maxlon, maxlat = bbox
-    ql = (f'[out:json][timeout:25];'
-          f'(way["waterway"~"canal|river|stream|ditch|drain"]'
-          f'({minlat},{minlon},{maxlat},{maxlon}););out geom;')
+    ql = (
+        f"[out:json][timeout:25];"
+        f'(way["waterway"~"canal|river|stream|ditch|drain"]'
+        f"({minlat},{minlon},{maxlat},{maxlon}););out geom;"
+    )
     url = f"{settings.overpass_url}?{urllib.parse.urlencode({'data': ql})}"
     raw = await _fetch_retry(url, tries=1)
     if not raw:
@@ -158,16 +160,18 @@ async def fetch_centreline(bbox: list[float]) -> dict | None:
     for el in data.get("elements", []):
         geom = el.get("geometry")
         if el.get("type") == "way" and geom:
-            feats.append({"type": "Feature",
-                          "properties": {"waterway": el.get("tags", {}).get("waterway")},
-                          "geometry": {"type": "LineString",
-                                       "coordinates": [[p["lon"], p["lat"]] for p in geom]}})
+            feats.append(
+                {
+                    "type": "Feature",
+                    "properties": {"waterway": el.get("tags", {}).get("waterway")},
+                    "geometry": {"type": "LineString", "coordinates": [[p["lon"], p["lat"]] for p in geom]},
+                }
+            )
     return {"type": "FeatureCollection", "features": feats} if feats else None
 
 
 # ---- the download job -------------------------------------------------------
-async def download_area(name: str, bbox: list[float], zmin: int, zmax: int, progress,
-                        refresh: bool = False) -> dict:
+async def download_area(name: str, bbox: list[float], zmin: int, zmax: int, progress, refresh: bool = False) -> dict:
     """Fetch the imagery pyramid → areas/<name>.mbtiles, streaming progress via the
     async progress(dict) callback. Enforces the tile cap and rate limit (§3.2).
 
@@ -194,12 +198,10 @@ async def download_area(name: str, bbox: list[float], zmin: int, zmax: int, prog
     have: set[tuple[int, int, int]] = set()
     if not refresh:
         try:
-            have = {(z, x, r) for z, x, r in
-                    con.execute("SELECT zoom_level, tile_column, tile_row FROM tiles")}
+            have = {(z, x, r) for z, x, r in con.execute("SELECT zoom_level, tile_column, tile_row FROM tiles")}
         except Exception as exc:  # noqa: BLE001 — a resume that cannot read is a full fetch
             log.warning("could not read the existing tiles for %s (%s); fetching all", name, exc)
-    await progress({"name": name, "state": "starting", "total": total, "est_mb": est["mb"],
-                    "already": len(have)})
+    await progress({"name": name, "state": "starting", "total": total, "est_mb": est["mb"], "already": len(have)})
 
     delay = 1.0 / max(0.5, settings.sat_rate_per_s)
     ok = skipped = 0
@@ -215,16 +217,17 @@ async def download_area(name: str, bbox: list[float], zmin: int, zmax: int, prog
             tms_y = (1 << z) - 1 - y
             if (z, x, tms_y) in have:
                 skipped += 1
-                ok += 1                  # it IS on the card; that is what ok counts
-                continue                 # no request, and no rate-limit sleep either
+                ok += 1  # it IS on the card; that is what ok counts
+                continue  # no request, and no rate-limit sleep either
             data = await _fetch_retry(_tile_url(z, x, y))
             if data:
                 con.execute("INSERT OR REPLACE INTO tiles VALUES (?,?,?,?)", (z, x, tms_y, data))
-                con.commit()             # this tile is now survivable
+                con.commit()  # this tile is now survivable
                 ok += 1
             if i % 25 == 0:
-                await progress({"name": name, "state": "running", "done": i + 1, "total": total,
-                                "ok": ok, "skipped": skipped})
+                await progress(
+                    {"name": name, "state": "running", "done": i + 1, "total": total, "ok": ok, "skipped": skipped}
+                )
             await asyncio.sleep(delay)
     finally:
         # Whatever happened — a dropped hotspot, a cancel, a cap — what arrived is on
@@ -240,17 +243,30 @@ async def download_area(name: str, bbox: list[float], zmin: int, zmax: int, prog
         (settings.areas_dir / f"{name}.geojson").write_text(json.dumps(centre))
 
     size = path.stat().st_size
-    for k, v in {"name": name, "format": "jpg", "type": "baselayer",
-                 "minzoom": str(zmin), "maxzoom": str(zmax),
-                 "bounds": ",".join(str(b) for b in bbox),
-                 "attribution": settings.sat_attribution}.items():
+    for k, v in {
+        "name": name,
+        "format": "jpg",
+        "type": "baselayer",
+        "minzoom": str(zmin),
+        "maxzoom": str(zmax),
+        "bounds": ",".join(str(b) for b in bbox),
+        "attribution": settings.sat_attribution,
+    }.items():
         con.execute("INSERT INTO metadata VALUES (?,?)", (k, v))
     con.commit()
     con.close()
 
-    meta = {"bbox": bbox, "minzoom": zmin, "maxzoom": zmax, "format": "mbtiles",
-            "tiles_ok": ok, "tiles_total": total, "has_centreline": bool(centre),
-            "attribution": settings.sat_attribution, "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    meta = {
+        "bbox": bbox,
+        "minzoom": zmin,
+        "maxzoom": zmax,
+        "format": "mbtiles",
+        "tiles_ok": ok,
+        "tiles_total": total,
+        "has_centreline": bool(centre),
+        "attribution": settings.sat_attribution,
+        "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
     (settings.areas_dir / f"{name}.json").write_text(json.dumps(meta))
     await progress({"name": name, "state": "done", "size": size, "ok": ok, "total": total})
     return {"name": name, "size": size, **meta}

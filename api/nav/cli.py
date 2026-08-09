@@ -63,6 +63,7 @@ is resumable, so being interrupted costs the page that was in flight and nothing
 else. An area is an optimisation for what to DRAW, never a precondition for
 having the data.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -115,8 +116,7 @@ class _SampleWithTruth:
         return getattr(self._s, name)
 
 
-def _fly(sim: Simulator, origin: Origin, log: DiveLog, backend: str | None = None,
-         dt: float = 0.1):
+def _fly(sim: Simulator, origin: Origin, log: DiveLog, backend: str | None = None, dt: float = 0.1):
     """Run the simulator through an estimator, recording estimate AND truth.
 
     Shared by `sim` and by the §4e acceptance tests on purpose: a test that builds its
@@ -135,8 +135,7 @@ def _sim(args=None) -> int:
     # The JOURNAL is what `replay` reads back, and DiveLog only opens one when it is
     # given a directory. Without this the sim wrote a GeoJSON alone — conclusions, not
     # sensor readings — and the A/B harness had nothing to re-run (§4e).
-    log = DiveLog(dive_id, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), origin,
-                  directory=settings.dives_dir)
+    log = DiveLog(dive_id, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), origin, directory=settings.dives_dir)
     est = _fly(sim, origin, log, backend=getattr(args, "filter", None))
     tx, ty, _ = sim.truth()
     err = math.hypot(est.x - tx, est.y - ty)
@@ -148,10 +147,11 @@ def _sim(args=None) -> int:
     # The scripted simulator always has a depth today, so this is a guard and not a
     # fix, but a print that crashes only when a sensor fails is a print that crashes on
     # exactly the run worth looking at.
-    print(f"samples={log.count}  path={sim.path_len:.0f}m  "
-          f"final depth={_depth_cell(est.depth)}")
-    print(f"truth=({tx:.1f},{ty:.1f})  {label}=({est.x:.1f},{est.y:.1f})  "
-          f"err={err:.1f}m ({100*err/max(1,sim.path_len):.1f}%)")
+    print(f"samples={log.count}  path={sim.path_len:.0f}m  " f"final depth={_depth_cell(est.depth)}")
+    print(
+        f"truth=({tx:.1f},{ty:.1f})  {label}=({est.x:.1f},{est.y:.1f})  "
+        f"err={err:.1f}m ({100*err/max(1,sim.path_len):.1f}%)"
+    )
     print(f"dive written: {path}")
     print(f"journal     : {jsonl}")
     print(f"score it    : python -m nav.cli replay {jsonl} --filter both")
@@ -167,7 +167,7 @@ def _sim(args=None) -> int:
 # beaten it on a track it did not produce, and not before. Taste does not get a vote,
 # which is why the default backend is still the old one.
 
-RAW_HEADING_KEY = "raw_heading_deg"     # the COMPASS's heading, not the estimator's
+RAW_HEADING_KEY = "raw_heading_deg"  # the COMPASS's heading, not the estimator's
 
 # THE MEASURED CHANNELS, AND WHAT A HOLE IN EACH ONE COSTS THIS REPLAY.
 #
@@ -180,23 +180,36 @@ RAW_HEADING_KEY = "raw_heading_deg"     # the COMPASS's heading, not the estimat
 # Each entry is (SensorSample attribute, journal column(s) it is read from, the name an
 # operator calls the part, what its absence does to the numbers printed below).
 SAMPLE_CHANNELS: tuple[tuple[str, tuple[str, ...], str, str], ...] = (
-    ("heading_deg", (RAW_HEADING_KEY, "heading_deg"), "compass",
-     "the track is HELD across those samples — with no bearing there is nothing to "
-     "advance along, so distance flown there is missing from BOTH backends"),
-    ("mag_cal", ("mag_cal",), "mag status",
-     "the heading filter cannot tell whether the compass was worth trusting, so its "
-     "trust gate is running blind on those samples"),
-    ("gyro_z_dps", ("gyro_z_dps",), "gyro",
-     "the heading filter has nothing to coast on when it distrusts the compass"),
-    ("accel_fwd_ms2", ("accel_fwd_ms2",), "accelerometer",
-     "the speed KF runs without its predict step there"),
-    ("speed_ms_measured", ("speed_ms_measured",), "paddlewheel",
-     "speed comes from the LUT alone and the snag detector has nothing to see with"),
-    ("depth_m", ("depth_m",), "depth",
-     "depth is blank across those samples; the track itself is unaffected (§2.4: depth "
-     "is measured, never integrated)"),
-    ("pressure_psi", ("psi",), "pressure",
-     "the depth column across those samples has no provenance beside it"),
+    (
+        "heading_deg",
+        (RAW_HEADING_KEY, "heading_deg"),
+        "compass",
+        "the track is HELD across those samples — with no bearing there is nothing to "
+        "advance along, so distance flown there is missing from BOTH backends",
+    ),
+    (
+        "mag_cal",
+        ("mag_cal",),
+        "mag status",
+        "the heading filter cannot tell whether the compass was worth trusting, so its "
+        "trust gate is running blind on those samples",
+    ),
+    ("gyro_z_dps", ("gyro_z_dps",), "gyro", "the heading filter has nothing to coast on when it distrusts the compass"),
+    ("accel_fwd_ms2", ("accel_fwd_ms2",), "accelerometer", "the speed KF runs without its predict step there"),
+    (
+        "speed_ms_measured",
+        ("speed_ms_measured",),
+        "paddlewheel",
+        "speed comes from the LUT alone and the snag detector has nothing to see with",
+    ),
+    (
+        "depth_m",
+        ("depth_m",),
+        "depth",
+        "depth is blank across those samples; the track itself is unaffected (§2.4: depth "
+        "is measured, never integrated)",
+    ),
+    ("pressure_psi", ("psi",), "pressure", "the depth column across those samples has no provenance beside it"),
 )
 
 
@@ -209,13 +222,14 @@ class ChannelGap:
     dive is never "did anything fault" — it is "when did the MS5837 drop off the bus,
     and was it back before the sub was". A count alone cannot answer that.
     """
+
     key: str
     label: str
     consequence: str
     n_null: int
     n_total: int
     first_null_t: float | None
-    absent: bool          # the journal has no such column at all — an older log
+    absent: bool  # the journal has no such column at all — an older log
 
     @property
     def pct(self) -> float:
@@ -247,10 +261,17 @@ def _channel_gaps(rows: list[dict], samples: list[SensorSample]) -> list[Channel
         nulls = [s.t for s in samples if getattr(s, attr, None) is None]
         if not nulls:
             continue
-        gaps.append(ChannelGap(
-            key=attr, label=label, consequence=consequence,
-            n_null=len(nulls), n_total=len(samples), first_null_t=nulls[0],
-            absent=not any(any(k in r for k in row_keys) for r in rows)))
+        gaps.append(
+            ChannelGap(
+                key=attr,
+                label=label,
+                consequence=consequence,
+                n_null=len(nulls),
+                n_total=len(samples),
+                first_null_t=nulls[0],
+                absent=not any(any(k in r for k in row_keys) for r in rows),
+            )
+        )
     # Worst first: the operator reading this wants the channel that cost the most.
     gaps.sort(key=lambda g: -g.n_null)
     return gaps
@@ -259,6 +280,7 @@ def _channel_gaps(rows: list[dict], samples: list[SensorSample]) -> list[Channel
 @dataclass
 class ReplayLog:
     """A dive journal, reconstructed into the inputs an estimator eats."""
+
     path: Path
     header: dict
     origin: Origin
@@ -283,6 +305,7 @@ class ReplayLog:
 @dataclass
 class ReplayRun:
     """What one estimator did with those inputs."""
+
     backend: str
     states: list[NavState] = field(default_factory=list)
 
@@ -306,12 +329,14 @@ def resolve_log(path: Path) -> tuple[Path, str | None]:
         return path, None
     sibling = path.with_suffix(".jsonl")
     if sibling.exists():
-        return sibling, (f"{path.name} is the derived GeoJSON (conclusions, no throttle) — "
-                         f"replaying {sibling.name} instead")
+        return sibling, (
+            f"{path.name} is the derived GeoJSON (conclusions, no throttle) — " f"replaying {sibling.name} instead"
+        )
     raise FileNotFoundError(
         f"{path.name} is a GeoJSON: it stores where the estimator thought it was, not what "
         f"the sensors said, so nothing can be re-run from it. The journal "
-        f"({sibling.name}) is the replayable record and it is not next to it.")
+        f"({sibling.name}) is the replayable record and it is not next to it."
+    )
 
 
 def _sample_from_row(row: dict) -> SensorSample:
@@ -387,7 +412,7 @@ def _brief(exc: Exception, limit: int = 180) -> str:
         # front of it — otherwise the phrase goes and the link it introduced stays.
         text = head + " " + tail.lstrip().partition(" ")[2]
     text = " ".join(text.split())
-    return text if len(text) <= limit else text[:limit - 1] + "…"
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def load_replay_log(path: Path) -> ReplayLog:
@@ -410,7 +435,7 @@ def load_replay_log(path: Path) -> ReplayLog:
     if origin_d:
         try:
             origin = Origin(**origin_d)
-        except Exception as exc:      # noqa: BLE001 — a bad header must not kill the replay
+        except Exception as exc:  # noqa: BLE001 — a bad header must not kill the replay
             # A HEADER MUST NOT BE ABLE TO STOP A DIVE BEING SCORED. The origin is
             # metadata here: it converts local metres to lat/lon for display and feeds
             # nothing the A/B is decided on — DeadReckoner seeds self.heading from
@@ -428,31 +453,42 @@ def load_replay_log(path: Path) -> ReplayLog:
                 # so a null heading0 costs the reader the heading0 and not the launch
                 # point — throwing away a good fix because the metadata beside it was
                 # unreadable is its own small act of invention.
-                origin = Origin(lat=float(origin_d["lat"]), lon=float(origin_d["lon"]),
-                                accuracy=float(origin_d.get("accuracy") or 0.0))
-                notes.append(f"the journal header's origin was only partly readable "
-                             f"({why}) — the launch lat/lon were kept and the rest "
-                             f"defaulted. heading0 is dive metadata, overwritten by the "
-                             f"first sample, so nothing scored below depends on it")
+                origin = Origin(
+                    lat=float(origin_d["lat"]),
+                    lon=float(origin_d["lon"]),
+                    accuracy=float(origin_d.get("accuracy") or 0.0),
+                )
+                notes.append(
+                    f"the journal header's origin was only partly readable "
+                    f"({why}) — the launch lat/lon were kept and the rest "
+                    f"defaulted. heading0 is dive metadata, overwritten by the "
+                    f"first sample, so nothing scored below depends on it"
+                )
             except Exception:  # noqa: BLE001 — not even a launch point in there
-                notes.append(f"the journal header's origin could not be read ({why}) — "
-                             f"replayed from (0,0). Every number below is in local metres "
-                             f"and is unaffected; only the lat/lon are meaningless")
+                notes.append(
+                    f"the journal header's origin could not be read ({why}) — "
+                    f"replayed from (0,0). Every number below is in local metres "
+                    f"and is unaffected; only the lat/lon are meaningless"
+                )
     if origin is None:
         origin = Origin(lat=0.0, lon=0.0, accuracy=0.0)
         if not origin_d:
-            notes.append("no origin in the journal header — replayed from (0,0); "
-                         "local metres are unaffected, the lat/lon are meaningless")
+            notes.append(
+                "no origin in the journal header — replayed from (0,0); "
+                "local metres are unaffected, the lat/lon are meaningless"
+            )
 
     lut_id = (header or {}).get("speed_lut_id", "default")
     lut = DEFAULT_LUT
     if lut_id and lut_id != "default":
         try:
             lut = SpeedLUT.load(settings.speed_lut_dir / f"{lut_id}.json")
-        except Exception as exc:      # noqa: BLE001 — a missing LUT must not stop the replay
-            notes.append(f"speed LUT {lut_id!r} could not be loaded ({_brief(exc)}) — "
-                         f"replayed on the default LUT, so absolute distances will differ "
-                         f"from the original dive")
+        except Exception as exc:  # noqa: BLE001 — a missing LUT must not stop the replay
+            notes.append(
+                f"speed LUT {lut_id!r} could not be loaded ({_brief(exc)}) — "
+                f"replayed on the default LUT, so absolute distances will differ "
+                f"from the original dive"
+            )
 
     out = ReplayLog(path=path, header=header or {}, origin=origin, lut=lut, notes=notes)
     skipped = 0
@@ -470,17 +506,22 @@ def load_replay_log(path: Path) -> ReplayLog:
         out.logged.append((row.get("x", 0.0), row.get("y", 0.0)))
 
     if skipped:
-        notes.append(f"{skipped} of {len(rows)} rows carry no throttle and were skipped — "
-                     f"that log predates control-channel logging")
+        notes.append(
+            f"{skipped} of {len(rows)} rows carry no throttle and were skipped — "
+            f"that log predates control-channel logging"
+        )
     if out.samples and not any(RAW_HEADING_KEY in r for r in rows):
         filtered_recording = any(str(r.get("speed_src", "")).startswith("kf-") for r in rows)
         notes.append(
             "no raw compass column: heading_deg here is what the ESTIMATOR concluded"
-            + (". This dive was recorded under NAV_FILTER=filtered, so the replay is "
-               "re-filtering an already-filtered heading and the comparison below is "
-               "NOT a valid A/B." if filtered_recording else
-               " (recorded under 'dr', where that equals the compass — so this replay is "
-               "still sound)."))
+            + (
+                ". This dive was recorded under NAV_FILTER=filtered, so the replay is "
+                "re-filtering an already-filtered heading and the comparison below is "
+                "NOT a valid A/B."
+                if filtered_recording
+                else " (recorded under 'dr', where that equals the compass — so this replay is " "still sound)."
+            )
+        )
     # The journal header records the origin and the LUT but not the flow vector, so a
     # dive flown with a current entered replays without it. Both backends get the same
     # (zero) current, so the A/B is still fair; the absolute track is not.
@@ -505,8 +546,7 @@ def replay(log: ReplayLog, backend: str) -> ReplayRun:
     return run
 
 
-def _errors(xy: list[tuple[float, float]],
-            ref: list[tuple[float, float] | None]) -> list[float]:
+def _errors(xy: list[tuple[float, float]], ref: list[tuple[float, float] | None]) -> list[float]:
     """Per-sample distance between an estimate and a reference track.
 
     Samples with no reference are dropped rather than scored as zero error: a log where
@@ -592,7 +632,8 @@ def _fmt_snags(snags: list[tuple[float, float]]) -> str:
     if not snags:
         return "none"
     return "  ".join(f"t={a:.0f}s for {b - a:.1f}s" for a, b in snags[:4]) + (
-        f"  (+{len(snags) - 4} more)" if len(snags) > 4 else "")
+        f"  (+{len(snags) - 4} more)" if len(snags) > 4 else ""
+    )
 
 
 def _depth_cell(depth: float | None) -> str:
@@ -617,13 +658,17 @@ def _print_run(sc: dict) -> None:
     print(f"\n--- {sc['backend']} ---")
     print(f"  final          ({x:.1f}, {y:.1f}) m   depth {_depth_cell(sc['final_depth'])}")
     if sc["truth_final"] is not None:
-        print(f"  vs truth       final {sc['truth_final']:.2f} m   mean {sc['truth_mean']:.2f} m"
-              f"   worst {sc['truth_worst']:.2f} m")
+        print(
+            f"  vs truth       final {sc['truth_final']:.2f} m   mean {sc['truth_mean']:.2f} m"
+            f"   worst {sc['truth_worst']:.2f} m"
+        )
         line = "   ".join(f"t={t:.0f}s {e:.1f}m" for t, e in _timeline(sc["truth_series"]))
         print(f"  divergence     {line}")
     if sc["logged_final"] is not None:
-        print(f"  vs logged      final {sc['logged_final']:.2f} m   mean {sc['logged_mean']:.2f} m"
-              f"    (the track the vehicle flew at the time)")
+        print(
+            f"  vs logged      final {sc['logged_final']:.2f} m   mean {sc['logged_mean']:.2f} m"
+            f"    (the track the vehicle flew at the time)"
+        )
     print(f"  gyro-only      {sc['gyro_only_pct']:.1f}% of samples")
     print("  speed source   " + "   ".join(f"{k} {v:.1f}%" for k, v in sc["src_pct"].items()))
     print(f"  snag           {_fmt_snags(sc['snags'])}")
@@ -638,6 +683,7 @@ def _print_side_by_side(a: dict, b: dict) -> None:
 
         def cell(v):
             return "n/a" if v is None else f"{fmt.format(v)}{gap}{unit}"
+
         print(f"  {label:<26}{cell(va):>12}{cell(vb):>12}")
 
     if a["truth_final"] is not None:
@@ -661,8 +707,10 @@ def _print_side_by_side(a: dict, b: dict) -> None:
     d_final = a["truth_final"] - b["truth_final"]
     d_mean = a["truth_mean"] - b["truth_mean"]
     winner = b["backend"] if d_mean > 0 else a["backend"]
-    print(f"  VERDICT: {winner} is closer to truth — mean track error by "
-          f"{abs(d_mean):.2f} m, final position by {abs(d_final):.2f} m")
+    print(
+        f"  VERDICT: {winner} is closer to truth — mean track error by "
+        f"{abs(d_mean):.2f} m, final position by {abs(d_final):.2f} m"
+    )
 
 
 def _replay(args) -> int:
@@ -672,8 +720,7 @@ def _replay(args) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if len(log.samples) < 2:
-        print(f"error: {log.path.name} has {len(log.samples)} replayable samples — nothing to score",
-              file=sys.stderr)
+        print(f"error: {log.path.name} has {len(log.samples)} replayable samples — nothing to score", file=sys.stderr)
         # The notes say WHY (usually: the rows predate control-channel logging). An
         # error that does not carry its own explanation sends someone to read the file
         # by hand to find out what a tool already knew.
@@ -698,8 +745,7 @@ def _replay(args) -> int:
     if log.gaps:
         print("gaps     : channels this journal could not supply")
         for g in log.gaps:
-            print(f"  {g.label:<13} null in {g.n_null} of {g.n_total} samples "
-                  f"({g.pct:.0f}%) — {g.when()}")
+            print(f"  {g.label:<13} null in {g.n_null} of {g.n_total} samples " f"({g.pct:.0f}%) — {g.when()}")
             print(f"  {'':<13} {g.consequence}")
     else:
         print("gaps     : none — every measured channel answered on every sample")
@@ -775,16 +821,20 @@ def _reachable(url: str, timeout: float = 4.0) -> tuple[bool, str]:
         # Daemon, so it cannot hold the interpreter open on the way out. A wedged
         # resolver is exactly the case this exists for and it must not become a
         # command that never returns.
-        return False, (f"{host}:{port} did not answer within {timeout:.0f}s and the "
-                       f"lookup is still outstanding — the usual reading is a tether "
-                       f"with no route off it and no DNS server to ask")
+        return False, (
+            f"{host}:{port} did not answer within {timeout:.0f}s and the "
+            f"lookup is still outstanding — the usual reading is a tether "
+            f"with no route off it and no DNS server to ask"
+        )
     if box.get("ok"):
         return True, f"{host}:{port} answered"
     exc = box.get("err")
     if isinstance(exc, socket.gaierror):
-        return False, (f"{host} does not resolve ({exc}) — there is no name service on "
-                       f"this network, which is the NORMAL state of the isolated "
-                       f"segment and not a fault")
+        return False, (
+            f"{host} does not resolve ({exc}) — there is no name service on "
+            f"this network, which is the NORMAL state of the isolated "
+            f"segment and not a fault"
+        )
     return False, f"{host}:{port} unreachable ({exc})"
 
 
@@ -792,6 +842,7 @@ def _crt_files(name: str) -> dict[str, int]:
     """The CRT layer files on disk for one area, by name and size. The fetch's
     before/after is two of these, so what gets printed is what is on the card."""
     from . import crt
+
     out: dict[str, int] = {}
     d = crt.area_dir(name)
     if not d.is_dir():
@@ -847,18 +898,23 @@ def _print_national_status(crt) -> int:
         print("that draws an absent layer as an empty one.")
     for r in card["layers"]:
         mark = "ok  " if r.get("intact") else "BAD "
-        print(f"  {mark}{r.get('layer_key'):<34} {(r.get('features') or 0):>7,} feat "
-              f"{(r.get('bytes_on_disk') or 0):>13,} B  fetched {r.get('fetched')}")
+        print(
+            f"  {mark}{r.get('layer_key'):<34} {(r.get('features') or 0):>7,} feat "
+            f"{(r.get('bytes_on_disk') or 0):>13,} B  fetched {r.get('fetched')}"
+        )
         if not r.get("intact"):
             print(f"      {'':<34} {(r.get('currency') or {}).get('why', '')}")
     for p in card["partial"]:
-        print(f"  ...  {p['layer_key']:<34} {(p.get('features') or 0):>7,} feat  "
-              f"PART-DOWNLOADED — the next run continues from there")
+        print(
+            f"  ...  {p['layer_key']:<34} {(p.get('features') or 0):>7,} feat  "
+            f"PART-DOWNLOADED — the next run continues from there"
+        )
     for s in card["skipped"]:
-        print(f"  --   {s.get('layer_key'):<34} skipped ({s.get('skipped')}): "
-              f"{s.get('why')}")
-    print(f"\ntotal    : {len(card['layers'])} layer(s), {card['features']:,} feature(s), "
-          f"{card['bytes'] / 1e6:.0f} MB")
+        print(f"  --   {s.get('layer_key'):<34} skipped ({s.get('skipped')}): " f"{s.get('why')}")
+    print(
+        f"\ntotal    : {len(card['layers'])} layer(s), {card['features']:,} feature(s), "
+        f"{card['bytes'] / 1e6:.0f} MB"
+    )
     print(f"verdict  : {'FETCH NEEDED — ' if stale else 'complete — '}{why}")
     print(f"serve it : GET /api/crt   and   GET /api/crt/<layer>")
     return 1 if stale else 0
@@ -883,8 +939,7 @@ def _crt_national(args, crt) -> int:
         return _print_national_status(crt)
 
     online, net_why = _reachable(settings.crt_hub_search_url)
-    print(f"internet : "
-          f"{('available — ' + net_why) if online else ('UNAVAILABLE — ' + net_why)}")
+    print(f"internet : " f"{('available — ' + net_why) if online else ('UNAVAILABLE — ' + net_why)}")
     if not online:
         print("\nnothing was fetched. What is on this handheld is unchanged, and an")
         print("ABSENT layer is not an empty one — nothing above claims any water is")
@@ -894,31 +949,35 @@ def _crt_national(args, crt) -> int:
     before = _national_files(crt)
 
     async def say(msg: dict) -> None:
-        print("  " + " ".join(f"{k}={v}" for k, v in msg.items() if k != "scope"),
-              flush=True)
+        print("  " + " ".join(f"{k}={v}" for k, v in msg.items() if k != "scope"), flush=True)
 
     print("\nfetching (sequential and rate-limited — this is somebody's free quota):")
     t0 = time.monotonic()
     try:
         res = asyncio.run(crt.download_national(progress=say, refresh=bool(args.refresh)))
     except KeyboardInterrupt:
-        print("\nstopped. Every layer that finished is on this handheld and the one that",
-              file=sys.stderr)
+        print("\nstopped. Every layer that finished is on this handheld and the one that", file=sys.stderr)
         print("was in flight continues from where it stopped next time.", file=sys.stderr)
         return _print_national_status(crt)
     except Exception as exc:  # noqa: BLE001 — documented not to raise; believe the disk
-        print(f"\nerror: the fetch raised ({_brief(exc)}). Whatever landed before it "
-              f"stopped is listed below.", file=sys.stderr)
+        print(
+            f"\nerror: the fetch raised ({_brief(exc)}). Whatever landed before it " f"stopped is listed below.",
+            file=sys.stderr,
+        )
         res = {"ok": False, "error": _brief(exc)}
 
     after = _national_files(crt)
-    print(f"\nwhat is on this handheld now (read off the disk, not off the downloader's "
-          f"report), {time.monotonic() - t0:.0f}s:")
+    print(
+        f"\nwhat is on this handheld now (read off the disk, not off the downloader's "
+        f"report), {time.monotonic() - t0:.0f}s:"
+    )
     _print_crt_diff(before, after)
     if res.get("ok"):
-        print(f"\nlayers   : {res.get('written')} downloaded, "
-              f"{res.get('already_current')} already current, "
-              f"{res.get('features'):,} features, {(res.get('bytes') or 0) / 1e6:.0f} MB")
+        print(
+            f"\nlayers   : {res.get('written')} downloaded, "
+            f"{res.get('already_current')} already current, "
+            f"{res.get('features'):,} features, {(res.get('bytes') or 0) / 1e6:.0f} MB"
+        )
     else:
         print(f"\nfailed   : {res.get('error')}", file=sys.stderr)
     for w in res.get("warnings") or []:
@@ -941,9 +1000,11 @@ def _crt_fetch(args) -> int:
     """
     try:
         from . import crt
-    except ImportError as exc:      # noqa: F841 — reported, not raised
-        print(f"error: api/nav/crt.py is not in this build ({exc}) — nothing else in "
-              f"the repo can fetch CRT layers", file=sys.stderr)
+    except ImportError as exc:  # noqa: F841 — reported, not raised
+        print(
+            f"error: api/nav/crt.py is not in this build ({exc}) — nothing else in " f"the repo can fetch CRT layers",
+            file=sys.stderr,
+        )
         return 2
 
     if args.status:
@@ -952,16 +1013,16 @@ def _crt_fetch(args) -> int:
         return _print_national_status(crt)
     if args.list:
         online, why = _reachable(settings.crt_hub_search_url)
-        print(f"internet : "
-              f"{('available — ' + why) if online else ('UNAVAILABLE — ' + why)}")
+        print(f"internet : " f"{('available — ' + why) if online else ('UNAVAILABLE — ' + why)}")
         if not online:
-            print("\nthe layer catalogue lives on the Trust's servers and cannot be "
-                  "listed from here. What is already downloaded is a different "
-                  "question: crt-fetch --status answers it off the disk.",
-                  file=sys.stderr)
+            print(
+                "\nthe layer catalogue lives on the Trust's servers and cannot be "
+                "listed from here. What is already downloaded is a different "
+                "question: crt-fetch --status answers it off the disk.",
+                file=sys.stderr,
+            )
             return 2
-        print("\nlayers the Trust currently publishes (key, layer id, national count, "
-              "licence class):")
+        print("\nlayers the Trust currently publishes (key, layer id, national count, " "licence class):")
         return asyncio.run(crt._main(["--list"]))
     if args.national or not args.area:
         return _crt_national(args, crt)
@@ -982,10 +1043,13 @@ def _crt_fetch(args) -> int:
 
     name = crt.safe_area_name(args.area or "")
     if not name:
-        print(f"error: {args.area!r} is not a usable area name — it has to be plain "
-              f"letters, digits, spaces, dot, dash or underscore, because it becomes a "
-              f"directory name, and it may not be {settings.crt_national_name!r}, which "
-              f"is where the whole network lives.", file=sys.stderr)
+        print(
+            f"error: {args.area!r} is not a usable area name — it has to be plain "
+            f"letters, digits, spaces, dot, dash or underscore, because it becomes a "
+            f"directory name, and it may not be {settings.crt_national_name!r}, which "
+            f"is where the whole network lives.",
+            file=sys.stderr,
+        )
         return 2
 
     if args.bbox:
@@ -1004,40 +1068,45 @@ def _crt_fetch(args) -> int:
     print(f"area     : {name}")
     print(f"store    : {crt.area_dir(name)}")
     if bbox:
-        print(f"bbox     : {bbox[0]:.4f},{bbox[1]:.4f} .. {bbox[2]:.4f},{bbox[3]:.4f}  "
-              f"({bbox_note})")
+        print(f"bbox     : {bbox[0]:.4f},{bbox[1]:.4f} .. {bbox[2]:.4f},{bbox[3]:.4f}  " f"({bbox_note})")
     else:
-        print(f"bbox     : MISSING — {bbox_note} does not exist or carries no bbox. "
-              f"Hazards belong to an area, so download the area first or pass --bbox.")
+        print(
+            f"bbox     : MISSING — {bbox_note} does not exist or carries no bbox. "
+            f"Hazards belong to an area, so download the area first or pass --bbox."
+        )
 
     before = _crt_files(name)
     if not online or not bbox:
         print("\nnothing was fetched. What is on this card is unchanged:")
         _print_crt_diff(before, before)
         print("\nAn ABSENT layer is not an empty one. Nothing above claims this water is")
-        print(f"clear — it says nobody has downloaded what is in it. "
-              f"GET /api/areas/{name}/crt says the same thing to the console.")
+        print(
+            f"clear — it says nobody has downloaded what is in it. "
+            f"GET /api/areas/{name}/crt says the same thing to the console."
+        )
         return 2
 
     async def say(msg: dict) -> None:
-        print("  " + " ".join(f"{k}={v}" for k, v in msg.items() if k != "bbox"),
-              flush=True)
+        print("  " + " ".join(f"{k}={v}" for k, v in msg.items() if k != "bbox"), flush=True)
 
     print("\nfetching (sequential and rate-limited — this is somebody's free quota):")
     try:
         res = asyncio.run(crt.download_hazards(name, bbox, progress=say))
     except Exception as exc:  # noqa: BLE001 — documented not to raise; believe the disk
-        print(f"\nerror: the fetch raised ({_brief(exc)}). Whatever landed before it "
-              f"stopped is listed below.", file=sys.stderr)
+        print(
+            f"\nerror: the fetch raised ({_brief(exc)}). Whatever landed before it " f"stopped is listed below.",
+            file=sys.stderr,
+        )
         res = {"ok": False, "error": _brief(exc)}
 
     after = _crt_files(name)
-    print("\nwhat is on the card now (read off the disk, not off the downloader's "
-          "report):")
+    print("\nwhat is on the card now (read off the disk, not off the downloader's " "report):")
     _print_crt_diff(before, after)
     if res.get("ok"):
-        print(f"\nlayers   : {res.get('layers')} written, {res.get('features')} features, "
-              f"{res.get('skipped')} skipped")
+        print(
+            f"\nlayers   : {res.get('layers')} written, {res.get('features')} features, "
+            f"{res.get('skipped')} skipped"
+        )
     else:
         print(f"\nfailed   : {res.get('error')}", file=sys.stderr)
     for w in res.get("warnings") or []:
@@ -1113,9 +1182,12 @@ def _area_fetch(args) -> int:
     try:
         from . import service as svcmod
     except Exception as exc:  # noqa: BLE001 — reported, never raised
-        print(f"error: api/nav/service.py could not be imported ({_brief(exc)}). This "
-              f"command drives the same job the API serves, so it needs the API's "
-              f"dependencies (fastapi, pydantic) installed.", file=sys.stderr)
+        print(
+            f"error: api/nav/service.py could not be imported ({_brief(exc)}). This "
+            f"command drives the same job the API serves, so it needs the API's "
+            f"dependencies (fastapi, pydantic) installed.",
+            file=sys.stderr,
+        )
         return 2
 
     print("area-fetch: everything one offline area needs, downloaded in one go")
@@ -1133,8 +1205,7 @@ def _area_fetch(args) -> int:
         try:
             lat, lon = (float(v) for v in args.at.replace(" ", "").split(","))
         except ValueError:
-            print("error: --at must be LAT,LON in degrees, e.g. --at 52.4785,-1.9105",
-                  file=sys.stderr)
+            print("error: --at must be LAT,LON in degrees, e.g. --at 52.4785,-1.9105", file=sys.stderr)
             return 2
     name = args.name or args.area
     meta = svcmod._area_meta(areamod.slugify(name)) if name else None
@@ -1145,12 +1216,13 @@ def _area_fetch(args) -> int:
         # terminal and one filled at the water are the same card. `plan` is printed
         # first because a refusal here is a sentence to read, not a traceback.
         if lat is None:
-            print("error: name an area that exists, or give a launch point with "
-                  "--at LAT,LON. An offline area needs to know where it is.",
-                  file=sys.stderr)
+            print(
+                "error: name an area that exists, or give a launch point with "
+                "--at LAT,LON. An offline area needs to know where it is.",
+                file=sys.stderr,
+            )
             return 2
-        plan = areamod.plan_area(lat, lon, radius_m=args.radius_m, name=name,
-                                 detail=args.detail or "standard")
+        plan = areamod.plan_area(lat, lon, radius_m=args.radius_m, name=name, detail=args.detail or "standard")
         print(f"plan     : {plan['action']} — {plan['why']}")
         if plan["action"] == "refuse":
             print("\nnothing was created and nothing was fetched.", file=sys.stderr)
@@ -1159,8 +1231,7 @@ def _area_fetch(args) -> int:
             print("\n--dry-run: no area was created and nothing was fetched.")
             return 0
         try:
-            plan = areamod.create_area(lat, lon, radius_m=args.radius_m, name=name,
-                                       detail=args.detail or "standard")
+            plan = areamod.create_area(lat, lon, radius_m=args.radius_m, name=name, detail=args.detail or "standard")
         except ValueError as exc:
             print(f"\nerror: {exc}", file=sys.stderr)
             return 2
@@ -1170,8 +1241,10 @@ def _area_fetch(args) -> int:
         name = meta["name"]
     bbox = meta.get("bbox")
     if not bbox:
-        print(f"error: area {name!r} has no usable bbox, so there is no box to fetch. "
-              f"Nothing here will guess one.", file=sys.stderr)
+        print(
+            f"error: area {name!r} has no usable bbox, so there is no box to fetch. " f"Nothing here will guess one.",
+            file=sys.stderr,
+        )
         return 2
     if args.detail is None:
         # Not asked for, so keep whatever pyramid this area already has — mixing
@@ -1188,13 +1261,17 @@ def _area_fetch(args) -> int:
     print(f"bbox     : {bbox[0]:.5f},{bbox[1]:.5f} .. {bbox[2]:.5f},{bbox[3]:.5f}")
     o = meta.get("origin") or {}
     if o.get("lat") is not None:
-        print(f"launch   : {o['lat']:.5f},{o['lon']:.5f}  "
-              f"(a {float(o.get('radius_m') or settings.area_radius_m):.0f} m box around it)")
+        print(
+            f"launch   : {o['lat']:.5f},{o['lon']:.5f}  "
+            f"(a {float(o.get('radius_m') or settings.area_radius_m):.0f} m box around it)"
+        )
     # THE CAP, BEFORE ANYTHING IS DOWNLOADED. An operator who taps a launch point on
     # a metered hotspot is entitled to see the number first, not to discover it in
     # their data bill.
-    print(f"size     : {cap['tiles']} tiles ~{cap['mb']} MB at z{zmin}-{zmax}  "
-          f"(cap {cap['tile_cap']} tiles ~{cap['mb_cap']} MB)")
+    print(
+        f"size     : {cap['tiles']} tiles ~{cap['mb']} MB at z{zmin}-{zmax}  "
+        f"(cap {cap['tile_cap']} tiles ~{cap['mb_cap']} MB)"
+    )
     if not cap["within"]:
         print(f"\nrefused: {cap['title']}", file=sys.stderr)
         return 2
@@ -1209,13 +1286,12 @@ def _area_fetch(args) -> int:
         print("\n--dry-run: nothing was fetched and nothing was written.")
         return 0
 
-    return asyncio.run(_area_fetch_run(svcmod, name, bbox, zmin, zmax,
-                                       (meta.get("origin") or {}).get("radius_m"),
-                                       bool(args.refresh)))
+    return asyncio.run(
+        _area_fetch_run(svcmod, name, bbox, zmin, zmax, (meta.get("origin") or {}).get("radius_m"), bool(args.refresh))
+    )
 
 
-async def _area_fetch_run(svcmod, name: str, bbox, zmin: int, zmax: int,
-                          radius, refresh: bool) -> int:
+async def _area_fetch_run(svcmod, name: str, bbox, zmin: int, zmax: int, radius, refresh: bool) -> int:
     # ONE PROBE PER COMMAND. internet_available() is the service's gate and it is
     # nothing but a call to _reachable above; resolving it here and handing the
     # answer to the job means the operator sees the verdict in the preflight, where
@@ -1253,12 +1329,12 @@ async def _area_fetch_run(svcmod, name: str, bbox, zmin: int, zmax: int,
             last[key] = (st, now)
             n, of = s.get("done"), s.get("total")
             count = f"{n}/{of}" if (n is not None and of) else ""
-            print(f"  {key:<11} {st:<8} {count:>10}  {s.get('detail', '')}".rstrip(),
-                  flush=True)
+            print(f"  {key:<11} {st:<8} {count:>10}  {s.get('detail', '')}".rstrip(), flush=True)
 
     print("\nfetching (sequential and rate-limited — these are free public services):")
-    job = svcmod.AreaFetch(name, bbox, zmin, zmax, refresh=refresh, radius_m=radius,
-                           reason="python -m nav.cli area-fetch", on_change=say)
+    job = svcmod.AreaFetch(
+        name, bbox, zmin, zmax, refresh=refresh, radius_m=radius, reason="python -m nav.cli area-fetch", on_change=say
+    )
     try:
         snap = await job.run(net=(ok, why))
     except KeyboardInterrupt:
@@ -1323,8 +1399,7 @@ def _print_bank_libs(svcmod, libs: dict) -> None:
     """
     for mod, pkg in svcmod._BANK_LIBS:
         here = svcmod._has_module(mod)
-        print(f"  {pkg:<10} {'present' if here else 'MISSING':<8} "
-              f"(import {mod})")
+        print(f"  {pkg:<10} {'present' if here else 'MISSING':<8} " f"(import {mod})")
     print(f"  install  : {libs['install']}")
     print(f"  where    : {svcmod._BANK_WHERE}.")
 
@@ -1361,8 +1436,10 @@ def _print_bank_status(svcmod, names: list[str]) -> int:
         b = svcmod._bank_block(name)
         n = _bank_tile_count(b)
         held = (b.get("lidar") or {}).get("state")
-        print(f"  {name:<20} paint {b['status']:<12} terrain {str(held or '?'):<10} "
-              f"{(str(n) + ' tile(s)') if n is not None else ''}")
+        print(
+            f"  {name:<20} paint {b['status']:<12} terrain {str(held or '?'):<10} "
+            f"{(str(n) + ' tile(s)') if n is not None else ''}"
+        )
         print(f"  {'':<20} {b['title']}")
         if not svcmod._source_held("bank", b["status"]):
             # UNAVAILABLE IS NOT COUNTED AS A FAILURE OF THE CARD, for the reason
@@ -1379,9 +1456,12 @@ def _bank_fetch(args) -> int:
     try:
         from . import service as svcmod
     except Exception as exc:  # noqa: BLE001 — reported, never raised
-        print(f"error: api/nav/service.py could not be imported ({_brief(exc)}). This "
-              f"command drives the same job the API serves, so it needs the API's "
-              f"dependencies (fastapi, pydantic) installed.", file=sys.stderr)
+        print(
+            f"error: api/nav/service.py could not be imported ({_brief(exc)}). This "
+            f"command drives the same job the API serves, so it needs the API's "
+            f"dependencies (fastapi, pydantic) installed.",
+            file=sys.stderr,
+        )
         return 2
 
     libs = svcmod._bank_libraries()
@@ -1422,23 +1502,27 @@ def _bank_fetch(args) -> int:
     print("  fences, gates, live railway, reed beds or who owns the field.\n")
 
     if not args.area:
-        print("error: name an area that exists on this card. The bank layer is built "
-              "for an area's box, and this command will not invent one — "
-              "`area-fetch --at LAT,LON` is what creates an area.", file=sys.stderr)
-        print(f"  known : {', '.join(known) if known else '(no areas on this card)'}",
-              file=sys.stderr)
+        print(
+            "error: name an area that exists on this card. The bank layer is built "
+            "for an area's box, and this command will not invent one — "
+            "`area-fetch --at LAT,LON` is what creates an area.",
+            file=sys.stderr,
+        )
+        print(f"  known : {', '.join(known) if known else '(no areas on this card)'}", file=sys.stderr)
         return 2
     name = areamod.slugify(args.area)
     meta = svcmod._area_meta(name)
     if meta is None:
         print(f"error: there is no area called {name!r} on this card.", file=sys.stderr)
-        print(f"  known : {', '.join(known) if known else '(no areas on this card)'}",
-              file=sys.stderr)
+        print(f"  known : {', '.join(known) if known else '(no areas on this card)'}", file=sys.stderr)
         return 2
     bbox = meta.get("bbox")
     if not bbox:
-        print(f"error: area {name!r} has no usable bbox, so there is no box to fetch "
-              f"terrain for. Nothing here will guess one.", file=sys.stderr)
+        print(
+            f"error: area {name!r} has no usable bbox, so there is no box to fetch "
+            f"terrain for. Nothing here will guess one.",
+            file=sys.stderr,
+        )
         return 2
     # THE PYRAMID'S ZOOMS ARE THE BANK LAYER'S OWN AND ARE NOT PASSED FROM HERE.
     # nav/bank.py paints from z13 so the layer is still legible when the map is pulled
@@ -1465,8 +1549,7 @@ def _bank_fetch(args) -> int:
         # rather than as a failed download. Nothing about the network is even asked: a
         # missing library is not a thing a connection fixes, and printing "internet:
         # available" above this would be an invitation to try again.
-        print(f"\nnothing was built and nothing was downloaded. "
-              f"{before.get('remedy', '')}", file=sys.stderr)
+        print(f"\nnothing was built and nothing was downloaded. " f"{before.get('remedy', '')}", file=sys.stderr)
         return 2
     if args.dry_run:
         print("\n--dry-run: nothing was fetched and nothing was written.")
@@ -1481,12 +1564,10 @@ def _bank_fetch(args) -> int:
         print("\nnothing was built, because there was nothing to build, and nothing was")
         print("asked of the network to find that out. Pass --refresh to build it again.")
         return 0
-    return asyncio.run(_bank_fetch_run(svcmod, name, bbox, zmin, zmax,
-                                       bool(args.refresh)))
+    return asyncio.run(_bank_fetch_run(svcmod, name, bbox, zmin, zmax, bool(args.refresh)))
 
 
-async def _bank_fetch_run(svcmod, name: str, bbox, zmin: int, zmax: int,
-                          refresh: bool) -> int:
+async def _bank_fetch_run(svcmod, name: str, bbox, zmin: int, zmax: int, refresh: bool) -> int:
     # ONE PROBE PER COMMAND, exactly as area-fetch does it: the verdict is printed in
     # the preflight where the rest of this file puts it, and the job is not sent off to
     # ask a second time.
@@ -1508,14 +1589,14 @@ async def _bank_fetch_run(svcmod, name: str, bbox, zmin: int, zmax: int,
         # because the two halves of this job are minutes apart and "downloading
         # terrain" left on screen while the classifier grinds is the stuck-progress lie
         # in miniature.
-        if (st, detail) == (last["status"], last["detail"]) and \
-                (st != "running" or (now - last["at"]) < _PROGRESS_GAP_S):
+        if (st, detail) == (last["status"], last["detail"]) and (
+            st != "running" or (now - last["at"]) < _PROGRESS_GAP_S
+        ):
             return
         last.update(status=st, detail=detail, at=now)
         n, of = s.get("done"), s.get("total")
         count = f"{n}/{of}" if (n is not None and of) else (str(n) if n else "")
-        print(f"  {'bank':<11} {str(st):<12} {count:>10}  {detail or ''}".rstrip(),
-              flush=True)
+        print(f"  {'bank':<11} {str(st):<12} {count:>10}  {detail or ''}".rstrip(), flush=True)
 
     print("\nbuilding. The terrain is a handful of large requests against a public")
     print("service; the decode, the pound detection, the classification and the tile")
@@ -1527,13 +1608,13 @@ async def _bank_fetch_run(svcmod, name: str, bbox, zmin: int, zmax: int,
     # AND IT DELIBERATELY DOES NOT RECORD THE AREA'S `state`. That word describes the
     # whole area's fetch, and a single-source run that wrote "downloading" into it
     # would leave the console showing a download that nothing is running.
-    job = svcmod.AreaFetch(name, bbox, zmin, zmax, refresh=refresh,
-                           reason="python -m nav.cli bank-fetch", on_change=say)
+    job = svcmod.AreaFetch(
+        name, bbox, zmin, zmax, refresh=refresh, reason="python -m nav.cli bank-fetch", on_change=say
+    )
     try:
         await job._bank()
     except KeyboardInterrupt:
-        print("\nstopped. Whatever was written is on the card; the rest is not.",
-              file=sys.stderr)
+        print("\nstopped. Whatever was written is on the card; the rest is not.", file=sys.stderr)
     src = job.sources["bank"]
     if src.get("why"):
         print(f"  {'':<11} {src['why']}")
@@ -1595,10 +1676,10 @@ def _area_for_journal(journal: Path) -> tuple[list[str], list[str], str]:
 def _soundings(args) -> int:
     """Dive journal -> the area's sounding store. Offline: no internet is involved."""
     try:
-        from .soundings import main as _snd, store_path_for
+        from .soundings import main as _snd
+        from .soundings import store_path_for
     except ImportError as exc:
-        print(f"error: api/nav/soundings.py is not in this build ({exc})",
-              file=sys.stderr)
+        print(f"error: api/nav/soundings.py is not in this build ({exc})", file=sys.stderr)
         return 2
 
     if args.selftest:
@@ -1612,19 +1693,22 @@ def _soundings(args) -> int:
         inside, names, how = _area_for_journal(Path(args.dive))
         if len(inside) == 1:
             area = inside[0]
-            print(f"area     : {area}  (chosen: this dive's {how} is inside its bbox "
-                  f"and no other area's)")
+            print(f"area     : {area}  (chosen: this dive's {how} is inside its bbox " f"and no other area's)")
         elif not inside:
-            print(f"error: no area on this card has a bounding box containing this "
-                  f"dive's {how}. Pass --area <name> or --centreline <file>.",
-                  file=sys.stderr)
-            print(f"  known : {', '.join(names) if names else '(no areas on this card)'}",
-                  file=sys.stderr)
+            print(
+                f"error: no area on this card has a bounding box containing this "
+                f"dive's {how}. Pass --area <name> or --centreline <file>.",
+                file=sys.stderr,
+            )
+            print(f"  known : {', '.join(names) if names else '(no areas on this card)'}", file=sys.stderr)
             return 2
         else:
-            print(f"error: this dive's {how} falls inside {len(inside)} areas "
-                  f"({', '.join(inside)}), so the store cannot be chosen for you. "
-                  f"Pass --area.", file=sys.stderr)
+            print(
+                f"error: this dive's {how} falls inside {len(inside)} areas "
+                f"({', '.join(inside)}), so the store cannot be chosen for you. "
+                f"Pass --area.",
+                file=sys.stderr,
+            )
             return 2
 
     argv2 = [args.dive]
@@ -1656,7 +1740,8 @@ def _speed_cal(args) -> int:
         thr_s, t_s = pair.split(":")
         thr, secs = float(thr_s), float(t_s)
         if secs <= 0:
-            print(f"bad time in {pair!r}", file=sys.stderr); return 2
+            print(f"bad time in {pair!r}", file=sys.stderr)
+            return 2
         pts.append((thr, round(args.distance / secs, 3)))
     lut = SpeedLUT(pts, args.id)
     p = lut.save(settings.speed_lut_dir)
@@ -1669,6 +1754,7 @@ def _speed_cal(args) -> int:
 
 def _mag_cal(args) -> int:
     import httpx
+
     print("Magnetometer calibration (§5.6) — do this IN THE WATER, away from the dock.")
     print("Move the sub through slow figure-8s and full rotations until cal = 3.\n")
     good = 0
@@ -1677,27 +1763,33 @@ def _mag_cal(args) -> int:
             try:
                 st = httpx.get(args.base.rstrip("/") + "/api/nav/state", timeout=2).json()
             except Exception:  # noqa: BLE001
-                print("  (waiting for nav state…)"); time.sleep(1); continue
+                print("  (waiting for nav state…)")
+                time.sleep(1)
+                continue
             cal = st.get("mag_cal", "?")
             bar = {0: "UNRELIABLE", 1: "LOW", 2: "OK", 3: "GOOD"}.get(cal, "?")
             print(f"  mag_cal = {cal} ({bar})   heading={st.get('heading_deg','?')}")
             good = good + 1 if cal == 3 else 0
             if good >= 5:
-                print("\nCalibration GOOD and stable. Done."); return 0
+                print("\nCalibration GOOD and stable. Done.")
+                return 0
             time.sleep(1)
     except KeyboardInterrupt:
         pass
-    print("stopped."); return 1
+    print("stopped.")
+    return 1
 
 
 def _get(args, path) -> int:
     import httpx
+
     try:
         r = httpx.get(args.base.rstrip("/") + path, timeout=10)
         print(json.dumps(r.json(), indent=2))
         return 0
     except Exception as exc:  # noqa: BLE001
-        print(f"error: {exc}", file=sys.stderr); return 2
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 def main(argv=None) -> int:
@@ -1718,12 +1810,20 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="nav.cli")
     sub = p.add_subparsers(dest="cmd", required=True)
     sm = sub.add_parser("sim", help="fly the scripted path and write a replayable dive")
-    sm.add_argument("--filter", choices=["dr", "filtered"], default=None,
-                    help="estimator backend for this run (default: NAV_FILTER)")
+    sm.add_argument(
+        "--filter",
+        choices=["dr", "filtered"],
+        default=None,
+        help="estimator backend for this run (default: NAV_FILTER)",
+    )
     rp = sub.add_parser("replay", help="re-run a dive log through the estimators and score them")
     rp.add_argument("log", help="path to a dive .jsonl journal")
-    rp.add_argument("--filter", choices=["dr", "filtered", "both"], default="both",
-                    help="which estimator(s) to run (default: both, side by side)")
+    rp.add_argument(
+        "--filter",
+        choices=["dr", "filtered", "both"],
+        default="both",
+        help="which estimator(s) to run (default: both, side by side)",
+    )
     cal = sub.add_parser("calibrate", help="derive model constants from a real dive log")
     cal.add_argument("dive", nargs="?")
     cal.add_argument("--ground-truth", type=float)
@@ -1732,117 +1832,167 @@ def main(argv=None) -> int:
     sc.add_argument("--distance", type=float, required=True, help="measured run length in metres")
     sc.add_argument("--pairs", required=True, help="throttle:seconds,throttle:seconds,…")
     sc.add_argument("--id", default="default")
-    af = sub.add_parser("area-fetch",
-                        help="create/complete one offline area — centreline, CRT "
-                             "hazard layers, launch-bank overlay and satellite imagery "
-                             "(BOOTSTRAP-time: needs internet)")
-    af.add_argument("area", nargs="?",
-                    help="an area name; with --at, an existing area covering that "
-                         "point is used instead of making a second one")
-    af.add_argument("--at", default=None,
-                    help="LAT,LON launch point — creates the area around it if none "
-                         "covers it yet")
+    af = sub.add_parser(
+        "area-fetch",
+        help="create/complete one offline area — centreline, CRT "
+        "hazard layers, launch-bank overlay and satellite imagery "
+        "(BOOTSTRAP-time: needs internet)",
+    )
+    af.add_argument(
+        "area",
+        nargs="?",
+        help="an area name; with --at, an existing area covering that " "point is used instead of making a second one",
+    )
+    af.add_argument(
+        "--at", default=None, help="LAT,LON launch point — creates the area around it if none " "covers it yet"
+    )
     af.add_argument("--name", default=None, help="name the area explicitly")
     # The default is NOT quoted here. It lives in nav/service.py beside the job that
     # uses it, and a number copied into a help string is a number that will one day
     # advertise a cap the code no longer applies. The command prints the effective
     # radius, the tile count and the ceiling in its preflight, before it fetches.
-    af.add_argument("--radius-m", type=float, default=None,
-                    help="half-width of the box around --at, in metres. The preflight "
-                         "prints the value used, the resulting tile count and the cap")
-    af.add_argument("--detail", choices=["standard", "high"], default=None,
-                    help="'high' adds one zoom level, which roughly quadruples the "
-                         "tiles. Omitted means: keep the detail this area already has")
-    af.add_argument("--refresh", action="store_true",
-                    help="re-download sources that are already on the card "
-                         "(by default they are skipped and nothing is re-requested)")
-    af.add_argument("--dry-run", action="store_true",
-                    help="report what is on the card and fetch nothing")
-    cf = sub.add_parser("crt-fetch",
-                        help="download the Canal & River Trust's layers — the WHOLE "
-                             "national network by default (BOOTSTRAP-time: needs "
-                             "internet, ~140 MB, resumable)")
-    cf.add_argument("area", nargs="?",
-                    help="OPTIONAL. Name an area and a clipped COPY of each layer is "
-                         "cut for its box as well — an optimisation for drawing. With "
-                         "no name, the whole national network is fetched, which is the "
-                         "data itself and needs no area to exist")
-    cf.add_argument("--national", action="store_true",
-                    help="the whole network, explicitly (this is also the default when "
-                         "no area is named)")
-    cf.add_argument("--status", action="store_true",
-                    help="what is on this handheld already, read off the disk. Touches "
-                         "no network, so it answers at the water's edge")
-    cf.add_argument("--refresh", action="store_true",
-                    help="download layers again even when they are already here and "
-                         "current (by default nothing current is re-requested)")
-    cf.add_argument("--bbox", default=None,
-                    help="W,S,E,N in degrees, overriding the area's own bbox")
-    cf.add_argument("--list", action="store_true",
-                    help="list the layers the Trust publishes and fetch nothing")
-    bf = sub.add_parser("bank-fetch",
-                        help="build one area's LAUNCH-BANK overlay from an Environment "
-                             "Agency LIDAR ground model (BOOTSTRAP-time: needs internet, "
-                             "and needs numpy, scipy and Pillow — handheld work, never "
-                             "the vehicle's)")
-    bf.add_argument("area", nargs="?",
-                    help="an area that already exists on this card. This command does "
-                         "not create areas — `area-fetch --at LAT,LON` does")
-    bf.add_argument("--status", action="store_true",
-                    help="what terrain and what paint each area has, read off the disk. "
-                         "Touches no network, so it answers at the water's edge")
-    bf.add_argument("--libs", action="store_true",
-                    help="report whether numpy, scipy and Pillow are installed for THIS "
-                         "python, and print the command that installs them. Exits "
-                         "non-zero when any is missing, so a pre-trip check can gate on it")
-    bf.add_argument("--refresh", action="store_true",
-                    help="build it again even though it is already on the card (by "
-                         "default a built overlay is left alone and no terrain is "
-                         "re-downloaded)")
-    bf.add_argument("--dry-run", action="store_true",
-                    help="report what is on the card and build nothing")
-    so = sub.add_parser("soundings",
-                        help="extract bed soundings from a dive journal into an "
-                             "area's sounding store (offline)")
+    af.add_argument(
+        "--radius-m",
+        type=float,
+        default=None,
+        help="half-width of the box around --at, in metres. The preflight "
+        "prints the value used, the resulting tile count and the cap",
+    )
+    af.add_argument(
+        "--detail",
+        choices=["standard", "high"],
+        default=None,
+        help="'high' adds one zoom level, which roughly quadruples the "
+        "tiles. Omitted means: keep the detail this area already has",
+    )
+    af.add_argument(
+        "--refresh",
+        action="store_true",
+        help="re-download sources that are already on the card "
+        "(by default they are skipped and nothing is re-requested)",
+    )
+    af.add_argument("--dry-run", action="store_true", help="report what is on the card and fetch nothing")
+    cf = sub.add_parser(
+        "crt-fetch",
+        help="download the Canal & River Trust's layers — the WHOLE "
+        "national network by default (BOOTSTRAP-time: needs "
+        "internet, ~140 MB, resumable)",
+    )
+    cf.add_argument(
+        "area",
+        nargs="?",
+        help="OPTIONAL. Name an area and a clipped COPY of each layer is "
+        "cut for its box as well — an optimisation for drawing. With "
+        "no name, the whole national network is fetched, which is the "
+        "data itself and needs no area to exist",
+    )
+    cf.add_argument(
+        "--national",
+        action="store_true",
+        help="the whole network, explicitly (this is also the default when " "no area is named)",
+    )
+    cf.add_argument(
+        "--status",
+        action="store_true",
+        help="what is on this handheld already, read off the disk. Touches "
+        "no network, so it answers at the water's edge",
+    )
+    cf.add_argument(
+        "--refresh",
+        action="store_true",
+        help="download layers again even when they are already here and "
+        "current (by default nothing current is re-requested)",
+    )
+    cf.add_argument("--bbox", default=None, help="W,S,E,N in degrees, overriding the area's own bbox")
+    cf.add_argument("--list", action="store_true", help="list the layers the Trust publishes and fetch nothing")
+    bf = sub.add_parser(
+        "bank-fetch",
+        help="build one area's LAUNCH-BANK overlay from an Environment "
+        "Agency LIDAR ground model (BOOTSTRAP-time: needs internet, "
+        "and needs numpy, scipy and Pillow — handheld work, never "
+        "the vehicle's)",
+    )
+    bf.add_argument(
+        "area",
+        nargs="?",
+        help="an area that already exists on this card. This command does "
+        "not create areas — `area-fetch --at LAT,LON` does",
+    )
+    bf.add_argument(
+        "--status",
+        action="store_true",
+        help="what terrain and what paint each area has, read off the disk. "
+        "Touches no network, so it answers at the water's edge",
+    )
+    bf.add_argument(
+        "--libs",
+        action="store_true",
+        help="report whether numpy, scipy and Pillow are installed for THIS "
+        "python, and print the command that installs them. Exits "
+        "non-zero when any is missing, so a pre-trip check can gate on it",
+    )
+    bf.add_argument(
+        "--refresh",
+        action="store_true",
+        help="build it again even though it is already on the card (by "
+        "default a built overlay is left alone and no terrain is "
+        "re-downloaded)",
+    )
+    bf.add_argument("--dry-run", action="store_true", help="report what is on the card and build nothing")
+    so = sub.add_parser(
+        "soundings", help="extract bed soundings from a dive journal into an " "area's sounding store (offline)"
+    )
     so.add_argument("dive", nargs="?", help="path to a dive .jsonl journal")
-    so.add_argument("--area", default=None,
-                    help="which area's store and centreline (default: the area whose "
-                         "bbox contains the dive's launch point; refused if ambiguous)")
-    so.add_argument("--centreline", default=None,
-                    help="explicit centreline GeoJSON, overriding --area")
-    so.add_argument("--store", default=None,
-                    help="sounding store to accumulate into "
-                         "(default: data/soundings/<area>.json)")
-    so.add_argument("--cell-m", type=float, default=None,
-                    help="cell length along the channel axis, 5-10 m")
-    so.add_argument("--dry-run", action="store_true",
-                    help="report what would be stored and write nothing")
+    so.add_argument(
+        "--area",
+        default=None,
+        help="which area's store and centreline (default: the area whose "
+        "bbox contains the dive's launch point; refused if ambiguous)",
+    )
+    so.add_argument("--centreline", default=None, help="explicit centreline GeoJSON, overriding --area")
+    so.add_argument(
+        "--store", default=None, help="sounding store to accumulate into " "(default: data/soundings/<area>.json)"
+    )
+    so.add_argument("--cell-m", type=float, default=None, help="cell length along the channel axis, 5-10 m")
+    so.add_argument("--dry-run", action="store_true", help="report what would be stored and write nothing")
     so.add_argument("--json", action="store_true", help="machine-readable output")
-    so.add_argument("--selftest", action="store_true",
-                    help="check the sounding maths and its refusals")
+    so.add_argument("--selftest", action="store_true", help="check the sounding maths and its refusals")
     for name in ("mag-cal", "state", "readiness"):
         sp = sub.add_parser(name)
         sp.add_argument("--base", default="http://127.0.0.1:8000")
     args = p.parse_args(argv)
 
-    if args.cmd == "sim":        return _sim(args)
-    if args.cmd == "replay":     return _replay(args)
+    if args.cmd == "sim":
+        return _sim(args)
+    if args.cmd == "replay":
+        return _replay(args)
     if args.cmd == "calibrate":
         from .calibrate import main as _cal
+
         argv2 = []
-        if args.selftest: argv2.append("--selftest")
+        if args.selftest:
+            argv2.append("--selftest")
         else:
             argv2.append(args.dive or "")
-            if args.ground_truth is not None: argv2 += ["--ground-truth", str(args.ground_truth)]
+            if args.ground_truth is not None:
+                argv2 += ["--ground-truth", str(args.ground_truth)]
         return _cal(argv2)
-    if args.cmd == "speed-cal":  return _speed_cal(args)
-    if args.cmd == "area-fetch": return _area_fetch(args)
-    if args.cmd == "crt-fetch":  return _crt_fetch(args)
-    if args.cmd == "bank-fetch": return _bank_fetch(args)
-    if args.cmd == "soundings":  return _soundings(args)
-    if args.cmd == "mag-cal":    return _mag_cal(args)
-    if args.cmd == "state":      return _get(args, "/api/nav/state")
-    if args.cmd == "readiness":  return _get(args, "/api/readiness")
+    if args.cmd == "speed-cal":
+        return _speed_cal(args)
+    if args.cmd == "area-fetch":
+        return _area_fetch(args)
+    if args.cmd == "crt-fetch":
+        return _crt_fetch(args)
+    if args.cmd == "bank-fetch":
+        return _bank_fetch(args)
+    if args.cmd == "soundings":
+        return _soundings(args)
+    if args.cmd == "mag-cal":
+        return _mag_cal(args)
+    if args.cmd == "state":
+        return _get(args, "/api/nav/state")
+    if args.cmd == "readiness":
+        return _get(args, "/api/readiness")
     return 1
 
 

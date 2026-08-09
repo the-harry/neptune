@@ -4,6 +4,7 @@ Mirrors the spirit of the client's config.js: one file to tune. Every value can
 be overridden with an environment variable (see the `env=` names below), so the
 same code runs on a dev laptop and on the Pi without edits.
 """
+
 from __future__ import annotations
 
 import os

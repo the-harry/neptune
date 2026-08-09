@@ -61,6 +61,7 @@ special case is a cannot-tell that gets forgotten.
 stdlib unittest only, matching the rest of api/tests — see run.py for why there is no
 framework here.
 """
+
 from __future__ import annotations
 
 import ast
@@ -85,8 +86,8 @@ _API_DIR = Path(__file__).resolve().parents[1]
 
 # The two vocabularies, taken from the hardware layer rather than restated here — a
 # copy would let this suite go on testing a chip the vehicle has stopped naming.
-I2C_CHIPS = MockHardware.DEVICES            # _kill_sensor
-SUBSYSTEMS = MockHardware.SUBSYSTEMS        # the _stall_* hooks
+I2C_CHIPS = MockHardware.DEVICES  # _kill_sensor
+SUBSYSTEMS = MockHardware.SUBSYSTEMS  # the _stall_* hooks
 EVERYTHING = tuple(I2C_CHIPS) + tuple(SUBSYSTEMS)
 
 # Which hook stops which subsystem. Named here so Chain can sweep both vocabularies
@@ -141,13 +142,13 @@ def load_fill_nav_fields():
     for node in ast.parse(src).body:
         if isinstance(node, ast.FunctionDef) and node.name == "fill_nav_fields":
             ns: dict = {"cardinal": cardinal}
-            exec(compile(ast.Module(body=[node], type_ignores=[]),  # noqa: S102
-                         str(_API_DIR / "main.py"), "exec"), ns)
+            exec(compile(ast.Module(body=[node], type_ignores=[]), str(_API_DIR / "main.py"), "exec"), ns)  # noqa: S102
             return ns["fill_nav_fields"]
     raise AssertionError(
         "api/main.py no longer defines fill_nav_fields() — the place where navigation's "
         "answers are stitched into a telemetry frame has moved, and this suite must "
-        "follow it there rather than quietly stop checking the link that broke.")
+        "follow it there rather than quietly stop checking the link that broke."
+    )
 
 
 fill_nav_fields = load_fill_nav_fields()
@@ -173,7 +174,7 @@ _NULL_FIELDS = {
 _SAMPLE_FIELDS = {
     "ms5837": ("depth_m", "pressure_psi"),
     "bno085": ("heading_deg", "mag_cal"),
-    "ina219": (),                      # the pack is not a navigation input
+    "ina219": (),  # the pack is not a navigation input
 }
 
 # And at the NavState stage — what the map draws and what DiveLog writes to disk.
@@ -258,6 +259,7 @@ class Chain:
         time. The mock's clock is simulated, so three seconds of drift costs
         microseconds and no test ever sleeps — a fixture that waits on a wall clock is
         a flaky test with extra steps."""
+
         async def _run() -> None:
             for _ in range(max(1, round(seconds / dt))):
                 self.rov.update(dt)
@@ -265,6 +267,7 @@ class Chain:
                     await self.svc._tick(dt, 0, 1)
                 except Exception as exc:  # noqa: BLE001 — mirrors NavService._loop
                     self.tick_errors.append(f"{type(exc).__name__}: {exc}")
+
         asyncio.run(_run())
         return self
 
@@ -355,11 +358,14 @@ class ChainTestCase(unittest.TestCase):
         number that this field's cannot-tell has historically collapsed into."""
         lie = _PLAUSIBLE_LIE.get(field)
         if lie is not None and value is not None and value == lie[0]:
-            self.fail(f"{where}: {field}={value!r} — that is not a blank, it is a "
-                      f"reading, and it says {lie[1]}. The sensor behind it is not "
-                      f"answering.")
-        self.assertIsNone(value, f"{where}: {field}={value!r}, expected null "
-                                 f"(the sensor behind it is not answering)")
+            self.fail(
+                f"{where}: {field}={value!r} — that is not a blank, it is a "
+                f"reading, and it says {lie[1]}. The sensor behind it is not "
+                f"answering."
+            )
+        self.assertIsNone(
+            value, f"{where}: {field}={value!r}, expected null " f"(the sensor behind it is not answering)"
+        )
 
     def assertNoContradiction(self, wire: dict) -> None:
         """No frame may name a part as silent and still show that part's reading.
@@ -373,28 +379,34 @@ class ChainTestCase(unittest.TestCase):
         for part in faults:
             for field in _NULL_FIELDS.get(part, ()):
                 if wire.get(field) is not None:
-                    bad.append(f"{part} is reported as not answering, and {field}="
-                               f"{wire[field]!r} is on the same frame")
+                    bad.append(
+                        f"{part} is reported as not answering, and {field}=" f"{wire[field]!r} is on the same frame"
+                    )
         # The two cannot-tells that are not nulls, because their fields have no null
         # to spend. Checked here rather than left to the individual suites: a rule
         # with an exception nobody applies systematically is how leak_state got to be
         # the one reading on the vehicle with no liveness gate at all.
         if faults & {"leak-probes", "sensor-thread"}:
             if wire.get("leak_state") == "NORMAL":
-                bad.append("the leak probes are reported as not being sampled, and "
-                           "leak_state='NORMAL' is on the same frame — the strongest "
-                           "reassurance this vehicle gives, made from evidence nobody "
-                           "collected")
+                bad.append(
+                    "the leak probes are reported as not being sampled, and "
+                    "leak_state='NORMAL' is on the same frame — the strongest "
+                    "reassurance this vehicle gives, made from evidence nobody "
+                    "collected"
+                )
             if wire.get("leak") is False:
-                bad.append("the leak probes are reported as not being sampled, and the "
-                           "old single-bit alarm says leak=false, which an old client "
-                           "reads as a dry hull")
+                bad.append(
+                    "the leak probes are reported as not being sampled, and the "
+                    "old single-bit alarm says leak=false, which an old client "
+                    "reads as a dry hull"
+                )
         if "sensor-thread" in faults and wire.get("signal", -1) >= 0:
-            bad.append(f"the sensor thread is reported as stopped, and signal="
-                       f"{wire['signal']} bars is on the same frame — bars are a claim "
-                       f"that the tether is up, read from a sampler that is not running")
-        self.assertEqual(bad, [], "\n".join(
-            ["one frame contradicting itself in front of the operator:"] + bad))
+            bad.append(
+                f"the sensor thread is reported as stopped, and signal="
+                f"{wire['signal']} bars is on the same frame — bars are a claim "
+                f"that the tether is up, read from a sampler that is not running"
+            )
+        self.assertEqual(bad, [], "\n".join(["one frame contradicting itself in front of the operator:"] + bad))
 
     def assertNavSurvived(self, chain: Chain) -> None:
         """A dead part must reach the client as a null, not as a traceback.
@@ -404,10 +416,17 @@ class ChainTestCase(unittest.TestCase):
         per-signal honesty's clothes. The operator loses signals that are still being
         measured perfectly well by parts that are still answering.
         """
-        self.assertEqual(chain.tick_errors, [], "\n".join(
-            ["a sensor going silent took the navigation tick down with it; "
-             "cannot-tell has to be a VALUE that travels, not an exception:"]
-            + chain.tick_errors))
+        self.assertEqual(
+            chain.tick_errors,
+            [],
+            "\n".join(
+                [
+                    "a sensor going silent took the navigation tick down with it; "
+                    "cannot-tell has to be a VALUE that travels, not an exception:"
+                ]
+                + chain.tick_errors
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -463,9 +482,12 @@ class HarnessTest(ChainTestCase):
         c.kill("ms5837").fly(2.0)
         self.assertIsNone(c.hw.read_pressure())
         c.revive("ms5837")
-        self.assertGreater(c.hw.read_pressure(), first,
-                           "the sim must keep sinking while the sensor is dead, or "
-                           "nothing here proves the readout stopped following it")
+        self.assertGreater(
+            c.hw.read_pressure(),
+            first,
+            "the sim must keep sinking while the sensor is dead, or "
+            "nothing here proves the readout stopped following it",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -498,28 +520,43 @@ class EverySensorHealthyTest(ChainTestCase):
     def test_the_sensor_sample_is_complete(self):
         s = self.c.sample()
         self.assertIsNotNone(s)
-        for field in ("heading_deg", "depth_m", "pressure_psi", "mag_cal",
-                      "speed_ms_measured", "gyro_z_dps", "accel_fwd_ms2"):
-            self.assertIsNotNone(getattr(s, field),
-                                 f"{field} is null on a vehicle whose sensors all answer")
+        for field in (
+            "heading_deg",
+            "depth_m",
+            "pressure_psi",
+            "mag_cal",
+            "speed_ms_measured",
+            "gyro_z_dps",
+            "accel_fwd_ms2",
+        ):
+            self.assertIsNotNone(getattr(s, field), f"{field} is null on a vehicle whose sensors all answer")
 
     def test_the_nav_state_is_complete(self):
         ns = self.c.nav()
         self.assertIsNotNone(ns)
         for field in ("heading_deg", "depth_m", "mag_cal", "speed_ms", "speed_src"):
-            self.assertIsNotNone(getattr(ns, field),
-                                 f"{field} is null on a vehicle whose sensors all answer")
+            self.assertIsNotNone(getattr(ns, field), f"{field} is null on a vehicle whose sensors all answer")
 
     def test_the_frame_on_the_wire_is_complete(self):
         w = self.c.wire()
         # Only the readings a working sensor is behind. link_ms and the cpu_*/net_*
         # metrics are null here because this harness passes no Pi metrics and has no
         # client attached — absent inputs, not absent sensors.
-        for field in ("depth", "pressure", "heading", "heading_card", "mag_cal",
-                      "battery_v", "current_a", "leak_state", "ballast_level",
-                      "speed_ms", "speed_src", "signal"):
-            self.assertIsNotNone(w[field],
-                                 f"{field} is null on a wire frame from a healthy hull")
+        for field in (
+            "depth",
+            "pressure",
+            "heading",
+            "heading_card",
+            "mag_cal",
+            "battery_v",
+            "current_a",
+            "leak_state",
+            "ballast_level",
+            "speed_ms",
+            "speed_src",
+            "signal",
+        ):
+            self.assertIsNotNone(w[field], f"{field} is null on a wire frame from a healthy hull")
 
     def test_a_healthy_compass_produces_a_real_bearing_and_its_cardinal(self):
         w = self.c.wire()
@@ -545,9 +582,11 @@ class EverySensorHealthyTest(ChainTestCase):
 
     def test_the_track_advances(self):
         ns = self.c.nav()
-        self.assertGreater(abs(ns.x_m) + abs(ns.y_m), 0.0,
-                           "a driven, healthy vehicle whose map does not move is the "
-                           "opposite failure and just as wrong")
+        self.assertGreater(
+            abs(ns.x_m) + abs(ns.y_m),
+            0.0,
+            "a driven, healthy vehicle whose map does not move is the " "opposite failure and just as wrong",
+        )
 
     def test_navigation_reports_no_tick_faults(self):
         self.assertNavSurvived(self.c)
@@ -567,11 +606,14 @@ class DepthSensorTest(ChainTestCase):
     def setUp(self):
         self.c = Chain()
         self.c.hw.ballast_home()
-        self.c.ballast("fill").fly(2.0)     # get the sub off the surface first
+        self.c.ballast("fill").fly(2.0)  # get the sub off the surface first
         self.depth_when_it_died = self.c.raw_frame().depth
-        self.assertGreater(self.depth_when_it_died, 0.5,
-                           "the sub must be genuinely deep before the sensor dies, or "
-                           "a frozen reading and an honest one look the same")
+        self.assertGreater(
+            self.depth_when_it_died,
+            0.5,
+            "the sub must be genuinely deep before the sensor dies, or "
+            "a frozen reading and an honest one look the same",
+        )
         self.c.kill("ms5837").fly(2.0)
 
     def test_the_hardware_readback_is_silent(self):
@@ -674,18 +716,19 @@ class CompassTest(ChainTestCase):
         # badge and a "bno085 not answering" fault, all on one screen.
         tel = self.c.frame()
         self.assertCannotTell(tel.heading, "heading", "Telemetry after fill_nav_fields")
-        self.assertCannotTell(tel.heading_card, "heading_card",
-                              "Telemetry after fill_nav_fields")
+        self.assertCannotTell(tel.heading_card, "heading_card", "Telemetry after fill_nav_fields")
         self.assertCannotTell(tel.mag_cal, "mag_cal", "Telemetry after fill_nav_fields")
 
     def test_no_cardinal_letter_survives_a_blank_bearing(self):
         # A letter is exactly what an operator reads when the number is missing, so
         # 'N' beside a blank bearing IS the bearing as far as the console is concerned.
         w = self.c.wire()
-        self.assertIsNone(w["heading_card"],
-                          f"heading_card={w['heading_card']!r} beside heading="
-                          f"{w['heading']!r} — a cardinal cannot outlive the number "
-                          f"it restates")
+        self.assertIsNone(
+            w["heading_card"],
+            f"heading_card={w['heading_card']!r} beside heading="
+            f"{w['heading']!r} — a cardinal cannot outlive the number "
+            f"it restates",
+        )
 
     def test_the_wire_carries_null(self):
         w = self.c.wire()
@@ -705,17 +748,21 @@ class CompassTest(ChainTestCase):
         c = Chain().arm(throttle=1.0).fly(2.0)
         before = c.nav()
         self.assertIsNotNone(before)
-        self.assertGreater(abs(before.x_m) + abs(before.y_m), 0.0,
-                           "the healthy track must be moving, or this proves nothing")
+        self.assertGreater(
+            abs(before.x_m) + abs(before.y_m), 0.0, "the healthy track must be moving, or this proves nothing"
+        )
         c.kill("bno085").fly(3.0)
         after = c.nav()
         if after is not None:
             moved = ((after.x_m - before.x_m) ** 2 + (after.y_m - before.y_m) ** 2) ** 0.5
             self.assertAlmostEqual(
-                moved, 0.0, places=2,
+                moved,
+                0.0,
+                places=2,
                 msg=f"the track ran {moved:.2f} m after the compass died "
-                    f"({before.x_m},{before.y_m} -> {after.x_m},{after.y_m}). With no "
-                    f"bearing there is no direction to integrate along.")
+                f"({before.x_m},{before.y_m} -> {after.x_m},{after.y_m}). With no "
+                f"bearing there is no direction to integrate along.",
+            )
 
     def test_a_compass_that_answers_badly_is_not_a_compass_that_is_gone(self):
         # The two send an operator to do different things: one is "recalibrate the
@@ -760,12 +807,10 @@ class PackMonitorTest(ChainTestCase):
         self.assertIsNone(self.c.hw.read_current_a())
 
     def test_the_current_reaches_the_wire_as_null(self):
-        self.assertCannotTell(self.c.wire()["current_a"], "current_a",
-                              "the JSON on the wire")
+        self.assertCannotTell(self.c.wire()["current_a"], "current_a", "the JSON on the wire")
 
     def test_the_voltage_reaches_the_wire_as_null(self):
-        self.assertCannotTell(self.c.wire()["battery_v"], "battery_v",
-                              "the JSON on the wire")
+        self.assertCannotTell(self.c.wire()["battery_v"], "battery_v", "the JSON on the wire")
 
     def test_the_voltage_did_not_freeze_at_the_last_good_reading(self):
         self.assertNotEqual(self.c.frame().battery_v, self.volts_when_it_died)
@@ -803,8 +848,9 @@ class PaddleWheelTest(ChainTestCase):
 
     def setUp(self):
         self.c = Chain().arm(throttle=1.0).fly(2.0)
-        self.assertIsNotNone(self.c.sample().speed_ms_measured,
-                             "the wheel must be turning first, or the jam proves nothing")
+        self.assertIsNotNone(
+            self.c.sample().speed_ms_measured, "the wheel must be turning first, or the jam proves nothing"
+        )
         self.c.hw._jam_paddle(True)
         # Past paddle_stale_s: silence only stops being evidence after the window.
         self.c.fly(nav_settings.paddle_stale_s + 1.0)
@@ -812,9 +858,12 @@ class PaddleWheelTest(ChainTestCase):
     def test_the_hardware_flag_is_the_answer_not_the_magnitude(self):
         magnitude, fresh = self.c.hw.read_water_speed()
         self.assertFalse(fresh)
-        self.assertEqual(magnitude, 0.0,
-                         "0.0 rides along so a caller that ignores the flag does not "
-                         "get a confident number — but the flag is the answer")
+        self.assertEqual(
+            magnitude,
+            0.0,
+            "0.0 rides along so a caller that ignores the flag does not "
+            "get a confident number — but the flag is the answer",
+        )
 
     def test_the_sensor_sample_carries_no_measured_speed(self):
         # None, not 0.0. "The wheel is not turning" and "nothing measured the water"
@@ -824,9 +873,12 @@ class PaddleWheelTest(ChainTestCase):
     def test_the_estimate_does_not_dress_as_a_measurement(self):
         ns = self.c.nav()
         self.assertIsNotNone(ns)
-        self.assertNotEqual(ns.speed_src, "paddle",
-                            "the wheel measured nothing this tick; labelling the LUT's "
-                            "number 'paddle' is an estimate wearing a measurement's badge")
+        self.assertNotEqual(
+            ns.speed_src,
+            "paddle",
+            "the wheel measured nothing this tick; labelling the LUT's "
+            "number 'paddle' is an estimate wearing a measurement's badge",
+        )
         self.assertEqual(ns.speed_src, "lut")
 
     def test_the_wire_says_where_the_speed_came_from(self):
@@ -837,9 +889,11 @@ class PaddleWheelTest(ChainTestCase):
     def test_a_pinned_sub_is_reported_as_snagged_rather_than_moving(self):
         # High thrust, sustained, no measured speed: the sub is pinned on a shopping
         # trolley and the map is running away from it. The LUT alone cannot notice.
-        self.assertTrue(self.c.wire()["snagged"],
-                        "full throttle with a stalled wheel for seconds is the snag "
-                        "signal; without it the map marches on without the vehicle")
+        self.assertTrue(
+            self.c.wire()["snagged"],
+            "full throttle with a stalled wheel for seconds is the snag "
+            "signal; without it the map marches on without the vehicle",
+        )
 
     def test_a_jammed_wheel_is_not_reported_as_a_faulted_part(self):
         # It has no name to report and inventing one would send someone to unplug a
@@ -884,8 +938,8 @@ class LeakProbeTest(ChainTestCase):
         c.stall("leak-probes").fly(0.5)
         w = c.wire()
         self.assertNotEqual(
-            w["leak_state"], "NORMAL",
-            "the probes are not being sampled and the frame still says the hull is dry")
+            w["leak_state"], "NORMAL", "the probes are not being sampled and the frame still says the hull is dry"
+        )
         self.assertEqual(w["leak_state"], LEAK_UNKNOWN)
         self.assertNoContradiction(w)
 
@@ -931,8 +985,7 @@ class LeakProbeTest(ChainTestCase):
         # Whatever combination of probe states produces a fault, the frame it produces
         # must not also be making the positive claim. A probe established as unable to
         # report water cannot contribute to "there is no water".
-        for warn_boot, flood_boot, warn_wet, flood_wet in itertools.product(
-                (False, True), repeat=4):
+        for warn_boot, flood_boot, warn_wet, flood_wet in itertools.product((False, True), repeat=4):
             c = Chain()
             c.hw._set_probe_wet_at_boot(warn=warn_boot, flood=flood_boot)
             c.hw._set_probe_wet(warn=warn_wet, flood=flood_wet)
@@ -941,11 +994,13 @@ class LeakProbeTest(ChainTestCase):
                 continue
             with self.subTest(boot=(warn_boot, flood_boot), wet=(warn_wet, flood_wet)):
                 self.assertNotEqual(
-                    w["leak_state"], "NORMAL",
+                    w["leak_state"],
+                    "NORMAL",
                     f"leak_probe_fault={w['leak_probe_fault']!r} on the same frame as "
                     f"leak_state='NORMAL'. NORMAL is not an absence of information, it "
                     f"is the claim that the hull is dry, and the probe it rests on has "
-                    f"already been established as unable to make it.")
+                    f"already been established as unable to make it.",
+                )
 
     def test_the_probes_come_back(self):
         c = Chain().stall("leak-probes").fly(0.5)
@@ -980,9 +1035,12 @@ class SensorThreadTest(ChainTestCase):
 
     def test_the_bars_are_not_a_frozen_four(self):
         w = self.c.wire()
-        self.assertLess(w["signal"], 0,
-                        f"signal={w['signal']} bars off a sampler that has stopped — "
-                        f"bars are read as proof the vehicle is still talking")
+        self.assertLess(
+            w["signal"],
+            0,
+            f"signal={w['signal']} bars off a sampler that has stopped — "
+            f"bars are read as proof the vehicle is still talking",
+        )
 
     def test_the_hull_readout_goes_to_cannot_tell(self):
         self.assertEqual(self.c.wire()["leak_state"], LEAK_UNKNOWN)
@@ -1052,9 +1110,11 @@ class SensorFaultsTest(ChainTestCase):
         # naming a part that is not on the vehicle.
         self.assertEqual(set(I2C_CHIPS), {"bno085", "ina219", "ms5837"})
         self.assertEqual(set(SUBSYSTEMS), {"leak-probes", "sensor-thread"})
-        self.assertEqual(set(I2C_CHIPS) & set(SUBSYSTEMS), set(),
-                         "a name in both vocabularies would make 'is this a part or a "
-                         "loop?' unanswerable from the console")
+        self.assertEqual(
+            set(I2C_CHIPS) & set(SUBSYSTEMS),
+            set(),
+            "a name in both vocabularies would make 'is this a part or a " "loop?' unanswerable from the console",
+        )
         for name in EVERYTHING:
             self.assertEqual(name, name.strip().lower())
 
@@ -1081,10 +1141,13 @@ class RecoveryTest(ChainTestCase):
         after = c.frame().depth
         self.assertIsNotNone(after, "a reseated connector must un-blank the gauge")
         self.assertEqual(c.wire()["sensor_faults"], [])
-        self.assertGreater(after, before,
-                           "the sub went on sinking while the sensor was dead, so the "
-                           "reading that returns must be the water now, not the water "
-                           "it last managed to measure")
+        self.assertGreater(
+            after,
+            before,
+            "the sub went on sinking while the sensor was dead, so the "
+            "reading that returns must be the water now, not the water "
+            "it last managed to measure",
+        )
 
     def test_the_compass_comes_back_and_comes_back_current(self):
         c = Chain().arm(steer=1.0).fly(2.0)
@@ -1097,9 +1160,11 @@ class RecoveryTest(ChainTestCase):
         self.assertIsNotNone(tel.heading, "a compass that answers again must be read again")
         self.assertIsNotNone(tel.heading_card)
         self.assertIsNotNone(tel.mag_cal)
-        self.assertNotEqual(tel.heading, before,
-                            "the hull kept turning while the IMU was dead; the bearing "
-                            "that returns is the one it is on now")
+        self.assertNotEqual(
+            tel.heading,
+            before,
+            "the hull kept turning while the IMU was dead; the bearing " "that returns is the one it is on now",
+        )
         self.assertEqual(c.wire()["sensor_faults"], [])
 
     def test_the_pack_monitor_comes_back(self):
@@ -1120,9 +1185,11 @@ class RecoveryTest(ChainTestCase):
         moving = c.nav()
         self.assertIsNotNone(moving)
         if frozen is not None:
-            self.assertNotEqual((moving.x_m, moving.y_m), (frozen.x_m, frozen.y_m),
-                                "navigation must resume, not stay latched at the "
-                                "position it held when the compass died")
+            self.assertNotEqual(
+                (moving.x_m, moving.y_m),
+                (frozen.x_m, frozen.y_m),
+                "navigation must resume, not stay latched at the " "position it held when the compass died",
+            )
 
     def test_everything_comes_back_at_once(self):
         c = Chain().arm(throttle=1.0).fly(1.0)
@@ -1132,10 +1199,8 @@ class RecoveryTest(ChainTestCase):
         w = c.wire()
         self.assertEqual(w["sensor_faults"], [])
         self.assertNavSurvived(c)
-        for field in ("depth", "pressure", "heading", "heading_card", "mag_cal",
-                      "battery_v", "current_a"):
-            self.assertIsNotNone(w[field], f"{field} stayed blank after everything "
-                                           f"started answering again")
+        for field in ("depth", "pressure", "heading", "heading_card", "mag_cal", "battery_v", "current_a"):
+            self.assertIsNotNone(w[field], f"{field} stayed blank after everything " f"started answering again")
         self.assertEqual(w["leak_state"], "NORMAL")
         self.assertGreaterEqual(w["signal"], 0)
 
@@ -1164,16 +1229,14 @@ class BusFailureTest(ChainTestCase):
         if s is not None:
             for chip, fields in _SAMPLE_FIELDS.items():
                 for field in fields:
-                    self.assertCannotTell(getattr(s, field), field,
-                                          f"SensorSample ({chip} is dead)")
+                    self.assertCannotTell(getattr(s, field), field, f"SensorSample ({chip} is dead)")
 
     def test_the_nav_state_invents_nothing(self):
         ns = self.c.nav()
         if ns is not None:
             for chip, fields in _NAV_FIELDS.items():
                 for field in fields:
-                    self.assertCannotTell(getattr(ns, field), field,
-                                          f"NavState ({chip} is dead)")
+                    self.assertCannotTell(getattr(ns, field), field, f"NavState ({chip} is dead)")
 
     def test_all_three_chips_are_named(self):
         self.assertEqual(sorted(self.c.wire()["sensor_faults"]), sorted(I2C_CHIPS))

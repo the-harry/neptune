@@ -69,6 +69,7 @@ USAGE
     it; there is no threshold here and no --fail-under, because a number that gates a
     push is a number people learn to move rather than earn.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -358,6 +359,7 @@ def _coverage_lines(cov) -> list[str]:
     """
     try:
         import coverage
+
         buf = io.StringIO()
         # "-" means "write it to stdout"; stdout is this buffer for the duration.
         with contextlib.redirect_stdout(buf):
@@ -366,24 +368,32 @@ def _coverage_lines(cov) -> list[str]:
         files = data["files"]
         totals = data["totals"]
     except Exception as exc:  # noqa: BLE001 - a report that will not render is not a crash
-        return ["", f"cover  : measured, but the report would not render "
-                    f"({exc.__class__.__name__}: {exc}); no figures rather than wrong ones"]
+        return [
+            "",
+            f"cover  : measured, but the report would not render "
+            f"({exc.__class__.__name__}: {exc}); no figures rather than wrong ones",
+        ]
 
     def row(label, s):
         return _COV_ROW.format(
-            label, s["num_statements"], s["missing_lines"],
+            label,
+            s["num_statements"],
+            s["missing_lines"],
             _pct(s["covered_lines"], s["num_statements"]),
-            s["num_branches"], s["missing_branches"],
-            _pct(s["covered_branches"], s["num_branches"]))
+            s["num_branches"],
+            s["missing_branches"],
+            _pct(s["covered_branches"], s["num_branches"]),
+        )
 
-    out = ["", f"coverage of api/, api/tests/ excluded  "
-               f"(coverage {getattr(coverage, '__version__', '?')}, branch mode)",
-           _COV_ROW.format("file", "stmts", "miss", "line%", "branch", "brmiss", "branch%"),
-           _COV_RULE]
+    out = [
+        "",
+        f"coverage of api/, api/tests/ excluded  " f"(coverage {getattr(coverage, '__version__', '?')}, branch mode)",
+        _COV_ROW.format("file", "stmts", "miss", "line%", "branch", "brmiss", "branch%"),
+        _COV_RULE,
+    ]
     out += [row(_cov_name(k), files[k]["summary"]) for k in sorted(files, key=_cov_name)]
     out += [_COV_RULE, row("TOTAL", totals)]
-    out.append("  A file at 0% is a file this run never imported, not a file that is "
-               "missing.")
+    out.append("  A file at 0% is a file this run never imported, not a file that is " "missing.")
     return out
 
 
@@ -392,13 +402,16 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Run the Neptune api tests.")
     ap.add_argument("suites", nargs="*", help="substring(s) of suite names; default: all")
     ap.add_argument("--list", action="store_true", help="list the suites and exit")
-    ap.add_argument("-v", "--verbose", action="store_true",
-                    help="print every check, not just the failures")
-    ap.add_argument("--no-venv", action="store_true",
-                    help="run in this interpreter instead of hopping to the repo venv")
-    ap.add_argument("--coverage", action="store_true",
-                    help="also print which lines and branches of api/ this run executed "
-                         "(needs the dev-only coverage package; says so if it is absent)")
+    ap.add_argument("-v", "--verbose", action="store_true", help="print every check, not just the failures")
+    ap.add_argument(
+        "--no-venv", action="store_true", help="run in this interpreter instead of hopping to the repo venv"
+    )
+    ap.add_argument(
+        "--coverage",
+        action="store_true",
+        help="also print which lines and branches of api/ this run executed "
+        "(needs the dev-only coverage package; says so if it is absent)",
+    )
     args = ap.parse_args(argv)
 
     # Before anything is discovered: discovery itself is what fails when pydantic is
@@ -421,8 +434,7 @@ def main(argv=None) -> int:
 
     # top_level_dir=api so the modules load as `tests.test_x`, i.e. the same package
     # path they have when anything else imports them.
-    discovered = list(_flatten(
-        unittest.TestLoader().discover(str(HERE), pattern="test_*.py", top_level_dir=str(API))))
+    discovered = list(_flatten(unittest.TestLoader().discover(str(HERE), pattern="test_*.py", top_level_dir=str(API))))
 
     groups: dict[str, list] = {}
     for test in discovered:
@@ -441,7 +453,7 @@ def main(argv=None) -> int:
     # Sort the suites that never loaded out of the ones that merely failed, BEFORE
     # anything counts or prints them. See the module docstring: unittest gives both the
     # same shape, and only the wrapped exception tells them apart.
-    blocked: dict[str, str] = {}          # suite name -> the package it needed
+    blocked: dict[str, str] = {}  # suite name -> the package it needed
     for name, tests in groups.items():
         if len(tests) == 1 and type(tests[0]).__name__ == "_FailedTest":
             need = _missing_dependency(str(getattr(tests[0], "_exception", "")))
@@ -451,8 +463,7 @@ def main(argv=None) -> int:
     names = sorted(groups)
     if args.list:
         if args.coverage:
-            print("cover  : nothing to measure - --list discovers the suites without "
-                  "running them\n")
+            print("cover  : nothing to measure - --list discovers the suites without " "running them\n")
         for n in names:
             if n in blocked:
                 print(f"{_label(n):<24} cannot load here - needs {blocked[n]}")
@@ -478,8 +489,7 @@ def main(argv=None) -> int:
     # documents and not one of them could say which box produced them - Pi or handheld,
     # 3.9 or 3.14 - which is exactly how "260/260 on the Ally" gets read as "260/260
     # everywhere". Printed before the run, so it is attached to whatever follows.
-    print(f"machine: {platform.platform()}  ({sys.platform}, "
-          f"{platform.machine() or 'unknown arch'})")
+    print(f"machine: {platform.platform()}  ({sys.platform}, " f"{platform.machine() or 'unknown arch'})")
     print(f"python : {sys.version.split()[0]}  {sys.executable}")
     print(f"api    : {API}")
     print(f"suites : {len(names)}")
@@ -493,7 +503,7 @@ def main(argv=None) -> int:
     print()
 
     total = failed = skipped = 0
-    dep_skipped = 0                       # skips whose reason is also a missing package
+    dep_skipped = 0  # skips whose reason is also a missing package
     missing: set[str] = set()
     cov_stop_error = None
     t0 = time.time()
@@ -505,14 +515,12 @@ def main(argv=None) -> int:
                 # whose sensor is absent is to show CANNOT-TELL and never a plausible
                 # number; a suite whose module never loaded is the same situation, and a
                 # "0/1" here would be a number where there is no measurement.
-                print(f"  {_label(name):<24} DEPS {'-':>3}/-   never loaded: "
-                      f"needs {blocked[name]}")
+                print(f"  {_label(name):<24} DEPS {'-':>3}/-   never loaded: " f"needs {blocked[name]}")
                 continue
             if name in empty:
                 # Same rule as DEPS, different cause: no count where there was no
                 # measurement. "0/0" would read as a suite that ran and had nothing to say.
-                print(f"  {_label(name):<24} NONE {'-':>3}/-   no checks discovered in "
-                      f"{name}.py")
+                print(f"  {_label(name):<24} NONE {'-':>3}/-   no checks discovered in " f"{name}.py")
                 continue
             suite = unittest.TestSuite(groups[name])
             # The suite's own stdout goes nowhere: this runner prints the report, and a
@@ -538,8 +546,11 @@ def main(argv=None) -> int:
             missing |= deps_here
             note = ""
             if res.skipped:
-                note = (f"  ({len(res.skipped)} skipped: needs {', '.join(sorted(deps_here))})"
-                        if deps_here else f"  ({len(res.skipped)} skipped)")
+                note = (
+                    f"  ({len(res.skipped)} skipped: needs {', '.join(sorted(deps_here))})"
+                    if deps_here
+                    else f"  ({len(res.skipped)} skipped)"
+                )
             print(f"  {_label(name):<24} {mark} {passed:>3}/{res.testsRun}{note}")
             if args.verbose:
                 bad_ids = {t.id() for t, _ in bad}
@@ -567,11 +578,14 @@ def main(argv=None) -> int:
     dt = time.time() - t0
     ran = len(names) - len(blocked) - len(empty)
     if blocked or empty:
-        print(f"\n{total - failed - skipped}/{total} checks passed in {dt:.0f}s "
-              f"across {ran} of {len(names)} suites")
+        print(
+            f"\n{total - failed - skipped}/{total} checks passed in {dt:.0f}s " f"across {ran} of {len(names)} suites"
+        )
     else:
-        print(f"\n{total - failed - skipped}/{total} checks passed in {dt:.0f}s across "
-              f"{len(names)} suite{'' if len(names) == 1 else 's'}")
+        print(
+            f"\n{total - failed - skipped}/{total} checks passed in {dt:.0f}s across "
+            f"{len(names)} suite{'' if len(names) == 1 else 's'}"
+        )
     # Only the skips nobody can act on are counted here; the ones caused by a missing
     # package are attributed, with their cause, in the verdict below. Printing both
     # totals would make three skipped checks look like six.
@@ -583,12 +597,9 @@ def main(argv=None) -> int:
     # this run means anything.
     if cov is not None:
         if cov_stop_error:
-            print(f"\ncover  : the measurement could not be stopped cleanly "
-                  f"({cov_stop_error});")
-            print("         no table is printed rather than a partial one. The check "
-                  "results above")
-            print("         are unaffected - coverage watches the run, it does not "
-                  "take part in it.")
+            print(f"\ncover  : the measurement could not be stopped cleanly " f"({cov_stop_error});")
+            print("         no table is printed rather than a partial one. The check " "results above")
+            print("         are unaffected - coverage watches the run, it does not " "take part in it.")
         else:
             for line in _coverage_lines(cov):
                 print(line)
@@ -597,10 +608,8 @@ def main(argv=None) -> int:
                 # omission: a suite that never loaded exercised nothing, so every file
                 # only that suite would have touched sits at 0% for a reason that has
                 # nothing to do with what the api's tests actually cover.
-                print("  These figures come from an INCOMPLETE run - see below. Code a "
-                      "suite that")
-                print("  never loaded would have exercised is counted as unexercised, "
-                      "which it was")
+                print("  These figures come from an INCOMPLETE run - see below. Code a " "suite that")
+                print("  never loaded would have exercised is counted as unexercised, " "which it was")
                 print("  here and need not be on a machine that has the dependencies.")
 
     # The verdict goes LAST because it is the line a person actually reads, and when
@@ -609,15 +618,21 @@ def main(argv=None) -> int:
     if blocked or dep_skipped or empty:
         print("\nINCOMPLETE - this run certifies nothing about the api as a whole.")
         if blocked:
-            print(f"  {len(blocked)} of {len(names)} suites never loaded: "
-                  f"{', '.join(_label(n) for n in sorted(blocked))}")
+            print(
+                f"  {len(blocked)} of {len(names)} suites never loaded: "
+                f"{', '.join(_label(n) for n in sorted(blocked))}"
+            )
         if empty:
-            print(f"  {len(empty)} of {len(names)} suites contained no checks at all: "
-                  f"{', '.join(_label(n) for n in sorted(empty))} - the file is there "
-                  "and discovery found nothing in it to run")
+            print(
+                f"  {len(empty)} of {len(names)} suites contained no checks at all: "
+                f"{', '.join(_label(n) for n in sorted(empty))} - the file is there "
+                "and discovery found nothing in it to run"
+            )
         if dep_skipped:
-            print(f"  {dep_skipped} check(s) inside a suite that did load were skipped "
-                  "because a package they need is absent")
+            print(
+                f"  {dep_skipped} check(s) inside a suite that did load were skipped "
+                "because a package they need is absent"
+            )
         if not missing:
             # An empty suite has no package to install and no command to suggest; the
             # rest of this block is about absent dependencies and would send the reader

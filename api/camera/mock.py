@@ -9,6 +9,7 @@ Faithful to spec §3: text/plain "code\nOK\nk=v..." bodies, `Server` +
 concurrent requests serialize, per-operation blocking delays from §3.3c, and
 `722 Invalid state` when the shutter fires in the wrong UIMode.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -55,49 +56,80 @@ class MockCamera:
         # mid-dive, VideoClipTime=OFF is what makes a power-cut lose the whole file,
         # and StatusLights reads back "OF", not "OFF".
         self.menu = {
-            "Camera.Menu.AWB": "AUTO", "Camera.Menu.DefMode": "VIDEO",
-            "Camera.Menu.EV": "EV0", "Camera.Menu.FWversion": "0255",
-            "Camera.Menu.Flicker": "50Hz", "Camera.Menu.GSensor": "OFF",
-            "Camera.Menu.HDR": "OFF", "Camera.Menu.ImageRes": "20MP",
-            "Camera.Menu.IsStreaming": "NO", "Camera.Menu.LCDPower": "30SEC",
-            "Camera.Menu.LoopingVideo": "OFF", "Camera.Menu.MTD": "OFF",
+            "Camera.Menu.AWB": "AUTO",
+            "Camera.Menu.DefMode": "VIDEO",
+            "Camera.Menu.EV": "EV0",
+            "Camera.Menu.FWversion": "0255",
+            "Camera.Menu.Flicker": "50Hz",
+            "Camera.Menu.GSensor": "OFF",
+            "Camera.Menu.HDR": "OFF",
+            "Camera.Menu.ImageRes": "20MP",
+            "Camera.Menu.IsStreaming": "NO",
+            "Camera.Menu.LCDPower": "30SEC",
+            "Camera.Menu.LoopingVideo": "OFF",
+            "Camera.Menu.MTD": "OFF",
             "Camera.Menu.PhotoBurst": "UNKNOW",
-            "Camera.Menu.PowerOffDelay": "OFF", "Camera.Menu.PowerSaving": "5MIN",
+            "Camera.Menu.PowerOffDelay": "OFF",
+            "Camera.Menu.PowerSaving": "5MIN",
             "Camera.Menu.Q-SHOT": "OFF",
-            "Camera.Menu.SD0": "READY", "Camera.Menu.SoundIndicator": "ON",
-            "Camera.Menu.SpotMeter": "OFF", "Camera.Menu.StatusLights": "OF",
+            "Camera.Menu.SD0": "READY",
+            "Camera.Menu.SoundIndicator": "ON",
+            "Camera.Menu.SpotMeter": "OFF",
+            "Camera.Menu.StatusLights": "OF",
             "Camera.Menu.TV": "NONE",
-            "Camera.Menu.TVSystem": "PAL", "Camera.Menu.Timelapse": "5SEC",
-            "Camera.Menu.UIMode": "VIDEO", "Camera.Menu.UpsideDown": "Normal",
-            "Camera.Menu.VideoClipTime": "OFF", "Camera.Menu.VideoRes": "1080P30",
+            "Camera.Menu.TVSystem": "PAL",
+            "Camera.Menu.Timelapse": "5SEC",
+            "Camera.Menu.UIMode": "VIDEO",
+            "Camera.Menu.UpsideDown": "Normal",
+            "Camera.Menu.VideoClipTime": "OFF",
+            "Camera.Menu.VideoRes": "1080P30",
         }
         self.preview = {
-            "Camera.Preview.H264.bitrate": "1200000", "Camera.Preview.H264.h": "360",
-            "Camera.Preview.H264.w": "640", "Camera.Preview.MJPEG.bitrate": "4000000",
-            "Camera.Preview.MJPEG.fps": "30", "Camera.Preview.MJPEG.w": "320",
-            "Camera.Preview.MJPEG.h": "240", "Camera.Preview.MJPEG.status": "ACTIVE",
+            "Camera.Preview.H264.bitrate": "1200000",
+            "Camera.Preview.H264.h": "360",
+            "Camera.Preview.H264.w": "640",
+            "Camera.Preview.MJPEG.bitrate": "4000000",
+            "Camera.Preview.MJPEG.fps": "30",
+            "Camera.Preview.MJPEG.w": "320",
+            "Camera.Preview.MJPEG.h": "240",
+            "Camera.Preview.MJPEG.status": "ACTIVE",
             "Camera.Preview.MJPEG.status.mode": "Videomode",
             "Camera.Preview.MJPEG.status.record": "Standby",
             "Camera.Preview.MJPEG.TimeStamp": "ACTIVE",
             "Camera.Preview.MJPEG.WarningMSG": "",  # non-empty => fault (e.g. "NO CARD!")
-            "Camera.Preview.RTSP.av": "4", "Camera.Preview.RTSP.keepalive": "60",
-            "Camera.Preview.RTSP.rtcp": "10", "Camera.Preview.RTSP.tran": "100",
-            "Camera.Preview.Source.1.Camid": "front", "Camera.Preview.Source.Totals": "2",
+            "Camera.Preview.RTSP.av": "4",
+            "Camera.Preview.RTSP.keepalive": "60",
+            "Camera.Preview.RTSP.rtcp": "10",
+            "Camera.Preview.RTSP.tran": "100",
+            "Camera.Preview.Source.1.Camid": "front",
+            "Camera.Preview.Source.Totals": "2",
         }
         self.recording = False
         self.remaining = 41230
         # one seeded video file
         self.files = {
-            "Video": [{
-                "name": "/SD/Video/FILE260803-164124-000001F.MOV",
-                "size": 14487552, "fmt": "MOV", "res": "1920x1080",
-                "fps": "30", "time_s": "7.1", "mtime": "2026-08-03 16:41:24",
-            }],
-            "Photo": [{
-                "name": "/SD/Photo/FILE260803-164008-000001.JPG",
-                "size": 6553600, "fmt": "jpeg", "res": "5120x3840",
-                "fps": None, "time_s": None, "mtime": "2026-08-03 16:40:08",
-            }],
+            "Video": [
+                {
+                    "name": "/SD/Video/FILE260803-164124-000001F.MOV",
+                    "size": 14487552,
+                    "fmt": "MOV",
+                    "res": "1920x1080",
+                    "fps": "30",
+                    "time_s": "7.1",
+                    "mtime": "2026-08-03 16:41:24",
+                }
+            ],
+            "Photo": [
+                {
+                    "name": "/SD/Photo/FILE260803-164008-000001.JPG",
+                    "size": 6553600,
+                    "fmt": "jpeg",
+                    "res": "5120x3840",
+                    "fps": None,
+                    "time_s": None,
+                    "mtime": "2026-08-03 16:40:08",
+                }
+            ],
         }
 
     async def sleep(self, key: str) -> None:
@@ -136,7 +168,7 @@ def _write_to_read(prop: str) -> str | None:
     """The read name a write lands on, or None if the firmware does not know it."""
     if prop in _OBSERVED_WRITE_NAMES:
         return _OBSERVED_WRITE_NAMES[prop]
-    if prop in CAM.preview:                      # preview props are written dotted
+    if prop in CAM.preview:  # preview props are written dotted
         return prop
     if MOCK_WRITE_NAMES == "short":
         cand = f"Camera.Menu.{prop}"
@@ -154,8 +186,7 @@ def _write_to_read(prop: str) -> str | None:
 VALUE_SETS = {
     "Camera.Menu.VideoRes": {"4K30", "2.7K30", "1080P60", "1080P30", "720P120"},
     "Camera.Menu.ImageRes": {"20MP", "16MP", "12MP", "8MP"},
-    "Camera.Menu.AWB": {"AUTO", "DAYLIGHT", "CLOUDY", "FLUORESCENT1", "FLUORESCENT2",
-                        "FLUORESCENT3", "INCANDESCENT"},
+    "Camera.Menu.AWB": {"AUTO", "DAYLIGHT", "CLOUDY", "FLUORESCENT1", "FLUORESCENT2", "FLUORESCENT3", "INCANDESCENT"},
     "Camera.Menu.VideoClipTime": {"OFF", "5MIN", "10MIN"},
     "Camera.Menu.PowerSaving": {"OFF", "3MIN", "5MIN", "10MIN"},
     "Camera.Menu.EV": {"EV0"},
@@ -171,16 +202,20 @@ READBACK_QUIRKS = {
 def _plain(code: int, text: str, pairs: list[str] | None = None) -> Response:
     body = f"{code}\n{text}\n" + ("\n".join(pairs) + "\n" if pairs else "")
     return Response(
-        body, media_type="text/plain",
+        body,
+        media_type="text/plain",
         headers={"Server": SERVER_HEADER, "Cache-Control": "max-age=2", "Connection": "close"},
     )
 
 
 def _match(prop: str) -> list[str]:
     """Emulate `get` with wildcards / dotted prefixes → matching k=v pairs."""
-    src = {**CAM.menu, **CAM.preview,
-           "Camera.Battery.Level": str(CAM.battery),
-           "Camera.Capture.Remaining": str(CAM.remaining)}
+    src = {
+        **CAM.menu,
+        **CAM.preview,
+        "Camera.Battery.Level": str(CAM.battery),
+        "Camera.Capture.Remaining": str(CAM.remaining),
+    }
     if prop == "*":
         return [f"{k}={v}" for k, v in src.items()]
     if prop.endswith(".*") or prop.endswith("*"):
@@ -205,7 +240,7 @@ async def config_cgi(request: Request) -> Response:
 
         if action == "del":
             await CAM.sleep("set")
-            path = q.get("property", "")            # $SD$Video$FILE...
+            path = q.get("property", "")  # $SD$Video$FILE...
             name = path.replace("$", "/")
             for coll in CAM.files.values():
                 before = len(coll)
@@ -246,10 +281,10 @@ async def _handle_set(q) -> Response:
     if prop == "Video":
         mode = CAM.menu["Camera.Menu.UIMode"]
         if val == "record":
-            if mode != "VIDEO":                      # spec §4.3 rule 1
+            if mode != "VIDEO":  # spec §4.3 rule 1
                 return _plain(722, "Invalid state")
             await CAM.sleep("Video:record:start" if not CAM.recording else "Video:record:stop")
-            CAM.recording = not CAM.recording        # TOGGLE (spec §4.3 rule 2)
+            CAM.recording = not CAM.recording  # TOGGLE (spec §4.3 rule 2)
             CAM.preview["Camera.Preview.MJPEG.status.record"] = "Recording" if CAM.recording else "Standby"
             return _plain(0, "OK")
         if val == "capture":
@@ -257,17 +292,24 @@ async def _handle_set(q) -> Response:
                 return _plain(722, "Invalid state")
             await CAM.sleep("Video:capture")
             ts = time.strftime("%y%m%d-%H%M%S")
-            CAM.files["Photo"].insert(0, {
-                "name": f"/SD/Photo/FILE{ts}-000009.JPG", "size": 6553600,
-                "fmt": "jpeg", "res": "5120x3840", "fps": None, "time_s": None,
-                "mtime": time.strftime("%Y-%m-%d %H:%M:%S"),
-            })
+            CAM.files["Photo"].insert(
+                0,
+                {
+                    "name": f"/SD/Photo/FILE{ts}-000009.JPG",
+                    "size": 6553600,
+                    "fmt": "jpeg",
+                    "res": "5120x3840",
+                    "fps": None,
+                    "time_s": None,
+                    "mtime": time.strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
             CAM.remaining -= 1
             return _plain(0, "OK")
         return _plain(722, "Invalid state")
 
     if prop == "SD0" and val == "format":
-        await CAM.sleep("SD0:format")               # returns fast, formats in bg
+        await CAM.sleep("SD0:format")  # returns fast, formats in bg
         for coll in CAM.files.values():
             coll.clear()
         return _plain(0, "OK")
@@ -293,7 +335,7 @@ async def _handle_set(q) -> Response:
 
     allowed = VALUE_SETS.get(read_name)
     if allowed is not None and val not in allowed:
-        return _plain(722, "Invalid state")          # parsed the property, refused the value
+        return _plain(722, "Invalid state")  # parsed the property, refused the value
 
     store = CAM.menu if read_name in CAM.menu else CAM.preview
     store[read_name] = READBACK_QUIRKS.get(read_name, lambda v: v)(val)
@@ -304,10 +346,11 @@ def _dir(q) -> Response:
     prop = q.get("property", "Normal")
     coll = CAM.files["Video"] if prop == "Normal" else CAM.files["Photo"]
     try:
-        frm = int(q.get("from", "0")); cnt = int(q.get("count", "100"))
+        frm = int(q.get("from", "0"))
+        cnt = int(q.get("count", "100"))
     except ValueError:
         frm, cnt = 0, 100
-    page = coll[frm:frm + cnt]
+    page = coll[frm : frm + cnt]
     rows = []
     for f in page:
         if f["fps"] is not None:
@@ -319,10 +362,12 @@ def _dir(q) -> Response:
             f"    <size>{f['size']}</size>\n    <attr>RW</attr>\n    <time>{f['mtime']}</time>\n</file>"
         )
     root = prop
-    xml = (f'<?xml version="1.0" encoding="UTF-8" ?>\n<{root}>\n'
-           + "\n".join(rows) + (f"\n<amount>{len(coll)}</amount>\n</{root}>\n"))
-    return Response(xml, media_type="text/xml",
-                    headers={"Server": SERVER_HEADER, "Connection": "close"})
+    xml = (
+        f'<?xml version="1.0" encoding="UTF-8" ?>\n<{root}>\n'
+        + "\n".join(rows)
+        + (f"\n<amount>{len(coll)}</amount>\n</{root}>\n")
+    )
+    return Response(xml, media_type="text/xml", headers={"Server": SERVER_HEADER, "Connection": "close"})
 
 
 async def download(request: Request) -> Response:
@@ -348,16 +393,29 @@ async def download(request: Request) -> Response:
         start_s, _, end_s = spec.partition("-")
         start = int(start_s) if start_s else 0
         end = int(end_s) if end_s else total - 1
-        chunk = blob[start:end + 1]
-        return Response(chunk, status_code=206, media_type=ctype, headers={
-            "Content-Range": f"bytes {start}-{end}/{total}",
-            "Accept-Ranges": "bytes", "Content-Length": str(len(chunk)),
-            "Server": SERVER_HEADER, "Connection": "close",
-        })
-    return Response(blob, media_type=ctype, headers={
-        "Accept-Ranges": "bytes", "Content-Length": str(total),
-        "Server": SERVER_HEADER, "Connection": "close",
-    })
+        chunk = blob[start : end + 1]
+        return Response(
+            chunk,
+            status_code=206,
+            media_type=ctype,
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{total}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(len(chunk)),
+                "Server": SERVER_HEADER,
+                "Connection": "close",
+            },
+        )
+    return Response(
+        blob,
+        media_type=ctype,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(total),
+            "Server": SERVER_HEADER,
+            "Connection": "close",
+        },
+    )
 
 
 async def thumb(request: Request) -> Response:
@@ -376,25 +434,26 @@ async def thumb(request: Request) -> Response:
         "d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9faffda00"
         "0c03010002110311003f00fbfa28a2803fffd9"
     )
-    return Response(jpeg, media_type="image/jpeg",
-                    headers={"Server": SERVER_HEADER, "Connection": "close"})
+    return Response(jpeg, media_type="image/jpeg", headers={"Server": SERVER_HEADER, "Connection": "close"})
 
 
 async def cammenu(request: Request) -> Response:
-    return Response(CAMMENU_XML, media_type="text/xml",
-                    headers={"Server": SERVER_HEADER, "Connection": "close"})
+    return Response(CAMMENU_XML, media_type="text/xml", headers={"Server": SERVER_HEADER, "Connection": "close"})
 
 
-app = Starlette(routes=[
-    Route("/cgi-bin/Config.cgi", config_cgi),
-    Route("/cammenu.xml", cammenu),
-    Route("/SD/{path:path}", download),
-    Route("/thumb/{path:path}", thumb),
-])
+app = Starlette(
+    routes=[
+        Route("/cgi-bin/Config.cgi", config_cgi),
+        Route("/cammenu.xml", cammenu),
+        Route("/SD/{path:path}", download),
+        Route("/thumb/{path:path}", thumb),
+    ]
+)
 
 
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.environ.get("WOLFANG_MOCK_PORT", "8072"))
     # workers=1 (default) — the real camera is single-threaded; the global lock
     # inside handlers reproduces its serialization.

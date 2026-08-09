@@ -15,6 +15,7 @@ log — a ground truth that stays inside the simulator cannot settle an argument
 
 Deterministic (seeded xorshift, no wall-clock) so tests are reproducible.
 """
+
 from __future__ import annotations
 
 import math
@@ -36,10 +37,10 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 @dataclass
 class Leg:
-    heading_deg: float      # true heading held during this leg (turned toward, not snapped to)
-    throttle: float         # -1..1
+    heading_deg: float  # true heading held during this leg (turned toward, not snapped to)
+    throttle: float  # -1..1
     duration_s: float
-    depth_m: float = 0.0     # target depth (ramped toward)
+    depth_m: float = 0.0  # target depth (ramped toward)
 
 
 # A default scripted canal run: float, straight, gentle turns, a dive, some reverse.
@@ -56,12 +57,12 @@ DEFAULT_PATH = [
     # genuinely stalled and the throttle genuinely zero, which is the one condition
     # that lets the speed filter zero-lock and kill its accelerometer bias (§4b).
     Leg(90, 0.0, 4, depth_m=0.0),
-    Leg(90, 0.6, 30, depth_m=1.0),    # head east, dive to 1 m
+    Leg(90, 0.6, 30, depth_m=1.0),  # head east, dive to 1 m
     Leg(90, 0.8, 40, depth_m=2.0),
-    Leg(60, 0.6, 20, depth_m=2.0),    # bend NE
+    Leg(60, 0.6, 20, depth_m=2.0),  # bend NE
     Leg(60, 0.8, 40, depth_m=3.0),
     Leg(90, 0.5, 20, depth_m=3.0),
-    Leg(90, -0.4, 15, depth_m=2.0),   # reverse, ascend
+    Leg(90, -0.4, 15, depth_m=2.0),  # reverse, ascend
 ]
 
 
@@ -71,20 +72,20 @@ class Simulator:
         path: list[Leg] | None = None,
         true_lut: SpeedLUT | None = None,
         current: FlowVector | None = None,
-        heading_bias_deg: float = 1.5,        # constant IMU yaw bias
-        mag_gain_deg: float = 22.0,           # mag error at full thrust (near thrusters, §5.6)
-        depth_noise_m: float = 0.03,          # pressure sensor is accurate (§2.4)
+        heading_bias_deg: float = 1.5,  # constant IMU yaw bias
+        mag_gain_deg: float = 22.0,  # mag error at full thrust (near thrusters, §5.6)
+        depth_noise_m: float = 0.03,  # pressure sensor is accurate (§2.4)
         heading_noise_deg: float = 0.4,
-        encoder_slack: float = 0.06,          # payout ≥ path length (§5.5)
-        turn_rate_dps: float = 12.0,          # how fast the hull can actually swing
-        speed_tau_s: float = 1.5,             # hull inertia: speed lags the throttle
+        encoder_slack: float = 0.06,  # payout ≥ path length (§5.5)
+        turn_rate_dps: float = 12.0,  # how fast the hull can actually swing
+        speed_tau_s: float = 1.5,  # hull inertia: speed lags the throttle
         gyro_noise_dps: float = 0.15,
-        gyro_bias_dps: float = 0.0,           # OFF by default — see the note below
+        gyro_bias_dps: float = 0.0,  # OFF by default — see the note below
         accel_noise_ms2: float = 0.05,
         paddle_noise_ms: float = 0.02,
-        paddle_stall_ms: float = 0.10,        # below this the wheel stops turning
+        paddle_stall_ms: float = 0.10,  # below this the wheel stops turning
         seed: int = 1234,
-        hold_at_end: bool = False,            # keep flying the last leg (for the live service)
+        hold_at_end: bool = False,  # keep flying the last leg (for the live service)
     ):
         self.hold_at_end = hold_at_end
         self.path = path or DEFAULT_PATH
@@ -112,16 +113,16 @@ class Simulator:
         self._rng_state = seed & 0xFFFFFFFF
         # ---- ground truth ----
         self.t = 0.0
-        self.x = 0.0            # metres east
-        self.y = 0.0            # metres north
+        self.x = 0.0  # metres east
+        self.y = 0.0  # metres north
         self.depth = 0.0
         # True heading, turned continuously between legs. Starts ON the first leg
         # so the run does not open with a manoeuvre nobody scripted.
         self.heading = float(self.path[0].heading_deg) % 360.0
-        self.turn_dps = 0.0     # true yaw rate this tick (+ = clockwise)
-        self.v = 0.0            # true water-relative forward speed, m/s (signed)
-        self.accel = 0.0        # true forward acceleration, m/s²
-        self.path_len = 0.0     # cumulative true distance (for encoder)
+        self.turn_dps = 0.0  # true yaw rate this tick (+ = clockwise)
+        self.v = 0.0  # true water-relative forward speed, m/s (signed)
+        self.accel = 0.0  # true forward acceleration, m/s²
+        self.path_len = 0.0  # cumulative true distance (for encoder)
         self._leg_i = 0
         self._leg_t = 0.0
 
@@ -184,8 +185,8 @@ class Simulator:
         # true ground velocity = water-relative (throttle) + current (§5.4).
         # Compass heading: 0=N, 90=E → east=sin, north=cos.
         true_hdg = math.radians(self.heading)
-        vx = self.v * math.sin(true_hdg)          # east
-        vy = self.v * math.cos(true_hdg)          # north
+        vx = self.v * math.sin(true_hdg)  # east
+        vy = self.v * math.cos(true_hdg)  # north
         cur = math.radians(self.current.bearing_deg)
         vx += self.current.speed_ms * math.sin(cur)
         vy += self.current.speed_ms * math.cos(cur)
@@ -213,8 +214,7 @@ class Simulator:
         # ---- sensor readings (with errors) ----
         # magnetometer garbage grows with the thrust actually being produced (§5.6)
         mag_dist = self.mag_gain * thrust_level * (0.6 + 0.4 * math.sin(self.t * 1.7))
-        heading_meas = (self.heading + self.heading_bias + mag_dist
-                        + self.heading_noise * self._rand()) % 360.0
+        heading_meas = (self.heading + self.heading_bias + mag_dist + self.heading_noise * self._rand()) % 360.0
         mag_cal = 3 if thrust_level < 0.4 else (1 if thrust_level > 0.7 else 2)
         depth_meas = max(0.0, self.depth + self.depth_noise * self._rand())
         encoder = self.path_len * (1.0 + self.encoder_slack)
@@ -231,8 +231,9 @@ class Simulator:
         # reporting right through the mag disturbance, which is the point: the wheel
         # is the one instrument the thrusters cannot lie to.
         speed_true = abs(self.v)
-        speed_meas = (max(0.0, speed_true + self.paddle_noise * self._rand())
-                      if speed_true >= self.paddle_stall else None)
+        speed_meas = (
+            max(0.0, speed_true + self.paddle_noise * self._rand()) if speed_true >= self.paddle_stall else None
+        )
 
         # advance leg clock (unless holding at the end)
         if not self.finished:
@@ -242,12 +243,18 @@ class Simulator:
                 self._leg_t = 0.0
 
         return SensorSample(
-            t=round(self.t, 3), heading_deg=round(heading_meas, 2),
-            depth_m=round(depth_meas, 3), throttle=thr,
-            encoder_m=round(encoder, 3), mag_cal=mag_cal,
+            t=round(self.t, 3),
+            heading_deg=round(heading_meas, 2),
+            depth_m=round(depth_meas, 3),
+            throttle=thr,
+            encoder_m=round(encoder, 3),
+            mag_cal=mag_cal,
             speed_ms_measured=None if speed_meas is None else round(speed_meas, 3),
-            gyro_z_dps=round(gyro, 3), accel_fwd_ms2=round(accel, 3),
-            steer=round(turn_demand, 3), left=round(left, 3), right=round(right, 3),
+            gyro_z_dps=round(gyro, 3),
+            accel_fwd_ms2=round(accel, 3),
+            steer=round(turn_demand, 3),
+            left=round(left, 3),
+            right=round(right, 3),
             # The scripted sub is under way, so it is armed — a disarmed sample
             # proves nothing about speed and the snag detector would discard it.
             # ballast_level stays None: this simulator has no syringe, and None is

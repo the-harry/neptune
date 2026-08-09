@@ -16,6 +16,7 @@ bathymetry raster with a hole punched through it at the surface, and a depth mod
 thing a post-incident replay most needs to establish — WHEN the sensor stopped —
 is exactly the thing a default erases. Absent data must stay visibly absent.
 """
+
 from __future__ import annotations
 
 import json
@@ -37,9 +38,16 @@ FSYNC_EVERY_S = 5.0
 
 
 class DiveLog:
-    def __init__(self, dive_id: str, started_at: str, origin: Origin,
-                 speed_lut_id: str = "default", flow: FlowVector | None = None,
-                 directory: Path | None = None, auto: bool = False):
+    def __init__(
+        self,
+        dive_id: str,
+        started_at: str,
+        origin: Origin,
+        speed_lut_id: str = "default",
+        flow: FlowVector | None = None,
+        directory: Path | None = None,
+        auto: bool = False,
+    ):
         self.dive_id = dive_id
         self.started_at = started_at
         self.origin = origin
@@ -62,9 +70,16 @@ class DiveLog:
             try:
                 directory.mkdir(parents=True, exist_ok=True)
                 self._fh = open(directory / f"{dive_id}.jsonl", "a", buffering=1, encoding="utf-8")
-                self._write({"type": "header", "dive_id": dive_id, "started_at": started_at,
-                             "origin": origin.model_dump() if hasattr(origin, "model_dump") else None,
-                             "speed_lut_id": speed_lut_id, "auto": auto})
+                self._write(
+                    {
+                        "type": "header",
+                        "dive_id": dive_id,
+                        "started_at": started_at,
+                        "origin": origin.model_dump() if hasattr(origin, "model_dump") else None,
+                        "speed_lut_id": speed_lut_id,
+                        "auto": auto,
+                    }
+                )
             except Exception as exc:  # noqa: BLE001 — logging must never stop the dive
                 log.warning("could not open the dive journal for %s: %s", dive_id, exc)
                 self._fh = None
@@ -114,8 +129,12 @@ class DiveLog:
         # are indistinguishable from real ones a year later when this file is all
         # that is left of the dive.
         smp = {
-            "t": ns.t, "x": ns.x_m, "y": ns.y_m, "depth_m": ns.depth_m,
-            "heading_deg": ns.heading_deg, "snapped": ns.snapped,
+            "t": ns.t,
+            "x": ns.x_m,
+            "y": ns.y_m,
+            "depth_m": ns.depth_m,
+            "heading_deg": ns.heading_deg,
+            "snapped": ns.snapped,
             "confidence": ns.confidence,
             # What the estimator concluded about ITSELF. speed_src is what separates
             # a measurement from an estimate after the fact, and snagged/gyro_only
@@ -124,45 +143,49 @@ class DiveLog:
             # where x/y are NOT a track at all but a held last fix; without it a
             # replay reads a straight run of identical coordinates as a sub sitting
             # still, which is the opposite of what was happening.
-            "speed_ms": ns.speed_ms, "speed_src": ns.speed_src,
-            "snagged": ns.snagged, "gyro_only": ns.gyro_only,
+            "speed_ms": ns.speed_ms,
+            "speed_src": ns.speed_src,
+            "snagged": ns.snagged,
+            "gyro_only": ns.gyro_only,
             "no_heading": ns.no_heading,
         }
         if raw is not None:
-            smp.update({
-                "throttle": getattr(raw, "throttle", 0.0),
-                "steer": getattr(raw, "steer", 0.0),
-                "left": getattr(raw, "left", 0.0),
-                "right": getattr(raw, "right", 0.0),
-                # None, not 0.0: an unhomed stepper has no position, and 0.0 here
-                # would be logged as the specific claim "the syringe was empty".
-                "ballast": getattr(raw, "ballast_level", None),
-                "ballast_tgt": getattr(raw, "ballast_target", 0.0),
-                # Pressure travels with depth and goes null with it — a depth in this
-                # file with no pressure beside it is a number with no provenance, and
-                # 0.0 psi absolute is not a low reading, it is an impossible one.
-                "psi": getattr(raw, "pressure_psi", None),
-                "armed": bool(getattr(raw, "armed", False)),
-                # None = no IMU answered. NOT 3, which was the old fallback and is the
-                # strongest trust mark in the system: every replay of a dive with a
-                # dead compass would have been scored as though the magnetometer had
-                # been perfectly calibrated throughout.
-                "mag_cal": getattr(raw, "mag_cal", None),
-                # ---- what the instruments measured, unfiltered ----
-                "raw_heading_deg": getattr(raw, "heading_deg", None),
-                "encoder_m": getattr(raw, "encoder_m", 0.0),
-                # None survives into the journal as null on purpose: the wheel was
-                # stale or not fitted, which is not the same reading as 0.0 m/s. The
-                # same argument applies to every line below it — 0.0 °/s is "measured:
-                # not turning", 0.0 m/s² is "measured: coasting", 0.0° of pitch is
-                # "measured: level". Each is a reading a dead BNO085 cannot have taken,
-                # and each was being written into the record as though it had.
-                "speed_ms_measured": getattr(raw, "speed_ms_measured", None),
-                "gyro_z_dps": getattr(raw, "gyro_z_dps", None),
-                "accel_fwd_ms2": getattr(raw, "accel_fwd_ms2", None),
-                "pitch_deg": getattr(raw, "pitch_deg", None),
-                "roll_deg": getattr(raw, "roll_deg", None),
-            })
+            smp.update(
+                {
+                    "throttle": getattr(raw, "throttle", 0.0),
+                    "steer": getattr(raw, "steer", 0.0),
+                    "left": getattr(raw, "left", 0.0),
+                    "right": getattr(raw, "right", 0.0),
+                    # None, not 0.0: an unhomed stepper has no position, and 0.0 here
+                    # would be logged as the specific claim "the syringe was empty".
+                    "ballast": getattr(raw, "ballast_level", None),
+                    "ballast_tgt": getattr(raw, "ballast_target", 0.0),
+                    # Pressure travels with depth and goes null with it — a depth in this
+                    # file with no pressure beside it is a number with no provenance, and
+                    # 0.0 psi absolute is not a low reading, it is an impossible one.
+                    "psi": getattr(raw, "pressure_psi", None),
+                    "armed": bool(getattr(raw, "armed", False)),
+                    # None = no IMU answered. NOT 3, which was the old fallback and is the
+                    # strongest trust mark in the system: every replay of a dive with a
+                    # dead compass would have been scored as though the magnetometer had
+                    # been perfectly calibrated throughout.
+                    "mag_cal": getattr(raw, "mag_cal", None),
+                    # ---- what the instruments measured, unfiltered ----
+                    "raw_heading_deg": getattr(raw, "heading_deg", None),
+                    "encoder_m": getattr(raw, "encoder_m", 0.0),
+                    # None survives into the journal as null on purpose: the wheel was
+                    # stale or not fitted, which is not the same reading as 0.0 m/s. The
+                    # same argument applies to every line below it — 0.0 °/s is "measured:
+                    # not turning", 0.0 m/s² is "measured: coasting", 0.0° of pitch is
+                    # "measured: level". Each is a reading a dead BNO085 cannot have taken,
+                    # and each was being written into the record as though it had.
+                    "speed_ms_measured": getattr(raw, "speed_ms_measured", None),
+                    "gyro_z_dps": getattr(raw, "gyro_z_dps", None),
+                    "accel_fwd_ms2": getattr(raw, "accel_fwd_ms2", None),
+                    "pitch_deg": getattr(raw, "pitch_deg", None),
+                    "roll_deg": getattr(raw, "roll_deg", None),
+                }
+            )
             # Ground truth, only when the sample actually carries it — the simulator
             # knows where it really is; a canal does not. §4e's acceptance tests score
             # "filtered" against "dr" on track error, and an error needs something to
@@ -202,23 +225,33 @@ class DiveLog:
             ax, ay = self._apply(smp["x"], smp["y"])
             lat, lon = to_latlon(ax, ay, self.origin.lat, self.origin.lon)
             coords.append([round(lon, 7), round(lat, 7)])
-            samples.append({
-                "t": smp["t"], "depth_m": smp["depth_m"], "heading_deg": smp["heading_deg"],
-                "snapped": smp["snapped"], "confidence": smp["confidence"],
-                # Carried out to the GeoJSON as well, because this is the artifact
-                # somebody opens in a map viewer: without it a stretch of repeated
-                # identical coordinates reads as "the sub stopped here", when what
-                # actually happened is that the compass stopped and the track was
-                # held. .get() so a log rebuilt from an older journal still renders.
-                "no_heading": smp.get("no_heading", False),
-            })
+            samples.append(
+                {
+                    "t": smp["t"],
+                    "depth_m": smp["depth_m"],
+                    "heading_deg": smp["heading_deg"],
+                    "snapped": smp["snapped"],
+                    "confidence": smp["confidence"],
+                    # Carried out to the GeoJSON as well, because this is the artifact
+                    # somebody opens in a map viewer: without it a stretch of repeated
+                    # identical coordinates reads as "the sub stopped here", when what
+                    # actually happened is that the compass stopped and the track was
+                    # held. .get() so a log rebuilt from an older journal still renders.
+                    "no_heading": smp.get("no_heading", False),
+                }
+            )
         return {
             "type": "Feature",
             "properties": {
-                "dive_id": self.dive_id, "started_at": self.started_at,
-                "origin": {"lat": self.origin.lat, "lon": self.origin.lon,
-                           "accuracy_m": self.origin.accuracy, "heading_deg": self.origin.heading_deg,
-                           "source": self.origin.source},
+                "dive_id": self.dive_id,
+                "started_at": self.started_at,
+                "origin": {
+                    "lat": self.origin.lat,
+                    "lon": self.origin.lon,
+                    "accuracy_m": self.origin.accuracy,
+                    "heading_deg": self.origin.heading_deg,
+                    "source": self.origin.source,
+                },
                 "adjustment": self.adjustment.model_dump(),
                 "speed_lut_id": self.speed_lut_id,
                 "flow_vector": {"bearing_deg": self.flow.bearing_deg, "speed_ms": self.flow.speed_ms},
@@ -243,11 +276,19 @@ class DiveLog:
         d = json.loads(Path(path).read_text())
         pr = d["properties"]
         o = pr["origin"]
-        log = cls(pr["dive_id"], pr["started_at"],
-                  Origin(lat=o["lat"], lon=o["lon"], accuracy=o.get("accuracy_m", 0),
-                         heading_deg=o.get("heading_deg", 0), source=o.get("source", "phone")),
-                  pr.get("speed_lut_id", "default"),
-                  FlowVector(**pr.get("flow_vector", {})))
+        log = cls(
+            pr["dive_id"],
+            pr["started_at"],
+            Origin(
+                lat=o["lat"],
+                lon=o["lon"],
+                accuracy=o.get("accuracy_m", 0),
+                heading_deg=o.get("heading_deg", 0),
+                source=o.get("source", "phone"),
+            ),
+            pr.get("speed_lut_id", "default"),
+            FlowVector(**pr.get("flow_vector", {})),
+        )
         log.adjustment = Adjustment(**pr.get("adjustment", {}))
         # reconstruct raw local samples from stored coords (best-effort; raw x/y not re-derived)
         return log

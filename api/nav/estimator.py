@@ -24,6 +24,7 @@ tested with plain numbers. This file is only plumbing: it turns a SensorSample i
 scalars, runs the filters, feeds the results into the dead reckoner and carries the
 filter's own state (speed_src, gyro_only, snagged) out on the NavState.
 """
+
 from __future__ import annotations
 
 import logging
@@ -56,8 +57,7 @@ class Estimator(Protocol):
     def update(self, s: SensorSample) -> NavState: ...
 
 
-def _finish(ns: NavState, *, snagged: bool, gyro_only: bool = False,
-            speed_src: str | None = None) -> NavState:
+def _finish(ns: NavState, *, snagged: bool, gyro_only: bool = False, speed_src: str | None = None) -> NavState:
     """Stamp the estimator's own state onto the NavState the dead reckoner produced.
 
     Only things that CANNOT change the track live here — the flags, and the one
@@ -70,12 +70,14 @@ def _finish(ns: NavState, *, snagged: bool, gyro_only: bool = False,
     it; a flag stamped on afterwards could disagree with the x/y underneath it, and
     "the map has stopped following the sub" is not a claim worth letting drift.
     """
-    return ns.model_copy(update={
-        "snagged": snagged,
-        "gyro_only": gyro_only,
-        "speed_src": speed_src or ns.speed_src,
-        "confidence": round(min(ns.confidence, SNAGGED_CONFIDENCE), 2) if snagged else ns.confidence,
-    })
+    return ns.model_copy(
+        update={
+            "snagged": snagged,
+            "gyro_only": gyro_only,
+            "speed_src": speed_src or ns.speed_src,
+            "confidence": round(min(ns.confidence, SNAGGED_CONFIDENCE), 2) if snagged else ns.confidence,
+        }
+    )
 
 
 class _EstimatorBase:
@@ -106,7 +108,7 @@ class _EstimatorBase:
         # own state always wins and there is no recursion risk once `dr` is in __dict__.
         try:
             inner = self.__dict__["dr"]
-        except KeyError:                      # asked before __init__ finished
+        except KeyError:  # asked before __init__ finished
             raise AttributeError(name) from None
         return getattr(inner, name)
 
@@ -169,7 +171,7 @@ class FilteredEstimator(_EstimatorBase):
         centreline_lonlat: list[tuple[float, float]] | None = None,
         snapping: bool | None = None,
     ) -> None:
-        self.lut = speed_lut or DEFAULT_LUT          # the real one; the KF falls back to it
+        self.lut = speed_lut or DEFAULT_LUT  # the real one; the KF falls back to it
         self.dr = DeadReckoner(origin, self.lut, current, centreline_lonlat, snapping)
         self.heading_filter = HeadingFilter()
         self.speed_kf = SpeedKF(settings.m_per_pulse, settings.paddle_window_s)
@@ -191,8 +193,7 @@ class FilteredEstimator(_EstimatorBase):
         h = self.heading_filter.update(s.t, s.heading_deg, s.gyro_z_dps, s.mag_cal, s.left, s.right)
         # The accelerometer is on that same chip, so it goes quiet at the same instant;
         # the KF widens its own uncertainty rather than reading the silence as 0 m/s².
-        v = self.speed_kf.update(dt, s.accel_fwd_ms2, s.throttle, s.speed_ms_measured,
-                                 self.lut.speed(s.throttle))
+        v = self.speed_kf.update(dt, s.accel_fwd_ms2, s.throttle, s.speed_ms_measured, self.lut.speed(s.throttle))
         src = self.speed_kf.source
 
         # Snag evidence: the filtered speed counts ONLY while a fresh paddlewheel
@@ -211,8 +212,7 @@ class FilteredEstimator(_EstimatorBase):
         # paddlewheel over its LUT (§3), because the filter's own answer would then have
         # been bypassed on every tick the wheel was turning — which is most of them —
         # while the frame still claimed "kf-paddle".
-        ns = self.dr.update(s.model_copy(update={"heading_deg": h}),
-                            speed_ms=v, speed_src=src)
+        ns = self.dr.update(s.model_copy(update={"heading_deg": h}), speed_ms=v, speed_src=src)
         return _finish(ns, snagged=snagged, gyro_only=self.heading_filter.gyro_only, speed_src=src)
 
 
@@ -234,7 +234,13 @@ def make_estimator(
     """
     if isinstance(origin, str):
         backend, origin, speed_lut, current, centreline_lonlat, snapping = (
-            origin, speed_lut, current, centreline_lonlat, snapping, backend)
+            origin,
+            speed_lut,
+            current,
+            centreline_lonlat,
+            snapping,
+            backend,
+        )
     if not isinstance(origin, Origin):
         # Loud and immediate: the alternative is a wrapper built around junk that only
         # explodes ten minutes later, mid-dive, inside the integration loop.
