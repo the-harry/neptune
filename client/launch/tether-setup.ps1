@@ -1,7 +1,7 @@
 <#
   NEPTUNE - one-time tether setup for the ROG Ally. RUN AS ADMINISTRATOR, once.
 
-  Five things, all of which need elevation:
+  Six things, all of which need elevation:
 
    1. Give the Ethernet adapter the fixed tether address 192.168.42.2/24.
       A direct Ally<->Pi cable has NO DHCP SERVER, so Windows falls back to an
@@ -20,6 +20,17 @@
       is separate from the main location switch. Chrome is a desktop app, so with
       it off navigator.geolocation always fails and the map can never take an
       origin fix - and nothing in the dashboard can fix that from inside the page.
+
+   5. Auto-grant location to the dashboard's own origin, so the operator is not
+      answering a browser permission prompt with wet hands at the water's edge.
+
+   6. SERVE NTP TO THE SUB. A Pi 3B+ has no RTC and no battery, and on the water no
+      route to the internet, so the only clock it can ever see is this handheld's.
+      Left alone it boots to whatever its filesystem timestamps imply: measured on
+      the bench, three and a half DAYS out, which misdates every dive record and
+      blackbox file and makes any figure derived from both machines' clocks
+      meaningless. Windows does this natively and it is only off by default.
+      The Pi half is configured by install.sh.
 
   Undo with:  tether-setup.ps1 -Revert   (back to DHCP + default power settings;
               the location switches are left alone, they are not tether-specific)
@@ -94,7 +105,7 @@ if ($Revert) {
 }
 
 # ---------------------------------------------------------------------------
-Write-Host "`n[1/5] Fixed tether address" -ForegroundColor Cyan
+Write-Host "`n[1/6] Fixed tether address" -ForegroundColor Cyan
 if (-not $nic) { Info "skipped - adapter not present" } else {
   try {
     netsh interface ip set address name="$Adapter" static $Address $Mask | Out-Null
@@ -105,7 +116,7 @@ if (-not $nic) { Info "skipped - adapter not present" } else {
   }
 }
 
-Write-Host "`n[2/5] USB selective suspend" -ForegroundColor Cyan
+Write-Host "`n[2/6] USB selective suspend" -ForegroundColor Cyan
 # Windows suspends the USB NIC and the tether silently drops. On a vehicle control
 # link that is not acceptable, so turn it off on both AC and battery.
 powercfg /setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
@@ -113,7 +124,7 @@ powercfg /setdcvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48
 powercfg /setactive SCHEME_CURRENT
 OK "disabled on AC and battery"
 
-Write-Host "`n[3/5] Adapter power management" -ForegroundColor Cyan
+Write-Host "`n[3/6] Adapter power management" -ForegroundColor Cyan
 # 0x18 = disable "allow the computer to turn off this device to save power"
 # and "allow this device to wake the computer".
 $guid = '{4d36e972-e325-11ce-bfc1-08002be10318}'
@@ -136,7 +147,7 @@ if ($nic) {
   } catch { Info "adapter exposes no WMI power settings (registry change above still applies)" }
 }
 
-Write-Host "`n[4/5] Location for desktop apps" -ForegroundColor Cyan
+Write-Host "`n[4/6] Location for desktop apps" -ForegroundColor Cyan
 # The map origin comes from the handheld's own position via navigator.geolocation.
 # Windows gates that behind TWO switches, and the second is OFF by default:
 #   Settings > Privacy & security > Location > Location services          (usually on)
@@ -162,7 +173,7 @@ try {
 } catch { Info "geolocation service not available" }
 Info "Chrome will still ask once per profile - tap Allow when the map requests it"
 
-Write-Host "`n[5/5] Auto-grant location to the dashboard (no prompt)" -ForegroundColor Cyan
+Write-Host "`n[5/6] Auto-grant location to the dashboard (no prompt)" -ForegroundColor Cyan
 # Even with Windows allowing location, Chrome still asks PER ORIGIN. On a fullscreen
 # handheld that prompt is easy to miss and awkward to dismiss, so the map silently
 # never got a fix. Chrome's own policy settles it before the first page load.
@@ -260,6 +271,44 @@ if ((Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or (Test-Path $ffTar
     Nope "ffmpeg NOT installed - stills and logs still work, RECORDING will not"
     Info "  install it by hand, or drop ffmpeg.exe in: $(Split-Path $ffTarget)"
   }
+}
+
+# ---------------------------------------------------------------------------
+# Serve the time to the sub
+# ---------------------------------------------------------------------------
+# THE VEHICLE HAS NO CLOCK OF ITS OWN. A Pi 3B+ has no RTC and no battery, and on
+# the water it has no route to the internet either, so the only clock it can ever
+# see is the one at this end of the tether. Left alone it boots to whatever the
+# filesystem timestamps imply and stays there: measured on the bench it was three
+# and a half DAYS out, which misdates every dive record and blackbox file and makes
+# any figure derived from both machines' timestamps meaningless.
+#
+# So this handheld answers NTP, and the Pi asks (install.sh points systemd-timesyncd
+# here and re-polls when the tether comes up). Windows will do this natively; it is
+# only off by default.
+Write-Host "`n[6/6] Serve time to the sub over the tether" -ForegroundColor Cyan
+try {
+  Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\NtpServer' `
+      -Name Enabled -Value 1 -Type DWord -ErrorAction Stop
+  # 5 = announce as a reliable source ALWAYS. The default only announces when this
+  # machine is itself synced to an upstream, and canal-side there is no upstream —
+  # which is exactly when the sub most needs to be told what time it is.
+  Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Config' `
+      -Name AnnounceFlags -Value 5 -Type DWord -ErrorAction Stop
+  Restart-Service w32time -ErrorAction Stop
+  OK "Windows Time is serving NTP"
+
+  # Scoped to the tether subnet. An unqualified 'allow UDP 123 inbound' would answer
+  # time queries on every cafe and hotel network this handheld ever joins.
+  $ruleName = 'Neptune tether NTP'
+  Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+  New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol UDP -LocalPort 123 `
+      -RemoteAddress 192.168.42.0/24 -Action Allow -Profile Any -ErrorAction Stop | Out-Null
+  OK "firewall allows UDP 123 from 192.168.42.0/24 only"
+  w32tm /resync /nowait 2>&1 | Out-Null
+} catch {
+  Nope "could not enable the time server ($($_.Exception.Message))"
+  Info "  the sub will keep its own (wrong) clock; dive records will be misdated"
 }
 
 Write-Host "`n---- result ----" -ForegroundColor Magenta

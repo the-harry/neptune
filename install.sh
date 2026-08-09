@@ -121,6 +121,105 @@ if [ "$(hostname)" != "$PI_HOSTNAME" ]; then
 fi
 systemctl enable --now avahi-daemon >/dev/null 2>&1 || warn "avahi-daemon not available — ${PI_HOSTNAME}.local will not resolve"
 
+# ---- 2b2. the clock comes from the tether -----------------------------------
+# THIS BOARD HAS NO RTC AND NO BATTERY, and on the water no route to the internet,
+# so the only clock it can ever see is the handheld at the other end of the tether.
+# Left alone it boots to whatever its filesystem timestamps imply and stays there —
+# measured on the bench, three and a half DAYS out — which misdates every dive
+# record and blackbox file and makes any figure derived from both machines' clocks
+# meaningless. The handheld's half is client/launch/tether-setup.ps1.
+TOPSIDE_IP="${NEPTUNE_TOPSIDE_IP:-${TETHER_IP%.*}.2}"
+log "pointing the clock at the handheld (${TOPSIDE_IP})…"
+install -d -m 0755 /etc/systemd/timesyncd.conf.d
+cat > /etc/systemd/timesyncd.conf.d/10-neptune-tether.conf <<EOF
+# A drop-in, not an edit of timesyncd.conf, so a distribution upgrade that rewrites
+# the shipped file cannot silently take this with it.
+[Time]
+# No FallbackNTP on purpose: there is no route to the internet here, and listing
+# public pools would mean every boot spending its timeout resolving names that
+# cannot resolve.
+NTP=${TOPSIDE_IP}
+
+# Windows w32time advertises a root dispersion around ten seconds — it is an
+# honestly mediocre time source and says so — and timesyncd's default ceiling is
+# five, so it discards every reply with "Server has too large root distance" and
+# never syncs at all. Thirty accepts the handheld while still refusing anything
+# wild. Ten seconds of uncertainty is nothing against the drift this prevents.
+RootDistanceMaxSec=30
+EOF
+
+# timesyncd polls on its own schedule, which on a link that has just appeared can be
+# minutes away. The tether coming up is the exact event that makes the time source
+# reachable, so it is the event that should trigger the poll — and timesyncd has no
+# "sync now" but a restart forces one.
+install -d -m 0755 /etc/NetworkManager/dispatcher.d
+cat > /etc/NetworkManager/dispatcher.d/50-neptune-timesync <<EOF
+#!/bin/sh
+[ "\$1" = "${TETHER_IFACE}" ] || exit 0
+case "\$2" in
+  up|dhcp4-change|connectivity-change) systemctl restart systemd-timesyncd || true ;;
+esac
+exit 0
+EOF
+chmod 0755 /etc/NetworkManager/dispatcher.d/50-neptune-timesync
+
+# The stand-in for the RTC this board does not have: remember the time on the way
+# down, restore it on the way up. It does not make the clock RIGHT — only the tether
+# can do that — it stops it being absurd in the window before the handheld appears,
+# which is the window the boot log and the first dive record are written in.
+cat > /usr/local/sbin/neptune-clock <<'EOF'
+#!/bin/sh
+STAMP=/var/lib/neptune-clock
+case "$1" in
+  save)    date -u +%s > "$STAMP" ;;
+  restore) [ -s "$STAMP" ] || exit 0
+           saved=$(cat "$STAMP"); now=$(date -u +%s)
+           # FORWARD ONLY. Moving a clock backwards reorders log lines and breaks
+           # every elapsed-time calculation on the box.
+           [ "$saved" -gt "$now" ] && date -u -s "@$saved" >/dev/null || true ;;
+esac
+exit 0
+EOF
+chmod 0755 /usr/local/sbin/neptune-clock
+
+cat > /etc/systemd/system/neptune-clock.service <<'EOF'
+[Unit]
+Description=Neptune: carry the clock across a reboot (this board has no RTC)
+DefaultDependencies=no
+Before=sysinit.target time-set.target
+Conflicts=shutdown.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/neptune-clock restore
+ExecStop=/usr/local/sbin/neptune-clock save
+[Install]
+WantedBy=sysinit.target
+EOF
+# Stamp periodically too: a sub usually loses power by losing power, not by a clean
+# shutdown, and ExecStop never runs in that case.
+cat > /etc/systemd/system/neptune-clock-save.service <<'EOF'
+[Unit]
+Description=Neptune: stamp the clock now
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/neptune-clock save
+EOF
+cat > /etc/systemd/system/neptune-clock-save.timer <<'EOF'
+[Unit]
+Description=Neptune: stamp the clock periodically so a power cut keeps a recent time
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable neptune-clock.service neptune-clock-save.timer >/dev/null 2>&1 \
+  || warn "could not enable the clock-carry units"
+timedatectl set-ntp true >/dev/null 2>&1 || true
+systemctl restart systemd-timesyncd >/dev/null 2>&1 || true
+
 # ---- 2c. camera WiFi (wlan0 joins the camera AP, never the default route) ---
 # Solves the §1 routing constraint at the source: ipv4.never-default keeps the
 # camera hop off the default route so the tether (eth0) stays the way topside.
