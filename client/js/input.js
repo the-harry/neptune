@@ -256,6 +256,23 @@ function computeInput(dt){
     else if(CONFIG.map.allStopOnExpand){ ni.throttle=0; ni.steer=0; }
   }
 
+  // --- E-STOP, honoured HERE for the same reason the all-stop above is: this is the
+  // object that becomes state.input. eStop() runs in the edge-action pass above, which
+  // is before `ni` exists, so anything it wrote to state.input was overwritten a few
+  // lines later and the console kept transmitting the stick's last demand.
+  //
+  // Held until the controls come back inside the deadzone: after an emergency stop the
+  // operator re-centres before thrust returns. Releasing is an action; a boat resuming
+  // thrust because a stick was never moved is not.
+  if(state.estopHold){
+    if((Math.abs(ni.throttle)+Math.abs(ni.steer)) <= CONFIG.deadzone){
+      state.estopHold=false;
+      LOG.input('e-stop released — controls back at neutral');
+    } else {
+      ni.throttle=0; ni.steer=0;
+    }
+  }
+
   if(ni.ballast!==state.input.ballast) LOG.input('ballast ->', ni.ballast);
   state.input=ni;
 }

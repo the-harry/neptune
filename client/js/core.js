@@ -381,6 +381,10 @@ const state = {
   // threshold on the console wrong while looking entirely plausible.
   batteryV:8.3,
   cpuC:null, ramPct:null, diskGb:null,   // Pi system metrics (from telemetry)
+  // E-STOP LATCH. Set by eStop(), honoured in input.js where `ni` is built, cleared
+  // when the controls return inside the deadzone. It exists because writing zero to
+  // state.input from an edge action does not survive the tick that rebuilds it.
+  estopHold:false,
   left:0, right:0,
   leak:false, simLeak:false,
   // THE LATCHED ALARM CARRIES ITS STAGE. It used to be a bool, which could only ever
