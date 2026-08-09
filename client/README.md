@@ -5,6 +5,12 @@ API consumer: WebRTC video (go2rtc), WebSockets for ROV control + camera
 telemetry, and REST for camera commands/config/files. No framework, no build
 step, no dependencies.
 
+**How this console *speaks* is [`docs/playbook.md`](../docs/playbook.md)** — the states a
+reading can be in and the one look each state has, the colours and what they are allowed to
+mean, the words on the glyphs. That copy is canonical and this file does not restate it; it
+cites the section by number and describes the client-side mechanism behind it. The mechanisms
+below the presentation layer are [`.specs/design.md`](../.specs/design.md).
+
 **This runs on the ROG Ally, not the Pi.** The Pi is backend-only. Double-click
 **[`launch/Neptune.bat`](launch/)** — it makes a desktop shortcut, starts a tiny local
 static server (a secure origin — geolocation and the PWA need one), and opens
@@ -62,83 +68,51 @@ checks backend availability for a dependency it doesn't have.
   second copy, never a precondition.
 - **Client-first services:** address search and geocoding go **browser → Nominatim
   directly** (they need *internet*, not the Pi); map imagery is fetched by the
-  browser and served from the tile cache offline. The old `MAP AREAS: backend
-  unreachable` / `search unavailable` anti-patterns are gone.
-- **Degradation model (`status.js`):** five states, tracked and shown separately
-  because they genuinely fail one at a time — **NET** (internet), **PI** (ROV control
-  link), **VIDEO** (go2rtc feed), **CAM** (WOLFANG control plane), **VEH** (vehicle).
+  browser and served from the tile cache offline. Nothing here ever reports `MAP AREAS:
+  backend unreachable` or `search unavailable` — neither of them needs the Pi to work.
+- **Degradation model (`status.js`):** six subsystems, tracked and shown separately
+  because they genuinely fail one at a time — **INTERNET**, **LINK** (the ROV control
+  socket), **VIDEO** (the go2rtc feed), **CAMERA** (the WOLFANG control plane), **NAV**
+  (the dead-reckoning feed) and **VEHICLE** (armed / idle / fault).
 
-  Three glyphs carry them in the top-left status row: **Wi-Fi**, **the tether**, and
-  **the camera**. Each has a fixed vocabulary, and none of them reports a state on
-  anything weaker than direct evidence.
+  Three glyphs carry the links the operator can actually lose, in the top-left status row:
+  **Wi-Fi**, **the tether** and **the camera**. Every state each can be in, and the shape and
+  colour that state wears, is [`docs/playbook.md` §2](../docs/playbook.md) — *The connection
+  glyphs*. What this client has to get right sits behind them:
 
-  **Wi-Fi** has four states, because "no card", "not joined", "joined but going nowhere"
-  and "working" call for four different reactions:
+  **None of them reports a state on anything weaker than direct evidence.** A socket in
+  `connecting` is not evidence: it reports that state for as long as the handshake has not
+  failed, which against an address that will never answer is indefinitely, so it would sit
+  amber through a whole session spent in the simulator with nothing plugged in. Amber needs a
+  real adapter or a real HTTP answer.
 
-  | Glyph | Colour | State |
-  |---|---|---|
-  | 📶 arcs | green | joined to a network *and* that network reaches the internet |
-  | 📶 arcs | amber, steady | a wireless adapter is present, joined to nothing |
-  | 📶 arcs | amber, **blinking** | joined, but the network has no internet |
-  | 📶 arcs, slashed | red | no wireless adapter on this handheld at all |
-
-  The two ambers are separated by the **blink**, never by colour alone. Wi-Fi is for map
-  imagery and address search; it is never in the path of driving the sub.
-
-  **The tether icon changes SHAPE, not just colour**, because "is the link up" and "is
-  there a vehicle" were never two questions to the operator — they are one question about
-  one cable, and two icons for it was two things to learn. Its red state is about the
-  *cable*: with no wired adapter there is nothing for a sub to be on the end of.
-
-  | Shape | Colour | State |
-  |---|---|---|
-  | 🛥 sub | green | adapter, API and control link all up — a real vehicle is answering |
-  | 🛥 sub | red, pulsing | a **leak** — the sub shape is kept on purpose, so a fault can never be mistaken for a dropout |
-  | 🔌 plug | amber, blinking | the sub answers, but the control link is not up yet |
-  | 🔌 plug | amber, steady | a wired adapter is there with nothing answering on it |
-  | ⚡ cut cable | red | no wired adapter — the simulator is flying this |
-  | 🤖 robot | red | no launcher, so the adapters cannot be checked; it says so rather than guessing |
-
-  **A socket in `connecting` is not evidence** and no longer reaches amber. It reports
-  that state for as long as the handshake has not failed, which against an address that
-  will never answer is indefinitely — so the tether light sat amber through an entire
-  session spent in the simulator with nothing plugged in. Amber needs a real adapter or a
-  real HTTP answer.
-
-  None of this is visible to a browser: it cannot enumerate adapters, and
+  **None of it is visible to a browser** either: a page cannot enumerate adapters, and
   `navigator.onLine` cannot tell a network from the internet. It comes from the launcher's
-  `/__net`. Shape survives being read at a glance, in sunlight, by someone who is also
-  driving — colour alone does not.
+  `/__net`, and with no launcher each glyph falls back to what it can honestly prove and says
+  so in its own tooltip. What counts as evidence for each is
+  [`.specs/design.md` §18](../.specs/design.md).
 
-  **BALLAST is a syringe**, because that is what the tank is: a barrel of water with a
-  plunger. Flat solid flange across a square top, a barrel, and a V tapering to a centred
-  point — no needle, because the water does not leave the sub. The liquid *is* the
-  plunger: it sits in the taper when empty and rises up the barrel as it fills. Wall and
-  liquid are cut from one `clip-path`, so the fill can never square off the taper or spill
-  past the barrel, and the drag maps to the visible barrel rather than the element box so
-  a full tank does not end up part-hidden behind the flange.
+  **Wi-Fi is never in the path of driving the sub.** It is for map imagery and address
+  search, which is why losing it greys nothing on the helm.
 
-  **Drag UP to fill**, the way a syringe is drawn. Down-to-fill made sense while this was
-  a bar — down means go down — and stopped making sense the moment it looked like a
-  syringe: pushing a plunger down expels the liquid. FILL is the top arrow now, EMPTY the
-  bottom one.
+  **BALLAST is drawn as a syringe**, because that is what the tank is: a barrel of water with
+  a plunger, and the liquid *is* the plunger — it sits in the taper when empty and rises up
+  the barrel as it fills. **Drag UP to fill**, the way a syringe works: pushing a plunger down
+  expels the liquid, so FILL is the top arrow and EMPTY the bottom one. Why the wall and the
+  liquid are cut from one `clip-path`, and why the drag maps to the visible barrel rather than
+  the element box, is [`.specs/design.md` §19](../.specs/design.md).
 
-  **One colour means one thing.** The map draws the dive track in twelve depth bands; the
-  ballast fill and the Depth / Pressure / Ballast readouts wear the same bands. In SIM
-  everything is driven by the ballast input, so it all moves together. On a **real dive**
-  depth and pressure are coloured by their own sensor **or not at all** — never from
-  ballast, because a sub descending with a dead depth sensor would then show a deepening
-  colour it never earned. An unchanging cyan number beside a purple tank is the alarm, and
-  painting over it would remove the only symptom.
+  **One colour means one thing.** The dive track, the ballast fill and the Depth / Pressure /
+  Ballast readouts all wear the same depth bands. Which of them may wear them on a real dive
+  and which may not is [`docs/playbook.md` §3](../docs/playbook.md), and it matters here
+  because an unchanging cyan number beside a purple tank is the alarm that says a depth sensor
+  has died — painting over it would remove the only symptom.
 
-  **The eye is the ONLY camera indicator**, and it has three states because there are
-  three genuinely different situations and the next action differs in each:
-
-  | Eye | State | What to do |
-  |---|---|---|
-  | 🟢 open | the Pi is talking to the camera | nothing |
-  | 🟡 open, **blinking** | the camera's radio is there but the Pi is getting nothing from it | wait, or power-cycle the camera |
-  | 🔴 crossed | no radio and no camera | the map is the driving view now |
+  **The eye is the ONLY camera indicator**, and its states are in
+  [`docs/playbook.md` §2](../docs/playbook.md). One glyph carries this and nothing else does:
+  a `CAMERA LINK DEGRADED` banner would sit across the middle of the map — the very view you
+  fly when the camera is what you lost — and a `CAM WIFI` readout would spend top-bar width
+  saying what the eye already says.
 
   **Two observers, because one is not enough.** The Pi's own association (`iwgetid`, via
   `deep.ssid`) says whether *it* is connected — note *association*, not `camera.up`,
@@ -169,21 +143,16 @@ checks backend availability for a dependency it doesn't have.
 
   Only a **positive** sighting counts. No launcher, radio off, or no SSID configured all
   mean *cannot tell*, and cannot-tell is never evidence of absence — the eye falls back
-  to the Pi's own view and nothing is made to look worse than it is. Only the amber state
-  blinks; a permanent blink is just noise.
-
-  This replaced three components saying one thing: a `CAMERA LINK DEGRADED` banner across
-  the middle of the map (over the very view you fly when the camera is what you lost), a
-  `CAM WIFI` readout in the top bar, and the eye.
+  to the Pi's own view and nothing is made to look worse than it is.
 
   Each control declares what it needs in markup (`data-needs="link"`, `"cam"`, …) and
-  **only** the controls owned by a down subsystem are greyed. Losing the ROV link no
-  longer disables the camera buttons, and nothing disables the map, radar, search,
-  saved areas, dive logs, the config panel or the input remapper — those are
-  client-owned and work with the Pi switched off.
-
-  This replaced a single `body.backend-down aside { pointer-events: none }` rule that
-  killed the entire control rail as one blob whenever the Pi was unreachable.
+  **only** the controls owned by a down subsystem are greyed. Losing the ROV link leaves the
+  camera buttons alive, and nothing at all disables the map, radar, search, saved areas, dive
+  logs, the config panel or the input remapper — those are client-owned and work with the Pi
+  switched off. The alternative is one rule for the whole rail
+  (`body.backend-down aside { pointer-events: none }`), which kills it as a single blob the
+  moment the Pi is unreachable. The two markings a gated control can wear, and which one it
+  is entitled to, are [`docs/playbook.md` §5](../docs/playbook.md).
 
   The Pi's own health is polled separately (`/api/system`), so CPU/RAM/disk and both
   network interfaces stay visible even while the vehicle link is down. Reconnection is
@@ -191,9 +160,9 @@ checks backend availability for a dependency it doesn't have.
 - **Blind nav (`map.js`):** when the camera feed drops for more than
   `CONFIG.map.blindAfterMs` (4 s), the map takes over the full screen as the *driving*
   view so the sub can still be flown on instruments instead of a black rectangle. The
-  **camera status icon is an eye** (three states, above), so the operator can never think
-  they are looking at water. That replaced a full-width `BLIND NAV · NO CAMERA` banner:
-  one glyph in the status row says the same thing and gives the screen back.
+  **camera status icon is an eye** (above), so the operator can never think they are looking
+  at water. One glyph in the status row says that, where a full-width `BLIND NAV · NO CAMERA`
+  banner would say the same thing and take the screen to say it.
 
   It is deliberately **not** the expanded map: expanding engages an all-stop and switches
   to north-up, because that is a *planning* view. Blind nav keeps `MAP.expanded === false`,
@@ -205,7 +174,7 @@ checks backend availability for a dependency it doesn't have.
   The video shrinks to a corner tile rather than disappearing: it is how you notice the feed
   return. The tile is a **status indicator, not an exit** — there is no full-screen NO FEED
   state to go back to, and the feed returning is what restores the camera view.
-- **Commands never queue (§4):** a `Command` fails fast and visibly when the
+- **Commands never queue** (architectural rule §4, [`.specs/design.md` §1](../.specs/design.md)): a `Command` fails fast and visibly when the
   backend is down — rejected, logged (`cmd_rejected`), never buffered or replayed
   (a late `throttle 100%` is a hazard). Only inert data (telemetry/log records)
   buffers through an outage and uploads on reconnect.
@@ -218,28 +187,20 @@ each one a reading that can be taken, or admitted to be untakeable, and never fa
 ### A dead sensor and a dropped frame are different words
 
 The link going quiet for a moment and the chip behind a gauge dying are two different
-events that demand two different reactions, so they get two different marks. Reading one
-as the other is how a sub gets flown on a number nobody is taking.
-
-| On screen | Means | What to do |
-|---|---|---|
-| `42.7`, tinted by its band | the sensor is reporting | nothing |
-| **`--`**, dim, whole bar dashes together | **STALE** — the socket went quiet for a moment | nothing; it comes back on its own |
-| **`?`**, amber, **wavy underline** | **CANNOT-TELL** — the chip behind this reading has stopped answering | waiting will not help; go and look at that cable |
-
-The question mark is this console's existing word for *genuinely not known* — the unhomed
-syringe has always used it — and it is deliberately **not** the stale dash. A dash reads
-as a dropped frame, and a dropped frame is something an operator waits out.
+events that demand two different reactions, so they get two different marks — the state
+ladder in [`docs/playbook.md` §1](../docs/playbook.md), with the marks themselves in its §2.
+Reading one as the other is how a sub gets flown on a number nobody is taking, and the two
+things this client has to get right are these:
 
 **The last number is not shown, on purpose.** A reading that has frozen and one that is
 holding steady look identical, and a frozen depth is the more dangerous of the two: the
 sub keeps descending while the console keeps painting the depth it last managed to read.
 
-**Three carriers, so none of them has to be the one that gets noticed:** the mark (`?`),
-the amber, and an alert chip that *names the chip* — `NO DEPTH · SENSOR STOPPED`, with
-"the vehicle names the MS5837 depth/pressure sensor" in the explanation. A blank gauge
-with no cause attached reads as a glitch in the dashboard, and a glitch is something you
-wait out. Naming the part turns it into an errand.
+**Three carriers, so none of them has to be the one that gets noticed:** the mark, the
+colour, and an alert chip that *names the chip* — `NO DEPTH · SENSOR STOPPED`, with "the
+vehicle names the MS5837 depth/pressure sensor" in the explanation. A blank gauge with no
+cause attached reads as a glitch in the dashboard, and a glitch is something you wait out.
+Naming the part turns it into an errand.
 
 Telemetry carries `sensor_faults` — the bare chip names the vehicle uses (`ms5837`,
 `bno085`, `ina219`, `i2c`), the same ones in `docs/hardware.md` and on the wiring
@@ -254,34 +215,29 @@ placeholder happened to be. The bearing shows `?`, the badge reads **`NO BEARING
 the radar stays drawn on the *last angle the compass actually gave* rather than swinging
 to a fresh invented one.
 
-`NO BEARING` is deliberately distinct from its two neighbours, because the operator's
-next action differs in each:
+`NO BEARING` is deliberately distinct from `MAG?`, `GYRO` and `NO COMPASS`, because the
+operator's next action differs in each: a bearing that is suspect, a compass being ignored on
+purpose, no IMU that ever answered (`mag_cal` null, not 0), and one that answered earlier in
+this dive and has stopped. The badges are in [`docs/playbook.md` §2](../docs/playbook.md).
 
-| Badge | Means |
-|---|---|
-| `MAG?` | a compass answered and says it is **uncalibrated** — the bearing is suspect |
-| `GYRO` | the filter is ignoring the compass **on purpose** — deliberate, not broken |
-| `NO COMPASS` | no IMU answered **at all** — `mag_cal` is null, not 0 |
-| `NO BEARING` | one answered **earlier in this dive and has now stopped** |
-
-### The leak has two stages, and only one of them is an emergency
+### The leak ladder, and only one rung is an emergency
 
 One leak flag was answering the wrong question. A film of water in the bilge means *finish
-the pass and come home*; water 2 cm higher means *surface now*. Collapsing those into one
-signal either cries wolf on condensation or says nothing until it is too late.
+the pass and come home*; water 2 cm higher means *surface now*; and *nobody is sampling the
+probes* is a fourth answer again, because `NORMAL` is a positive claim that the hull is dry
+and must never be what the console falls back to. Collapsing any of them either cries wolf on
+condensation or says nothing until it is too late. The four rungs and their drop glyphs are
+[`docs/playbook.md` §2](../docs/playbook.md).
 
-| Stage | Probe | What you see | What to do |
-|---|---|---|---|
-| `NORMAL` | both dry | nothing | — |
-| `WARN` | the probe at the lowest point of the hull | **amber, and the sub glyph changes SHAPE** | advisory, non-blocking: water is collecting, finish up |
-| `FLOOD` | the probe 2 cm above it | the **red pulsing sub** plus a SURFACE prompt | come up |
+The lower probe sits at the lowest point of the hull and the flood probe 2 cm above it. A
+probe has to read wet for five consecutive samples (~0.5 s) before its stage latches, because
+a launch splash and a droplet running down the inside of the hull both touch a probe briefly
+and real ingress does not stop. An alarm nobody believes is one that gets ignored on the day
+it is right.
 
-FLOOD keeps the pulsing-sub shape it has always had, and keeps it **deliberately distinct
-from a link dropout** — a leak is the sub telling you something, a dropout is the sub
-telling you nothing, and they demand opposite actions. A probe has to read wet for five
-consecutive samples (~0.5 s) before its stage latches, because a launch splash and a droplet
-running down the inside of the hull both touch a probe briefly and real ingress does not
-stop. An alarm nobody believes is one that gets ignored on the day it is right.
+A latch does not decay: a probe drying is not evidence the hull is sound. Clearing it is the
+`leak_reset` command, which the vehicle **refuses while a probe is still wet**, and the
+console reports that refusal rather than pretending the press worked.
 
 A dead probe reads *dry* forever, which is the one failure this design would otherwise hide,
 so the pre-dive readiness check reports a probe whose state is physically impossible — flood
@@ -290,31 +246,23 @@ the lower one.
 
 ### The battery is 2S, and 24 V was somebody else's vehicle
 
-The pack is **8.4 V full, 7.4 V nominal**. The old `24.8 V` reading and the `20.0 V` sag
-floor were placeholders from before the pack existed, and a threshold that describes a
-different vehicle does not fail loudly — it reads "full" forever.
+The pack is **8.4 V full, 7.4 V nominal**. A `24.8 V` reading and a `20.0 V` sag floor
+describe a different vehicle, and a threshold that describes a different vehicle does not
+fail loudly — it reads "full" forever.
 
-| Band | Volts | Colour |
-|---|---|---|
-| dive on | ≥ 7.0 | green |
-| head back | < 7.0 | amber — finish the pass |
-| surface | < 6.6 | red, with a SURFACE prompt |
-| hard floor | 6.0 | 3.0 V/cell. Below this the cells are damaged, not merely flat |
-
-The **number is always shown** and the colour comes **only** from these bands — one colour,
-one meaning, same rule as the depth ramp. Nothing in software enforces the floor: safing a
-sub in the middle of a canal trades a damaged pack for an unrecoverable vehicle, so the
-operator is told early and the operator decides.
+The four bands and their volts are [`.specs/design.md` §22](../.specs/design.md), which is
+where the thresholds live because they are vehicle configuration rather than a drawing
+decision. The rule they are read under is [`docs/playbook.md` §3](../docs/playbook.md): the
+**number is always shown** and the colour comes **only** from those bands. Nothing in
+software enforces the floor — safing a sub in the middle of a canal trades a damaged pack for
+an unrecoverable vehicle, so the operator is told early and the operator decides.
 
 ### An estimate never dresses as a measurement
 
-There is a paddlewheel on the hull now, so **SPEED** can be a real number — and when it
-cannot, it says so instead of quietly becoming one.
-
-| `speed_src` | Where the number came from | How it reads |
-|---|---|---|
-| `paddle` / `kf-paddle` | the water-speed sensor | a measurement |
-| `lut` / `kf-lut` | the throttle→speed model | visibly styled as an **estimate** |
+There is a paddlewheel on the hull, so **SPEED** can be a real number — and when it cannot,
+it says so instead of quietly becoming one. `speed_src` says which: `paddle` / `kf-paddle` is
+the water-speed sensor and reads as a measurement, `lut` / `kf-lut` is the throttle→speed
+model and wears the estimate marks from [`docs/playbook.md` §2](../docs/playbook.md).
 
 The wheel cannot sense direction — the sign comes from the throttle — and it stalls below
 about 0.1 m/s, so no pulses is reported as *unknown*, never as `0.0 m/s`. "Slower than I can
@@ -347,20 +295,17 @@ So from power-on until the first homing, the syringe shows an **explicit unknown
 sitting confidently at half is worse than one admitting it does not know, because only one
 of them prompts the action that fixes it.
 
-**Drag up to fill is unchanged**, and so is 0..1 of the stroke; it is now backed by step
-truth rather than a simulated tank. If the plunger reaches the full end stop at a count that
-disagrees with the calibrated span, steps were skipped — the level is now wrong by an unknown
-amount, so `needs re-home` is surfaced rather than swallowed.
+The drag is 0..1 of the stroke and it is backed by step truth, not by a simulated tank. If
+the plunger reaches the full end stop at a count that disagrees with the calibrated span,
+steps were skipped — the level is then wrong by an unknown amount, so `needs re-home` is
+surfaced rather than swallowed.
 
-### The diagnostics cluster — five readings that were being thrown away
+### The diagnostics cluster — five readings that each name a specific failure
 
-Five things the vehicle measures on every frame reached no readout at all. Four of them —
-**turn rate**, **forward acceleration**, **pitch** and **roll** — did not even exist on the
-wire: they lived only on navigation's internal sensor sample, so no amount of client work
-could have shown them. The fifth, **pack current**, was on the wire and was spent inside
-the pack voltage's tooltip (`— drawing 3.1 A`), which an operator on a canal bank in
-sunlight with wet hands is never going to hover. A reading nobody can see is a reading the
-vehicle did not send.
+Five things the vehicle measures on every frame have their own readout, because each of them
+is the witness on a failure no other gauge can see. A reading that exists only inside another
+reading's tooltip is a reading nobody has: an operator on a canal bank in sunlight with wet
+hands is never going to hover.
 
 | Readout | Field | What it tells you |
 |---|---|---|
@@ -383,17 +328,16 @@ perfectly level — which is exactly the shape of every liveness bug this projec
 shipped four times. Both directions are checked, on every readout that has a real zero
 (`client/tests/suites/instrument-cluster.js`).
 
-They obey the same three-way vocabulary as every other reading here, and are held to it by
-test rather than by intention: the **number** when the chip is answering, **`?`** in amber
-with a wavy underline when it has stopped, and **`--`** dim when the frame is merely late.
-All four IMU readings blank *together*, in one frame, with `bno085` named in
-`sensor_faults`; pack current blanks *with* the pack voltage, because they are one chip.
-Six gauges going to `?` at once with one chip named is the signature of a dead IMU — one of
-them alone is not a thing that can happen.
+They obey the same state ladder as every other reading here and are held to it by test rather
+than by intention. All four IMU readings blank *together*, in one frame, with `bno085` named
+in `sensor_faults`; pack current blanks *with* the pack voltage, because they are one chip.
+Six gauges going to cannot-tell at once with one chip named is the signature of a dead IMU —
+one of them alone is not a thing that can happen.
 
-And each carries a written `title` **and** `aria-label` saying in a whole sentence what the
-number means, because a label is not an explanation: `Turn` tells a stranger nothing. That
-is the same bar `demo-mode` holds the rest of the console to.
+Each also carries a written `title` **and** `aria-label` saying in a whole sentence what the
+number means, because a label is not an explanation: `Turn` tells a stranger nothing. That is
+the glyph contract in [`docs/playbook.md` §4](../docs/playbook.md), and `demo-mode` holds the
+whole console to it.
 
 #### Where they sit, and what folds
 
@@ -463,7 +407,7 @@ client/
     │                    #   and FLIGHT_METRICS / HUD_GROUPS — one entry per secondary reading
     ├── wire.js          # wraps fetch + WebSocket once at load, so everything crosses the log
     ├── store.js         # IndexedDB + Cache API: origin, settings, saved areas, dive logs, stills
-    ├── status.js        # the five-subsystem degradation model + /api/system + /__net
+    ├── status.js        # the six-subsystem degradation model + /api/system + /__net
     ├── video.js         # WebRTC player (go2rtc) + NO-FEED / reconfiguring overlay
     ├── net.js           # ROV WebSocket link, telemetry ingest, send/ping/level loops
     ├── commands.js      # discrete commands (arm, stop, surface, magnet, lights)
@@ -481,7 +425,7 @@ client/
     └── main.js          # RAF frame loop + bootstrap + window.NEPTUNE console API
 └── tests/
     ├── run.py           # browser test runner (stdlib + headless Chrome, no deps)
-    ├── cdp.py           # ~130-line CDP WebSocket client, for the screenshots
+    ├── cdp.py           # small CDP WebSocket client, for the screenshots
     ├── baseline/        # committed layout portraits; screenshots/ is gitignored
     └── suites/          # one file per concern; see tests/README.md
 ```
@@ -500,11 +444,10 @@ suite as an extra `<script>`, and runs it in headless Chrome. Nothing is stubbed
 rebuilt, so a passing check passed in a browser rather than in an approximation of one.
 No framework and no dependencies, same as the client.
 
-**No check total appears on this page, and that is deliberate.** This line used to read
-`295 checks`, `tests/README.md` said `249`, `bootstrap.py` said `214` and `.specs/design.md`
-said `286` — four totals for one suite, in circulation simultaneously, each copied forward
-from whichever tree its writer had open. The runner prints the number; nothing else claims
-it. The reasoning, and what may still be written down, is in
+**No check total appears on this page, and that is deliberate.** A count copied out of a
+runner and into prose ages the moment anyone adds an assertion, and the copies then disagree
+with each other and with reality at the same time. The runner prints the number and this page
+does not repeat it. The reasoning, and the one place a number may still be written down, is
 [`tests/README.md` → *Where the numbers live*](tests/README.md).
 
 ### Running the suites on each platform
@@ -597,11 +540,10 @@ front the Pi with HTTPS.)
 ## Navigation & radar
 
 The **camera feed is the primary instrument** and fills the viewport. The map is a
-**GTA-style circular radar** in the bottom-left (`#radar`, ~200 px) — the live
-basemap clipped to a circle, with the heading needle / input vector, `FWD`/`REV`,
-and a rotating **N** drawn on top. `THROTTLE` / `STEER` read out to its right; the
-scale bar sits below and updates with zoom. There is exactly **one** map instance;
-in the collapsed state it lives inside that circle.
+**GTA-style circular radar** in the bottom-left (`#radar`, ~200 px) — the live basemap
+clipped to a circle, with the heading needle / input vector, the four input numbers (below)
+and a rotating **N** drawn on top. The scale bar sits below and updates with zoom. There is
+exactly **one** map instance; in the collapsed state it lives inside that circle.
 
 **Heading-up by default** (`CONFIG.map.headingUp`): the map rotates under a fixed
 forward-pointing sub marker (via the map's bearing / a canvas transform — never a
@@ -670,8 +612,8 @@ The dial shows **four numbers, 0–100, one per compass point** — how hard you
 pushing that way. Each shows only its own half of an axis, so "how much am I giving
 it forward" is read straight off the top rather than decoded from a signed percentage.
 They are dim at rest and lit on the side actually being driven, which keeps the circle
-clean. They replace the old `FWD`/`REV` word labels and the separate THROTTLE/STEER
-text block, which said the same thing twice.
+clean. They are the whole of it: `FWD`/`REV` word labels and a separate THROTTLE/STEER
+text block would say the same thing twice and cost the circle its clarity.
 
 **BLIND NAV does not move the dial.** Same corner, same size, same side as with a live
 feed — only the *map* changes, leaving the circle to fill the screen behind it. Losing
@@ -882,10 +824,11 @@ unknown pad takes one glance.
 
 The map **opens on the sharpest imagery the provider has** rather than a fixed
 metres-per-pixel. Mercator resolution is latitude-dependent, so the scale that lands on
-the deepest tile zoom is computed once a view centre exists (`maxZoomScale`) — at 51.5°N,
-z19 is 0.186 m/px against the old fixed 0.600. It is a one-shot pin: after that the
-operator owns the zoom and nothing moves it under them. Tile selection also **rounds up**
-now (`preferSharpTiles`), so a coarse tile is never upscaled when a finer one exists.
+the deepest tile zoom is computed once a view centre exists (`maxZoomScale`) — at 51.5°N
+that is z19, 0.186 m/px, where a fixed 0.600 would throw most of the resolution away. It is a
+one-shot pin: after that the operator owns the zoom and nothing moves it under them. Tile
+selection also **rounds up** (`preferSharpTiles`), so a coarse tile is never upscaled when a
+finer one exists.
 
 > Which imagery you get is the provider's choice, not ours. Esri World Imagery is a
 > single curated, largely cloud-free mosaic — there is no way for a client to ask for
@@ -902,7 +845,10 @@ during the hold. Both paddles held together is SURFACE; zooming on keydown would
 every attempt at that combo started by zooming the map, and an emergency has to feel
 like one deliberate gesture.
 
-### A submarine can't be paused (§3)
+### A submarine can't be paused
+
+The rule is [`docs/playbook.md` §5](../docs/playbook.md) — the expanded map is an all-stop
+and blind nav is not — and this is what it costs to keep.
 
 GTA freezes the world when the map opens; a sub keeps drifting. So expanding the
 map issues a **safe all-stop** instead (`CONFIG.map.allStopOnExpand`, default on):
@@ -913,7 +859,7 @@ or steer input instantly collapses the map and returns control** — the operato
 never has to find a close button to drive. Set `allStopOnExpand:false` to hold
 station under power in current instead.
 
-### Satellite basemap (§3)
+### Satellite basemap
 
 All map views default to **satellite imagery** — `js/tiles.js` is a tiny zero-dep
 raster XYZ tile layer drawn straight to the radar canvas (no MapLibre needed). It
@@ -933,11 +879,11 @@ Provider is configurable in `config.js` (`tileProvider` / `tileProviders`):
 The **OSM waterway centreline** (the snapping target) is fetched during download and
 drawn as a bright-cored, dark-cased line over the imagery.
 
-**Honest empty states (§6):** no area/origin → compact `NO MAP` / `NO ORIGIN` in the
+**Honest empty states** ([`docs/playbook.md` §6](../docs/playbook.md)): no area/origin → compact `NO MAP` / `NO ORIGIN` in the
 circle (no fake marker), full explanation in the expanded view. The overlay steps
 aside while you're actively tapping an origin or selecting an area.
 
-### Setting the origin (§2)
+### Setting the origin
 
 The fix comes from the **handheld's own browser**. On load with no origin, Neptune
 **auto-requests** `getCurrentPosition` (needs a secure context — which is why the
@@ -949,7 +895,7 @@ your bank on the imagery (which beats WiFi). **North comes from the sub's IMU**
 Manual entry and post-hoc dx/dy/rotation adjustment remain via the ORIGIN tile. The
 phone page `origin.html` also still works.
 
-### Navigate-and-select area download (§4)
+### Navigate-and-select area download
 
 No coordinates to type. Expand the map, **pan/zoom** to the spot (starting from your
 location), press **＋ AREA**: a fixed selection rectangle overlays the viewport and a
@@ -1012,12 +958,13 @@ The tier is a **safety decision, not a display preference**.
 | **2 OPERATIONS** | green rounded square | TOWPATH ACCESS · SLIPWAYS · WHARVES · WINDING HOLES · BRIDGES · MOORINGS · SAFETY GATES · STOP PLANK GROOVES · FEEDERS, plus the two DEPTH layers | on, toggleable |
 | **3 EXTRAS** | lilac dot | AQUEDUCTS · WATER POINTS · BOATER FACILITIES · PUMPING STATIONS · BOATYARDS · MILEPOSTS · NOTICES & STOPPAGES · TOWPATH · DOCKS · BOAT LIFTS · EMBANKMENTS · RESERVOIRS · CANAL LINES · PLANNING BUFFER · ANGLING | **off**, and off means *not asked* |
 
-Seven hazards, eleven operations, fifteen extras — thirty-three rows in one table
-(`CRT_LAYERS`), where the entry *is* the layer: its tier, its mark, its standoff, and the
-sentence explaining it. Adding a layer is adding a row; the panel builds itself from it,
-so a layer cannot ship as a bare glyph with nobody's explanation attached.
+One table (`CRT_LAYERS`), one row per layer, where the entry *is* the layer: its tier, its
+mark, its standoff, and the sentence explaining it. Adding a layer is adding a row; the panel
+builds itself from it, so a layer cannot ship as a bare glyph with nobody's explanation
+attached, and nothing here restates how many rows there are.
 
-**Tier 1 cannot be switched off, and that is the whole design.** These are entrainment,
+**Tier 1 cannot be switched off** — that is [`docs/playbook.md` §6](../docs/playbook.md),
+and it is the whole design. These are entrainment,
 suction, and nowhere-to-retrieve-a-snagged-ROV-from. A toggle on those is a toggle
 somebody turns off once, on the bench, to see the imagery underneath — and then forgets,
 and then dives. `crtSetOn` *refuses* a tier-1 layer and writes a line to the log saying it
@@ -1027,10 +974,9 @@ the panel the word **`ALWAYS`** sits in a dashed **red** box exactly where the s
 be, so the *absence of a control* is itself visible instead of looking like a row that
 failed to render.
 
-Red, and specifically not the console's `--hazard` orange, which it used to share. The chart
-marks went red when the hazard glyphs did, and a panel still labelling them in the same
-orange the console uses for its own alarms made "a lock in the water" and "a download has
-stalled" read as the same class of thing. Tier-1 identity — the `ALWAYS` pill, the HAZARDS
+Red, and specifically **not** the console's own `--hazard` orange. A panel labelling chart
+marks in the same orange the console uses for its own alarms makes "a lock in the water" and
+"a download has stalled" read as the same class of thing. Tier-1 identity — the `ALWAYS` pill, the HAZARDS
 heading, the key glyph — is `--crt-hazard`, paired with `CRT_C.hazard` in `crt.js` so the
 panel and the map cannot disagree about what a hazard looks like. Fetch and network chrome
 stays orange, because a stalled download is a warning about the console, not about the cut.
@@ -1097,25 +1043,25 @@ the vehicle, which is why it is off — *not* that it is unimportant.
 one of those sentences says it is a fixed standoff **this console states, chosen by us** —
 not a surveyed danger area, and the real one may be larger.
 
-A dashed ring used to be drawn at that radius, and it is gone. Around every tier-1 mark it
-put eight overlapping circles across one screen and buried the centreline underneath; a ring
-drawn around everything stops meaning anything, the same way an alarm that fires on a healthy
-console does. Hazards are simply RED now, which survives clutter, and the distance lives in
+**No ring is drawn at that radius**, deliberately. One around every tier-1 mark puts eight
+overlapping circles across a screen and buries the centreline underneath, and a ring drawn
+around everything stops meaning anything — the same way an alarm that fires on a healthy
+console does. Hazards are simply RED, which survives clutter, and the distance lives in
 the words where it can be read as a number instead of estimated from a radius — judge it
 against the scale bar.
 
 ### Nominal versus surveyed depth
 
 Both depth layers use the **same twelve OKLCH bands** as the dive track and the ballast
-tank, so a colour means one thing everywhere on this console. **Only the texture says how
-much the number behind the colour is worth** — which is the same measured-versus-estimated
-distinction the SPEED readout already draws with its tilde and `EST` tag; this is that
-idiom applied to the map.
+tank, so a colour means one thing everywhere on this console, and **the texture is what says
+how much the number behind the colour is worth** — the rule is
+[`docs/playbook.md` §3](../docs/playbook.md), and this is the same measured-versus-estimated
+distinction the SPEED readout draws with its tilde and `EST` tag, applied to the map.
 
-| | Drawn as | The claim |
+| | The claim | Opacity here |
 |---|---|---|
-| **DEPTH — NOMINAL** (`DN`) | washed out (28 %), **hatched**, with a dashed thread down the middle | the *published design depth* — what the channel is **supposed** to be |
-| **DEPTH — SURVEYED** (`DS`) | **solid** (62 %) and **outlined** in white | cells this sub has actually been through |
+| **DEPTH — NOMINAL** (`DN`) | the *published design depth* — what the channel is **supposed** to be | 28 % |
+| **DEPTH — SURVEYED** (`DS`) | cells this sub has actually been through | 62 % |
 
 **Nominal is a claim, and it is drawn as one.** The figure comes from the Trust's
 published guideline draught for the class of waterway (`api/nav/nominal.py`), never from
@@ -1127,10 +1073,10 @@ shallow edges are in no number here. A section the Trust records as not fully na
 painted **grey**, not shallow and not absent: the guideline is withheld rather than a
 confident metre of water invented over it.
 
-The hatch is not decoration and it is deliberately loud. A first pass drew it at a quarter
-of this strength and it simply vanished over satellite imagery, at which point the nominal
-cells looked exactly like surveyed ones with the outline turned off — which is precisely
-the published-versus-measured confusion the texture exists to prevent.
+The hatch is not decoration and it is deliberately loud. Drawn faintly it disappears over
+satellite imagery, at which point a nominal cell looks exactly like a surveyed one with the
+outline turned off — which is precisely the published-versus-measured confusion the texture
+exists to prevent.
 
 **A surveyed cell is a lower bound, not the bed.** Nothing aboard measures the depth of
 the bed — there is no echosounder and no altimeter. What the Pi stores is the deepest the
@@ -1175,10 +1121,13 @@ hazards here"* are three different claims and they must never collapse into one.
 they look identical: a stretch of water with no marks on it. This is the safety-critical
 distinction in the whole feature.
 
-Every row carries a state pill — the glance-level answer — and no two states share a
-colour. The whole sentence behind each one is the row's `title` and `aria-label`, rewritten
-live as the state changes, so it is available on hover and to a screen reader; the pill is
-what has to survive being read while driving.
+The vocabulary those three claims are held to — **absent** means somebody was asked and said
+the data is not there, **cannot tell** means nobody could be asked at all, and *off* means
+not asked — is [`docs/playbook.md` §2](../docs/playbook.md), under *Chart layers*. The pills
+below are this panel's rendering of it, and no two states share a colour. The whole sentence
+behind each one is the row's `title` and `aria-label`, rewritten live as the state changes,
+so it is available on hover and to a screen reader; the pill is what has to survive being
+read while driving.
 
 | Pill | Colour | What happened | What to do |
 |---|---|---|---|
@@ -1231,14 +1180,12 @@ DATA`** and `CHART GAPS` and keeps the colour. The panel is where the row-by-row
 and the badge's own explanation ends with the sentence the whole feature exists for: **do
 not read the absence of a mark as clear water.**
 
-This is also why there is exactly **one** weir row. There used to be two — `weirs` and an
-`overflow_weirs` beside it — and the second was backed by nothing, because the Trust
-publishes one weir service. A tier-1 row with no file behind it can only ever report
-ABSENT, so a complete, correctly-downloaded card lit `HAZARD LAYERS ABSENT (1)` — the
-loudest alarm on this map — on every single dive. An alarm that fires on a healthy vehicle
-is an alarm that gets ignored, and the one it teaches you to ignore is the one that means
-you are missing hazard data for this water. The relief-weir wording folded into the
-remaining row; the names a relief weir could arrive under stay as aliases.
+This is also why there is exactly **one** weir row, and why a second one would be a bug: the
+Trust publishes one weir service, a tier-1 row with no file behind it can only ever report
+ABSENT, and a row like that lights `HAZARD LAYERS ABSENT (1)` — the loudest alarm on this map
+— on a complete, correctly-downloaded card, every single dive. The names a relief weir could
+arrive under are aliases on that one row. The reasoning is
+[`.specs/design.md` §25.9](../.specs/design.md).
 
 **One file, one row**, for the same reason. The Trust publishes near-duplicate services —
 five of them are called Sluices, and they answer 886, 892, 893 and 937 features for what
@@ -1320,30 +1267,22 @@ canal-side network to fix this from.
 
 ## Reduced GPU rendering (default ON)
 
-The handheld froze repeatedly with `0x133 DPC_WATCHDOG_VIOLATION`. The crash dump names it:
-
-```
-Failure.Bucket : 0x133_ISR_amdkmdag!unknown_function
-amdkmdag.sys   : 32.0.23027.3001      (AMD Radeon kernel display driver)
-```
-
-The AMD display driver overruns in its interrupt handler. **Nothing in this client can repair
-that** - the fix is an AMD driver update or rollback - but it is a load-triggered fault, and
-this dashboard was asking for a lot: two permanently visible full-size
-`backdrop-filter: blur(16px)` surfaces (the instrument bar and the control rail) composited
-over a live H.264 video every frame, plus a full-width scan line animating forever above it.
+The handheld has an **unresolved kernel fault in the AMD display driver** — the bugcheck, the
+dump, and why it is not this codebase's to fix are
+[`.specs/design.md` §10](../.specs/design.md). It is load-triggered, and this dashboard is in
+a position to ask for a lot: two permanently visible full-size `backdrop-filter: blur(16px)`
+surfaces (the instrument bar and the control rail) composited over a live H.264 video every
+frame, plus a full-width scan line animating forever above it.
 
 Continuous blur over video is the most expensive thing a page can ask of a compositor, and on
-a dark theme it is almost invisible - raising panel opacity looks the same and costs nothing
+a dark theme it is almost invisible — raising panel opacity looks the same and costs nothing
 per frame. `CONFIG.ui.reduceGpu` (default `true`) drops the blurs, the scan line and the
 full-viewport gradient. Set it `false` to get the glass back on hardware that can take it.
 
-There were **no `4101` display-timeout events at all**, which is why "GPU" went unconfirmed
-for so long: it never TDR'd, it went straight to a bugcheck - so raising `TdrDelay` was never
-going to help.
-
-`launch/crash-diagnostics.ps1` now runs the dump analysis itself, so the next bugcheck is one
-command rather than an afternoon.
+This does not fix the driver; the machine has bugchecked with the dashboard closed. It
+removes this application as a contributor, which is the only part that was ours.
+`launch/crash-diagnostics.ps1` runs the dump analysis, so the next bugcheck is one command
+rather than an afternoon.
 
 ## LOGS - reading the log without leaving the dive
 
@@ -1443,7 +1382,7 @@ on a card that has to be physically recovered. If the camera is flat, absent or
 unreachable there is no copy at all. So **PIC also grabs what the operator is looking
 at**, topside, into IndexedDB *and* as a file download.
 
-The two halves are independent (§3): a dead camera does not stop the local still, and a
+The two halves are independent (architectural rule §3 — subsystems fail alone): a dead camera does not stop the local still, and a
 failed local save does not stop the camera. The toast reports each separately and never
 claims a copy that was not made.
 
@@ -1512,27 +1451,31 @@ afterwards to locate faults neither log pins down alone ("it didn't respond" =
 command never sent / never arrived / ack lost; "video froze" while the encoder was
 healthy = tether, not camera; a bad manoeuvre made on stale data).
 
-- **Session (§1):** adopts the Pi's `session_id`/`pi_boot_id` from `GET /api/session`
+- **Session:** adopts the Pi's `session_id`/`pi_boot_id` from `GET /api/session`
   on connect; a Pi reboot starts a fresh client file.
-- **Clock sync (§2):** an SNTP-style `t1/t2/t3/t4` exchange rides the existing WS
+- **Clock sync:** an SNTP-style `t1/t2/t3/t4` exchange rides the existing WS
   ping every second → `rtt`/`offset` logged as `clock_sync` (and `rtt` feeds the
   LINK readout). Client timestamps are **always** the client's own monotonic time —
   never rewritten; correction happens only in analysis.
-- **Correlation IDs (§3):** every discrete command gets a UUID at operator intent
+- **Correlation IDs:** every discrete command gets a UUID at operator intent
   (`commands.js`), carried through the socket and echoed in the Pi's `ack`, so the
   full 8-stage lifecycle (`cmd_intent→send→recv→validate→apply→ack_send→ack_recv→
   confirm`) ties together across both logs.
-- **Client-only signals (§4):** 1 Hz WebRTC receiver stats, 10 Hz raw gamepad,
+- **Client-only signals:** 1 Hz WebRTC receiver stats, 10 Hz raw gamepad,
   browser/visibility/error events, environment, and compact `tlm_rx` sequence
   ranges + gaps. `max_age_ms` (age of the newest telemetry at render) drives a
   **STALE DATA** HUD badge over `CONFIG.recorder.stalenessMs`.
-- **Durability (§5):** an IndexedDB ring buffer (oldest-out) written immediately;
+- **Durability:** an IndexedDB ring buffer (oldest-out) written immediately;
   uploaded to `POST /api/clientlog` every 5 s / 200 events, deleted only after the
   Pi confirms; backlog flushes first on reconnect; `up_lag_ms` tags how long each
   record waited; exponential backoff + a 64 kbps cap keep it off the tether;
-  `beforeunload` does a `sendBeacon` flush. **CONFIG → BLACKBOX → EXPORT LOG**
-  downloads the whole ring as JSONL even with the link fully down; **MARK EVENT**
-  drops a bookmark.
+  `beforeunload` does a `sendBeacon` flush. None of it needs the link: the ring survives a
+  fully disconnected session and uploads when there is somewhere to upload to.
+
+There is no EXPORT LOG or MARK EVENT button. CONFIG carries one diagnostics control, **LOGS**
+— the session log writes itself to disk as it happens, so there is nothing to remember to
+save — and bookmarking stays on the console API, because removing a control should not
+silently remove the capability.
 
 Console: `NEPTUNE.mark('note')`, `NEPTUNE.sessionLog()`, `NEPTUNE.REC`.
 
