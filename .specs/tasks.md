@@ -7,6 +7,69 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 
 ---
 
+## The console can be trusted about a hull that is only half built
+
+- 🧪 **A console that stopped reading disabled the failsafe.** `ConnectionManager`
+  awaited each client in turn on the control loop's own task, and an awaited send blocks the
+  moment a transport stops accepting bytes. So one console that stopped reading stalled the
+  whole loop — telemetry to every other client, the blackbox journal, and `rov.watchdog()`
+  with them. Driven at full throttle over a real socket with the control frames then stopped,
+  the watchdog timeout passed and the thrusters stayed at full. No hostile actor is needed: a
+  suspended browser tab or a handheld swapping wifi does it. Each client now owns a bounded
+  queue and its own writer task; telemetry frames are droppable because a frame delivered
+  four seconds late is a lie about the present, and alarms are not.
+
+- 🧪 **A part that was never fitted was reported as a part that broke.** The vehicle
+  had always known the difference — `DeviceHealth.answered_ever()` is what stops the boot log
+  announcing a recovery on every first good read — and it stopped at that class's edge. A
+  hull with no IMU screwed to it read `NO BEARING`, *"the compass answered earlier in this
+  dive and has now stopped"*, and sent its owner to check a cable that had never existed.
+  `NO COMPASS` was unreachable. `sensors_absent` now carries the distinction, a strict subset
+  of `sensor_faults` in the same vocabulary. Absence buys silence and nothing else: the
+  reading behind it stays null. Only leaf parts are ever absent — a bus that will not open is
+  an errand with a fix, so it stands in front of every chip behind it. The leak ladder is
+  exempt on purpose: *nobody is watching the hull* is never a fact that asks nothing of
+  anybody.
+
+- ✅ **A bring-up card per instrument, and the leak card walked on the vehicle.** The first
+  real bring-up attempt was abandoned, and the reasons were all findable afterwards: the book
+  recommended a wet finger, which cannot work against the pull-up; a latched alarm could only
+  be cleared by restarting the service; and powering up with a wet probe pinned the console
+  to cannot-tell for the session. Each instrument now has a card giving pins, flags, what the
+  dashboard shows at every stage, a Pi-side trick that drives the input before the hardware
+  exists, and what *cannot* be distinguished — a bare digital input cannot tell dry from
+  disconnected, and finding that out costs an evening. The leak card was walked on the real
+  vehicle and written from what happened, including the sentence it must lead with: with
+  nothing on the pins at all, the console reports the hull `NORMAL`.
+
+- 🧪 **Three of those cards were wrong in the same way, and the gate caught it by
+  following one.** They promised that a down I²C bus appears in `sensors_absent`, so a
+  half-built vehicle would be quiet. It does not and must not. On the vehicle as it stands
+  today that card would have produced red chips where it promised silence, and a reader
+  would reasonably conclude the software was broken.
+
+- ✅ **The vehicle had no clock.** No RTC, no battery, no route to the internet — so it booted
+  to whatever its filesystem implied and stayed there, days out, misdating every dive record
+  and making any figure derived from both machines' clocks meaningless. The handheld now
+  serves NTP over the tether and the sub asks on connection; both halves are in setup rather
+  than being remembered. `RootDistanceMaxSec` had to be raised, because Windows advertises an
+  honestly mediocre root dispersion and `timesyncd` was discarding every valid reply.
+
+- 🧪 **Nothing exercised the sockets, and nothing measured what the tests touched.**
+  Both runners now report coverage as a dev-only tool that is absent on the vehicle by
+  design. A network suite drives the real transports with a hand-rolled client, because a
+  well-behaved library cannot send the malformed frames worth proving. An integration suite
+  kills and revives every part the mock can break and asserts the wire goes to cannot-tell
+  rather than to a plausible lookalike. A latency suite times pin to socket and fails against
+  a budget set from the measurement.
+
+- ⚠️ **Open, and named rather than quietly carried.** `signal`, `cpu_c`, `ram_pct` and
+  `disk_gb` reach the client and are drawn by nothing, and their ingest guards leave the last
+  value in place on a null — the shape that was fixed for depth, heading and battery.
+  `headingFlag()` applies two of the three tests `sensed()` applies, so a badge could describe
+  a number that is not on screen; unreachable today only because one handle nulls both, which
+  is now asserted every frame. `api/blackbox/rovlog.py` has no coverage in either suite.
+
 ## A map of water nobody had surveyed, drawn as though somebody had
 
 - 🧪 **"There are no hazards here" and "nobody downloaded the hazards for here" were the
