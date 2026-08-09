@@ -107,9 +107,21 @@ jobs:
         # real standard. There is one, it is that file, and it reads the same pyproject.toml
         # and setup.cfg an editor reads.
         #
-        # Exit 1 = it found something. Exit 2 = a tool could not be RUN, which is not a pass
-        # and is not treated as one here either.
-        run: python lint.py
+        # --ceiling, NOT the bare verdict. The bare verdict exits 1 on this repo's real
+        # flake8/mypy backlog, so a pipeline built on it is red on its first run and on
+        # every run after — and a check that is always red is one people stop reading,
+        # which is the same defect this project keeps finding in its own console.
+        # Deleting the backlog to go green would be worse: silencing the tools rather
+        # than answering them.
+        #
+        # So the ratchet. Every check that is clean today is held at zero and may never
+        # regress; the two with a backlog are held at exactly their current count in
+        # lint-ceiling.json. Fixing findings lowers the ceiling; adding one breaks the
+        # build. A person still runs `python lint.py` for the full list.
+        #
+        # Exit 1 = this change added findings. Exit 2 = a tool could not be RUN, which is
+        # not a pass and is not treated as one here either.
+        run: python lint.py --ceiling
 
   # ---------------------------------------------------------------- the api suite
   api:

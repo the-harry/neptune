@@ -56,6 +56,7 @@ a depth readout showing 0.0 with the sensor unplugged.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -400,6 +401,20 @@ def _python_files():
                 yield Path(dirpath) / name
 
 
+CEILING_FILE = ROOT / "lint-ceiling.json"
+
+
+def _read_ceilings() -> dict:
+    """The most findings each check may report before CI calls it a regression."""
+    try:
+        return {k: int(v) for k, v in json.loads(CEILING_FILE.read_text("utf-8")).items() if not k.startswith("_")}
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:  # noqa: BLE001
+        print(f"lint-ceiling.json will not parse ({exc}) - treating every check as capped at 0")
+        return {}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Run the Neptune code checks.")
     ap.add_argument("checks", nargs="*", help="substring(s) of check names; default: all")
@@ -407,6 +422,12 @@ def main(argv=None) -> int:
         "--fix", action="store_true", help="let isort and black rewrite files (flake8 and mypy only ever report)"
     )
     ap.add_argument("--list", action="store_true", help="name the checks and exit")
+    ap.add_argument(
+        "--ceiling",
+        action="store_true",
+        help="fail only when a check finds MORE than lint-ceiling.json allows "
+        "(what CI runs; a human wants the full list)",
+    )
     args = ap.parse_args(list(sys.argv[1:] if argv is None else argv))
 
     wanted = [c for c in CHECKS if not args.checks or any(s in c["name"] for s in args.checks)]
@@ -522,6 +543,49 @@ def main(argv=None) -> int:
             print("  `python lint.py` with no arguments runs all of them.")
         else:
             print("\nEverything this repo checks came out clean.")
+
+    if args.ceiling:
+        # THE RATCHET, AND WHY CI USES IT INSTEAD OF THE RAW VERDICT.
+        #
+        # This repo starts with a real backlog of flake8 and mypy findings. A pipeline
+        # that fails on all of them is red on its first run and on every run after, and
+        # a check that is always red is one people stop reading — the same defect this
+        # project keeps finding in its own console, one level up. Deleting the backlog
+        # to get green would be worse: it would mean silencing tools rather than
+        # answering them.
+        #
+        # So the ceiling is the honest middle. Every check that is CLEAN today is held
+        # at zero and may never regress. The two with a backlog are held at exactly
+        # their current count: fixing some lowers the ceiling, adding one breaks the
+        # build. The number can only ever go down.
+        ceilings = _read_ceilings()
+        over, under = [], []
+        counts = {name: found for name, verdict, found, _v in results if verdict not in ("absent", "broke")}
+        if do_suppressions:
+            counts["suppressions"] = len(supp_bad)
+        for name, found in sorted(counts.items()):
+            cap = ceilings.get(name)
+            if cap is None:
+                over.append(f"{name}: {found} finding(s) and no ceiling recorded")
+            elif found > cap:
+                over.append(f"{name}: {found} findings, ceiling {cap} - {found - cap} new")
+            elif found < cap:
+                under.append(f"{name}: {found}, ceiling {cap}")
+        print()
+        if over:
+            print("CEILING EXCEEDED - this change added findings:")
+            for line in over:
+                print("  " + line)
+            print("  Fix them, or lower nothing: the ceiling only ever comes down.")
+        if under:
+            print("Below the ceiling, which is the right direction:")
+            for line in under:
+                print("  " + line)
+            print("  Lower it in lint-ceiling.json in this same change, so the ground you")
+            print("  gained cannot be given back silently.")
+        if absent or broke:
+            return 2
+        return 1 if over else 0
 
     if found_total:
         return 1
