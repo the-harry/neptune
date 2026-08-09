@@ -14,6 +14,7 @@ import contextlib
 import json
 import logging
 import time
+from collections import deque
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,34 +41,119 @@ logging.basicConfig(
 log = logging.getLogger("neptune")
 
 
+# HOW MANY FRAMES A CLIENT MAY FALL BEHIND BEFORE IT STARTS LOSING THEM. At
+# telemetry_hz this is a few seconds of backlog — long enough to ride out a garbage
+# collection or a repaint, far too short to hide a client that has stopped reading.
+OUT_QUEUE_MAX = 64
+
+
+class _Subscriber:
+    """One attached socket, and the frames waiting to go down it.
+
+    Each client owns a queue and a writer task, so a socket that will not accept
+    bytes waits on ITS OWN task and nobody else's.
+    """
+
+    __slots__ = ("ws", "out", "wake", "task", "dropped")
+
+    def __init__(self, ws: WebSocket) -> None:
+        self.ws = ws
+        # (droppable, text). A deque rather than asyncio.Queue because the eviction
+        # rule is "drop the oldest DROPPABLE frame", which needs to look inside.
+        self.out: deque[tuple[bool, str]] = deque()
+        self.wake = asyncio.Event()
+        self.task: asyncio.Task | None = None
+        self.dropped = 0
+
+
 class ConnectionManager:
+    """Fan telemetry out to attached consoles WITHOUT letting any of them hold the loop.
+
+    THIS USED TO AWAIT EACH CLIENT IN TURN, on the control loop's own task, and that
+    was a safety defect rather than a performance one. An awaited `send_text` blocks as
+    soon as the transport stops accepting bytes, so ONE console that stopped reading
+    stalled the whole loop: telemetry to every other client stopped, the blackbox
+    journal stopped, and `rov.watchdog()` stopped with it. Measured on a real socket:
+    thrusters driven to full, control frames stopped, the watchdog timeout elapsed —
+    and the failsafe never fired, because the loop that would have fired it was parked
+    inside a send to somebody's stalled socket. A client that simply stops reading
+    disabled the failsafe.
+
+    It needs no hostile actor. A browser tab that gets suspended, or a handheld that
+    swaps wifi, produces exactly this.
+
+    So the loop now hands frames to per-client queues and never blocks. A console that
+    cannot keep up loses FRAMES, which is the right thing to lose: telemetry is a
+    statement about now, and a frame delivered four seconds late is not a late truth,
+    it is a lie about the present. Alarms are exempt — see publish().
+    """
+
     def __init__(self) -> None:
-        self._clients: set[WebSocket] = set()
+        self._subs: dict[WebSocket, _Subscriber] = {}
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
-        self._clients.add(ws)
-        log.info("client connected (%d total)", len(self._clients))
+        sub = _Subscriber(ws)
+        self._subs[ws] = sub
+        sub.task = asyncio.create_task(self._writer(sub), name="neptune-ws-out")
+        log.info("client connected (%d total)", len(self._subs))
 
     def disconnect(self, ws: WebSocket) -> None:
-        self._clients.discard(ws)
-        log.info("client disconnected (%d total)", len(self._clients))
-
-    async def broadcast(self, text: str) -> None:
-        if not self._clients:
+        sub = self._subs.pop(ws, None)
+        if sub is None:
             return
-        dead = []
-        for ws in list(self._clients):
-            try:
-                await ws.send_text(text)
-            except Exception:  # noqa: BLE001 — drop broken sockets
-                dead.append(ws)
-        for ws in dead:
-            self.disconnect(ws)
+        if sub.task is not None:
+            sub.task.cancel()
+        if sub.dropped:
+            # Not silent. A console that lost frames was shown a thinner picture than
+            # the vehicle sent, and that belongs in the boat's log.
+            log.warning("client disconnected having dropped %d frame(s) it could not "
+                        "keep up with (%d total)", sub.dropped, len(self._subs))
+        else:
+            log.info("client disconnected (%d total)", len(self._subs))
+
+    async def broadcast(self, text: str, *, droppable: bool = True) -> None:
+        """Queue one frame for every attached client. NEVER awaits a socket.
+
+        Still `async` so callers read unchanged, but nothing in here yields to a
+        transport — that property is the whole point and must not be given back.
+        """
+        for sub in list(self._subs.values()):
+            if len(sub.out) >= OUT_QUEUE_MAX:
+                # Evict the OLDEST droppable frame. Oldest, because the stalest
+                # telemetry is the least worth delivering.
+                for i, (is_droppable, _) in enumerate(sub.out):
+                    if is_droppable:
+                        del sub.out[i]
+                        sub.dropped += 1
+                        break
+                else:
+                    # A full queue of things that may not be dropped means this client
+                    # is not coming back. Dropping it is better than growing forever.
+                    log.warning("client backlog is entirely undroppable — letting it go")
+                    self.disconnect(sub.ws)
+                    continue
+            sub.out.append((droppable, text))
+            sub.wake.set()
+
+    async def _writer(self, sub: _Subscriber) -> None:
+        """Drain one client's queue. Blocking here costs only this client."""
+        try:
+            while True:
+                if not sub.out:
+                    sub.wake.clear()
+                    await sub.wake.wait()
+                    continue
+                _, text = sub.out.popleft()
+                await sub.ws.send_text(text)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — a broken socket is not this loop's problem
+            self.disconnect(sub.ws)
 
     @property
     def count(self) -> int:
-        return len(self._clients)
+        return len(self._subs)
 
 
 def battery_band(v: float | None) -> str:
@@ -594,7 +680,10 @@ async def _control_loop(app: FastAPI) -> None:
                         name, tel.leak_state, tel.leak_probe_fault)
             bb.event("alarm", {"name": name, "leak_state": tel.leak_state,
                                "probe_fault": tel.leak_probe_fault, "depth": tel.depth})
-            await mgr.broadcast(Alarm(name=name).model_dump_json())
+            # UNDROPPABLE. Telemetry is a statement about now and the stale ones are
+            # worth losing; an alarm is a statement that something HAPPENED, and a
+            # console that is behind is exactly the one that has not heard yet.
+            await mgr.broadcast(Alarm(name=name).model_dump_json(), droppable=False)
 
         journal.record(bb, tel, now, nav)
 
