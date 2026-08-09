@@ -717,6 +717,48 @@ function faultCause(kind, faults){
    old to report faults sends an empty list and nothing here fires; the null on the
    reading itself remains the primary and sufficient evidence. */
 function faultedNow(kind, faults){ return faultChips(kind, faults).length > 0; }
+
+/* ---- ABSENT: THE PART THAT WAS NEVER FITTED -------------------------------
+   WHICH OF THE NAMED FAULTS ARE PARTS THIS HULL HAS NEVER HAD (api/protocol.py
+   `sensors_absent`, a strict subset of `sensor_faults` in the same vocabulary).
+
+   Read straight off the frame the ingest already keeps rather than mirrored into a
+   field of its own, and that is deliberate: `state.sensorFaults` and this list are one
+   verdict the vehicle read twice in one frame, and two independently-written copies can
+   go out of step by a frame - which would put a fault chip beside a readout that has
+   just decided nothing is wrong, or worse, silence a chip that has just died. One
+   source, one instant, no way to disagree.
+
+   THE DISTINCTION IS THE OPERATOR'S NEXT MOVE, which is the only reason it is worth a
+   field. A compass that answered and stopped is an errand: go and look at that cable. A
+   compass that has never answered is not an errand at all - this vehicle is being fitted
+   one instrument at a time, so "not wired yet" is the normal state of most of it for
+   weeks, and a console that reports every one of them as a part that broke is a console
+   whose alert rail gets skipped. docs/playbook.md §1 calls that state ABSENT and holds
+   it to one rule: the readout does not accuse anyone.
+
+   A hull too old to send the field, and every bench frame, yield [] - so nothing is
+   absent, every fault reads as a part that stopped, and the console behaves exactly as
+   it did before this existed. That default is the loud one on purpose: calling a real
+   failure "never fitted" hides it, while calling an absence a failure only costs a
+   wasted look. */
+function absentSensors(){
+  const t = state.realTel;
+  if(!t || !vehicleRecent()) return [];
+  return normalizeFaults(t.sensors_absent);
+}
+/* IS THIS READING ABSENT RATHER THAN BROKEN? True only when the vehicle names at least
+   one part behind it AND names every one of them as never-fitted. The conjunction is
+   the point: an IMU that was never fitted on a bus that DIED is a bus fault, and one
+   part on that reading genuinely stopped, so the reading is cannot-tell and the rail
+   says so. Silence is only correct when there is nothing on this reading's path that
+   ever worked. */
+function sensorAbsent(kind, faults, absent){
+  const chips = faultChips(kind, faults);
+  if(!chips.length) return false;
+  const gone = absent || absentSensors();
+  return chips.every(c=>gone.indexOf(c) >= 0);
+}
 /* Faults the screen has NOT already accounted for by blanking something.
 
    Every name the vehicle sends has to be readable somewhere, or the fix is half a fix:
@@ -773,14 +815,24 @@ const HEADING_FLAGS = {
          title:'GYRO ONLY, AND THE COMPASS IS UNCALIBRATED - the filter is coasting on the spin '
              + 'sensor on purpose, and the compass it would fall back to is not trustworthy '
              + 'either (mag_cal below 2). Treat the bearing as approximate.' },
-  // Reuses .suspect (amber), the same paint as MAG?, because both mean the same thing
-  // to the operator's hands - do not steer on this number - and a fourth colour on an
-  // 8px badge teaches nothing. The LABEL is what separates them.
+  // THE COMPASS THAT WAS NEVER FITTED - ABSENT, not broken, and the badge that could
+  // not be reached until the vehicle learned to say which. Its old trigger was a
+  // heading WITH a null mag_cal, which is a frame api/rov.py cannot build: both come
+  // off one BNO085 handle and they null together, so every hull with no compass landed
+  // on NO BEARING and was told a part it has never owned had just stopped.
+  //
+  // Amber and .suspect like its neighbours - the map's rotation and this bearing are
+  // still not tracking anything, and that is worth the "look closer" colour - but there
+  // is NO ERRAND in the words and no fault chip on the rail beside it, because nothing
+  // has failed. The number itself does not wear the cannot-tell question mark either:
+  // render.js draws it as the ABSENT rule (docs/playbook.md §1).
   nomag:{ label:'NO COMPASS', cls:'suspect',
-         title:'NO COMPASS - no IMU answered at all (mag_cal is null, which the protocol keeps '
-             + 'distinct from a fitted compass reporting "uncalibrated"). Nothing is measuring '
-             + 'which way the sub is pointing, so this bearing and the map’s rotation are not '
-             + 'tracking a sensor. Check the IMU wiring before believing either.' },
+         title:'NO COMPASS - this vehicle has no compass fitted. The IMU has not answered '
+             + 'once since power-on and the sub reports it as absent rather than as a part '
+             + 'that stopped, so nothing has broken and there is nothing to go and look at. '
+             + 'Nothing is measuring which way the sub is pointing, so this bearing and the '
+             + 'map’s rotation are not tracking a sensor: steer by what you can see. Fit the '
+             + 'IMU and this fills in by itself.' },
   // THE COMPASS THAT WAS HERE AND STOPPED. Amber like its two neighbours, for the same
   // stated reason - it means the same thing to the operator's hands - and the LABEL is
   // what separates it. It does not need a mark of its own on the number, because there
@@ -823,12 +875,30 @@ function headingFlag(){
   // second), so the badge and the bearing can never disagree about whether there IS a
   // bearing — a flag that said MAG? over a question mark would be describing a number
   // that is not on screen.
-  if(state.heading == null || !sensorFresh(state.headingAt)) return 'dead';
+  //
+  // AND WHEN THERE IS NO BEARING, THE NEXT QUESTION IS WHETHER THERE WAS EVER GOING TO
+  // BE ONE. Same null, two different facts, and the operator acts on them differently:
+  // a compass that answered and stopped is an errand (NO BEARING - go and look at that
+  // cable), a compass that has never answered is this vehicle not having one yet (NO
+  // COMPASS - nothing to do). The vehicle is the only layer that can tell them apart and
+  // now says so on the wire; before it did, every unfitted instrument on a half-built
+  // hull was reported as a part that had just broken, which is most of this boat for
+  // weeks at a time. A hull that does not send the field lands on 'dead' exactly as it
+  // always did - the loud answer is the safe one to be wrong with.
+  if(state.heading == null || !sensorFresh(state.headingAt))
+    return sensorAbsent('heading') ? 'nomag' : 'dead';
   // NO IMU outranks GYRO, and that ordering is the whole fix. On a hull with no IMU the
   // filter reports gyro_only:true for a trivial reason - it reads mag_cal as 0 and stops
   // trusting it - so the old code showed GYRO: "deliberate, not a fault, coasting on the
   // spin sensor". There is no spin sensor either. That badge promised a bearing that
   // decays gracefully when in fact nothing is measuring heading at all.
+  //
+  // KEPT, THOUGH IT IS NO LONGER THE ROUTE TO NO COMPASS - the branch above is, because
+  // this one describes a frame api/rov.py cannot build (heading and mag_cal come off one
+  // BNO085 handle and null together, which is exactly why NO COMPASS was unreachable).
+  // It stands as the guard for a hull that does something else: any vehicle that ever
+  // produces a bearing with no calibration behind it is not to be badged "calibrated and
+  // in use", and a blank badge is that claim.
   if(state.magCal == null) return 'nomag';
   const suspect = (typeof state.magCal === 'number') && state.magCal < 2;
   // === TRUE, not truthy. gyro_only is tri-state now and `!!null` is false, which is

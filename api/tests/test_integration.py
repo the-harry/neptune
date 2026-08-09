@@ -633,10 +633,22 @@ PINS: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "core.js",
-        "a null bearing outranks every other heading mark",
-        "if(state.heading == null || !sensorFresh(state.headingAt)) return 'dead';",
+        "a null bearing outranks every other heading mark, and a compass that was never "
+        "fitted is NO COMPASS rather than a bearing that has stopped",
+        "if(state.heading == null || !sensorFresh(state.headingAt)) "
+        "return sensorAbsent('heading') ? 'nomag' : 'dead';",
     ),
     ("core.js", "a null mag_cal is NO COMPASS, not an uncalibrated one", "if(state.magCal == null) return 'nomag';"),
+    (
+        "core.js",
+        "absent is read off the same frame as the fault list, never mirrored into state",
+        "return normalizeFaults(t.sensors_absent);",
+    ),
+    (
+        "core.js",
+        "a reading is absent only when EVERY part behind it was never fitted",
+        "return chips.every(c=>gone.indexOf(c) >= 0);",
+    ),
     (
         "core.js",
         "which chips stand behind a reading decides whether it is vetoed",
@@ -656,8 +668,13 @@ PINS: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "render.js",
-        "cannot-tell is the question mark and not the stale dash",
-        "const dead = !stale && val==null; setText(el, dead ? '?' : text, stale);",
+        "a blank is ABSENT only when the hull says the part was never fitted",
+        "const gone = missing && !deadWhy && sensorAbsent(kind, v.sensorFaults, v.sensorsAbsent);",
+    ),
+    (
+        "render.js",
+        "cannot-tell is the question mark, absent is the grey rule, and neither is the stale dash",
+        "setText(el, dead ? '?' : gone ? '—' : text, stale);",
     ),
     (
         "render.js",
@@ -677,15 +694,24 @@ PINS: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "render.js",
-        "one dead MS5837 is one errand, not two",
-        "if(v.depth==null && v.pressure==null) gone.push(['DEPTH & PRESSURE','depth']);",
+        "one dead MS5837 is one errand, not two — and a depth sensor that was never fitted is none",
+        "if(v.depth==null && v.pressure==null && !absent('depth')) gone.push(['DEPTH & PRESSURE','depth']);",
     ),
-    ("render.js", "a blank bearing raises a chip of its own", "if(v.heading==null) gone.push(['BEARING','heading']);"),
+    (
+        "render.js",
+        "a blank bearing raises a chip of its own, unless there was never a compass to lose",
+        "if(v.heading==null && !absent('heading')) gone.push(['BEARING','heading']);",
+    ),
     (
         "render.js",
         "a dead pack monitor takes the current with it and says so",
-        "if(v.batteryV==null) gone.push([(v.currentA==null && v.currentSeen) "
+        "if(v.batteryV==null && !absent('battery')) gone.push([(v.currentA==null && v.currentSeen) "
         "? 'PACK VOLTAGE & CURRENT' : 'PACK VOLTAGE', 'battery']);",
+    ),
+    (
+        "render.js",
+        "a part the hull calls absent is accounted for, so the sweep cannot re-accuse it",
+        "const explained=leakChips.concat(v.sensorsAbsent||[]);",
     ),
     (
         "render.js",
@@ -751,6 +777,12 @@ class Console:
         self.st.update(
             {
                 "sensorFaults": [],
+                # Which of those the hull says it has NEVER had. A strict subset of
+                # sensorFaults, and the only thing that separates "go and look at that
+                # cable" from "that part is not in the boat yet" — which on a vehicle
+                # being fitted one instrument at a time is the difference between an
+                # alert rail worth reading and four standing errands nobody can run.
+                "sensorsAbsent": [],
                 "magCal": None,
                 "leakState": "NORMAL",
                 "leakProbeFault": None,
@@ -780,6 +812,12 @@ class Console:
             raw = t["sensor_faults"]
             items = raw if isinstance(raw, list) else str(raw).split()
             st["sensorFaults"] = [str(c).strip().lower() for c in items if str(c).strip()]
+        # Read off the SAME frame as the fault list above and never carried over from an
+        # older one, which is core.js's absentSensors() taking it straight off state.realTel:
+        # two independently-remembered copies of one verdict can disagree by a frame, and
+        # the frame they would disagree in is the one where a part just died.
+        raw_absent = t.get("sensors_absent") or []
+        st["sensorsAbsent"] = [str(c).strip().lower() for c in raw_absent if str(c).strip()]
         if isinstance(t.get("leak_state"), str):
             st["leakState"] = t["leak_state"]
         elif isinstance(t.get("leak"), bool):
@@ -810,6 +848,17 @@ class Console:
     def faulted(self, kind: str) -> list[str]:
         return [c for c in SENSOR_BEHIND.get(kind, []) if c in self.st["sensorFaults"]]
 
+    def absent(self, kind: str) -> bool:
+        """core.js sensorAbsent(): every part behind this reading was never fitted.
+
+        The conjunction is the point. An IMU that was never fitted on a bus that DIED is
+        a bus fault — something on that reading's path genuinely stopped — so the reading
+        is cannot-tell and the rail says so. Silence is only right when there is nothing
+        behind the reading that ever worked.
+        """
+        chips = self.faulted(kind)
+        return bool(chips) and all(c in self.st["sensorsAbsent"] for c in chips)
+
     def sensed(self, key: str) -> float | int | None:
         """render.js viewFromState's one gate: null, or the hull's own admission, or the
         number. See the modelling note in the class docstring for the third question."""
@@ -819,9 +868,16 @@ class Console:
         return None if self.faulted(self.readings[key][1]) else val
 
     def readout(self, key: str) -> str:
-        """What renderSensed would put in the element: '?' or the number."""
+        """What renderSensed would put in the element: '?', the absent rule, or the number.
+
+        Three shapes for three facts. '—' is not a softer '?': it says the instrument is
+        not in the boat, which asks nothing of anybody, where '?' says something that was
+        measuring has stopped and is an errand.
+        """
         v = self.sensed(key)
-        return "?" if v is None else str(v)
+        if v is not None:
+            return str(v)
+        return "—" if self.absent(self.readings[key][1]) else "?"
 
     def leak_stage(self) -> str:
         s = self.st["leakState"]
@@ -835,7 +891,11 @@ class Console:
 
     def heading_flag(self) -> str:
         if self.st["heading"] is None:
-            return "dead"
+            # NO COMPASS when the hull has never had one, NO BEARING when it answered and
+            # stopped. Four badges for four different next actions, and this pair was the
+            # one the wire could not tell apart: NO COMPASS was unreachable code, so every
+            # hull with no IMU fitted was accused of having lost one.
+            return "nomag" if self.absent("heading") else "dead"
         if self.st["magCal"] is None:
             return "nomag"
         suspect = isinstance(self.st["magCal"], int) and self.st["magCal"] < 2
@@ -879,20 +939,26 @@ class Console:
             out.append(("snag", "crit", "SNAGGED · UNCONFIRMED"))
         elif st["snagged"] is None and st["navAnswered"]:
             out.append(("snagwatch", "warn", "SNAG WATCH LOST · NAV QUIET"))
+        # A PART THAT WAS NEVER FITTED RAISES NO CHIP. Every chip on this rail is an
+        # instruction to go and look at something, and there is nothing to look at on a
+        # vehicle the part has never been screwed to. The readout still says so, quietly,
+        # in its own tooltip — which is where a fact that asks nothing of anybody belongs.
         gone: list[tuple[str, str]] = []
-        if self.sensed("depth") is None and self.sensed("pressure") is None:
+        if self.sensed("depth") is None and self.sensed("pressure") is None and not self.absent("depth"):
             gone.append(("DEPTH & PRESSURE", "depth"))
         else:
-            if self.sensed("depth") is None:
+            if self.sensed("depth") is None and not self.absent("depth"):
                 gone.append(("DEPTH", "depth"))
-            if self.sensed("pressure") is None:
+            if self.sensed("pressure") is None and not self.absent("pressure"):
                 gone.append(("PRESSURE", "pressure"))
-        if self.sensed("heading") is None:
+        if self.sensed("heading") is None and not self.absent("heading"):
             gone.append(("BEARING", "heading"))
-        if volts is None:
+        if volts is None and not self.absent("battery"):
             both = self.sensed("currentA") is None and st["currentASeen"]
             gone.append(("PACK VOLTAGE & CURRENT" if both else "PACK VOLTAGE", "battery"))
-        explained = list(leak_chips)
+        # Seeded with every absent name, or the sweep below would re-raise as a standing
+        # NOT ANSWERING chip exactly the accusation the lines above just removed.
+        explained = list(leak_chips) + list(st["sensorsAbsent"])
         for label, kind in gone:
             chips = self.faulted(kind)
             for c in chips:
@@ -1058,6 +1124,13 @@ class Dive:
 
     def unstall(self, subsystem: str) -> None:
         {"leak-probes": self.hw._stall_leak_sampling, "sensor-thread": self.hw._stall_sensor_thread}[subsystem](False)
+
+    def unfit(self, chip: str) -> None:
+        """This hull has never had the chip — as opposed to break_part(), which stops one
+        that was working. Deliberately not routed through break_part: they are two
+        different claims about the vehicle and a fixture that blurred them would let a
+        test say "never fitted" about a part it had actually killed."""
+        self.hw._unfit_sensor(chip)
 
     def break_part(self, part: str) -> None:
         (self.kill if part in self.hw.DEVICES else self.stall)(part)
@@ -1842,6 +1915,97 @@ class SensorThreadTest(PartCase, WireCase):
 
     def test_a_dead_sampler_does_not_take_navigation_down(self):
         self.assertIsNotNone(self.broken[-1].get("speed_src"))
+
+
+# ===========================================================================
+# The instrument that is not in the boat
+# ===========================================================================
+class NeverFittedTest(WireCase):
+    """A compass that has NEVER answered, over the real socket, onto the real console.
+
+    THE VEHICLE THIS PROJECT IS ACTUALLY BEING FITTED TO. Instruments go in one at a
+    time, so for weeks at a stretch most of the hull is in this state — and it was
+    indistinguishable on the wire from a chip that died mid-dive, so the console said
+    the loud thing about both: NO BEARING, "the compass answered earlier in this dive
+    and has now stopped", plus a crit chip sending the owner to check a cable that has
+    never existed. NO COMPASS, the badge for exactly this hull, was unreachable code.
+
+    Flown against the same server and read through the same Console mirror as every
+    other case here, because the claim is about the WHOLE chain: the distinction is
+    decided in api/hardware.py, carried by api/protocol.py, passed through api/rov.py,
+    and only then does the console have anything to be right about.
+    """
+
+    stopped: list[dict] = []
+    never: list[dict] = []
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        d = dive()
+        d.quiesce()
+        # The compass that answered and then died — the state that must NOT be softened
+        # by anything below.
+        d.break_part("bno085")
+        cls.stopped = d.fly(BROKEN_S)
+        d.mend_part("bno085")
+        d.fly(SETTLE_S)
+        # The same hull, one fact different: this one has never had a compass at all.
+        d.unfit("bno085")
+        cls.never = d.fly(BROKEN_S)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        dive().quiesce()
+
+    def test_absence_puts_no_reading_back_on_the_wire(self):
+        """First, because it is the rule everything else here could be got at the cost of.
+        A part that is merely missing rather than broken measures exactly as much as a
+        broken one: nothing."""
+        for f in self.never:
+            for field in ("heading", "heading_card", "mag_cal", "gyro_z_dps", "pitch_deg", "roll_deg"):
+                self.assertIsNone(
+                    f.get(field),
+                    f"seq={f.get('seq')}: the compass is not fitted and {field}={f.get(field)!r} "
+                    f"is on the wire — 'missing, not broken' is not a licence to invent",
+                )
+            self.assertNoContradiction(f)
+
+    def test_the_part_is_still_named_and_also_called_absent(self):
+        last = self.never[-1]
+        self.assertIn("bno085", last.get("sensor_faults") or [])
+        self.assertEqual(["bno085"], last.get("sensors_absent"), "the hull did not say the compass is absent")
+
+    def test_a_compass_that_stopped_is_not_called_absent(self):
+        last = self.stopped[-1]
+        self.assertIn("bno085", last.get("sensor_faults") or [])
+        self.assertEqual(
+            [],
+            last.get("sensors_absent") or [],
+            "a compass that answered and then STOPPED is being reported as never fitted, which "
+            "silences a real failure — the one direction this may never be got wrong in",
+        )
+
+    def test_the_console_reads_the_two_hulls_differently(self):
+        never, stopped = console_of(self.never), console_of(self.stopped)
+        self.assertEqual("NO COMPASS", never.heading_badge())
+        self.assertEqual("NO BEARING", stopped.heading_badge())
+        self.assertNotEqual(
+            (never.heading_badge(), never.readout("heading")),
+            (stopped.heading_badge(), stopped.readout("heading")),
+            "the console cannot tell a compass that was never fitted from one that died",
+        )
+
+    def test_the_absent_readout_accuses_nobody(self):
+        never = console_of(self.never)
+        self.assertNotIn("dead-heading", never.alert_ids(), "a chip sent the owner to check a cable that is not there")
+        self.assertNotIn("faults", never.alert_ids(), "the unexplained-fault sweep re-raised the same accusation")
+        self.assertNotEqual("?", never.readout("heading"), "absent is wearing the cannot-tell mark")
+        self.assertNotIn("--", never.readout("heading"), "absent is wearing the stale dash, which comes back by itself")
+
+    def test_a_compass_that_stopped_still_raises_its_errand(self):
+        stopped = console_of(self.stopped)
+        self.assertIn("dead-heading", stopped.alert_ids())
+        self.assertEqual("?", stopped.readout("heading"))
 
 
 # ===========================================================================

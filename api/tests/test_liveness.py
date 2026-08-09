@@ -73,7 +73,7 @@ import unittest
 from pathlib import Path
 
 from config import settings
-from hardware import LEAK_UNKNOWN, MockHardware
+from hardware import LEAK_UNKNOWN, DeviceHealth, MockHardware
 from nav.config import settings as nav_settings
 from nav.estimator import make_estimator
 from nav.models import NavState, Origin, SensorSample
@@ -280,6 +280,21 @@ class Chain:
     def kill(self, *chips: str) -> "Chain":
         for chip in chips:
             self.hw._kill_sensor(chip)
+        return self
+
+    def unfit(self, *chips: str) -> "Chain":
+        """This hull has NEVER HAD these chips — not fitted, as opposed to stopped.
+
+        A third verb because it is a third fact, and the one the bench could not
+        state. kill() describes a part that answered and died; this describes the
+        vehicle the owner is actually holding, with most of its instruments still
+        in the box. The READINGS are identical — both are cannot-tell, and a test
+        that let "not fitted" put a number on screen would be testing the wrong
+        rule — so the only difference these tests may look for is what the vehicle
+        SAYS about the null.
+        """
+        for chip in chips:
+            self.hw._unfit_sensor(chip)
         return self
 
     def revive(self, *chips: str) -> "Chain":
@@ -1252,6 +1267,147 @@ class BusFailureTest(ChainTestCase):
 
     def test_a_dead_bus_does_not_take_navigation_down(self):
         self.assertNavSurvived(self.c)
+
+
+# ---------------------------------------------------------------------------
+# The instrument that is not in the boat
+# ---------------------------------------------------------------------------
+class NeverFittedTest(ChainTestCase):
+    """A part that has NEVER answered, and a part that answered and stopped.
+
+    THE SAME NULL, TWO DIFFERENT FACTS, AND THE WIRE HAD NO WAY TO SAY WHICH.
+    `DeviceHealth` has known the difference since liveness was written
+    (`answered_ever()` — it is what keeps the boot log from announcing a recovery
+    on every first good read), and it stopped at the hardware layer's edge. So the
+    console had one undifferentiated `heading: null` plus one name in
+    sensor_faults for both vehicles, and it told the operator the loud story about
+    both: the bearing on a hull with no IMU wired read "the compass answered
+    earlier in this dive and has now stopped" — an accusation about a chip nobody
+    had ever fitted, and an errand nobody can run.
+
+    IT IS NOT A COSMETIC DIFFERENCE, because this vehicle is being fitted one
+    instrument at a time. "Not wired yet" is the NORMAL condition of most of the
+    boat for weeks at a stretch, so the not-fitted case is not a corner: it is the
+    state the console spends most of its life in, and a console that reports every
+    unfitted instrument as a part that broke trains its operator to skip the rail
+    the leak alarm is on. `docs/playbook.md` §1 calls that state ABSENT and holds
+    it to one rule — the readout does not accuse anyone.
+
+    WHAT MUST NOT MOVE, and it is asserted here first: absence buys silence and
+    nothing else. Every reading behind an unfitted part is still null, and the
+    part is still named in sensor_faults. A "this one is only missing, not broken"
+    softening that let a number through would be the cannot-tell default this
+    whole suite exists to forbid, arrived at from the other side.
+    """
+
+    def setUp(self):
+        # Two hulls, flown the same way, differing in ONE fact about the compass.
+        # Built side by side deliberately: the claim is that the wire tells them
+        # apart, and a claim about a difference is only testable against the pair.
+        self.never = Chain().arm(throttle=1.0).fly(1.0)
+        self.never.unfit("bno085")
+        self.never.fly(2.0)
+
+        self.stopped = Chain().arm(throttle=1.0).fly(1.0)
+        self.stopped.kill("bno085")
+        self.stopped.fly(2.0)
+
+    def test_both_hulls_report_the_bearing_as_cannot_tell(self):
+        for name, chain in (("never fitted", self.never), ("stopped", self.stopped)):
+            w = chain.wire()
+            for field in _NULL_FIELDS["bno085"]:
+                with self.subTest(hull=name, field=field):
+                    self.assertCannotTell(w[field], field, f"the wire ({name})")
+
+    def test_both_hulls_still_name_the_part(self):
+        # The name is not the softened half. A blank gauge nobody can explain reads
+        # as a dashboard glitch whether the part is broken or absent, and the
+        # readout's own tooltip is built from this list in both cases.
+        for name, chain in (("never fitted", self.never), ("stopped", self.stopped)):
+            with self.subTest(hull=name):
+                self.assertEqual(chain.wire()["sensor_faults"], ["bno085"])
+
+    def test_the_wire_says_which_of_the_two_it_is(self):
+        # THE WHOLE POINT. Without this field the two frames are byte-identical and
+        # the console cannot do anything but guess — which it did, loudly, at every
+        # unfitted instrument on a half-built vehicle.
+        self.assertEqual(
+            self.never.wire()["sensors_absent"],
+            ["bno085"],
+            "a compass that has never answered is not reported as absent, so the console "
+            "has no way to tell it from one that died mid-dive and will accuse the owner "
+            "of a fault on a part that is not in the boat",
+        )
+        self.assertEqual(
+            self.stopped.wire()["sensors_absent"],
+            [],
+            "a compass that ANSWERED and then STOPPED is being reported as never fitted, "
+            "which silences a real failure — the one direction this distinction may never "
+            "be got wrong in",
+        )
+        self.assertNotEqual(
+            self.never.wire()["sensors_absent"],
+            self.stopped.wire()["sensors_absent"],
+            "the two hulls are indistinguishable on the wire",
+        )
+
+    def test_absent_is_a_subset_of_faulted(self):
+        # An absent name that is NOT also a fault would be a part the console is told
+        # to stay quiet about while nothing else on screen accounts for it — a fault
+        # dropped on the floor, which is the round-three mistake in miniature.
+        for name, chain in (("never fitted", self.never), ("stopped", self.stopped)):
+            w = chain.wire()
+            with self.subTest(hull=name):
+                self.assertLessEqual(set(w["sensors_absent"]), set(w["sensor_faults"]))
+
+    def test_a_healthy_hull_reports_nothing_absent(self):
+        healthy = Chain().arm(throttle=1.0).fly(2.0)
+        self.assertEqual(healthy.wire()["sensors_absent"], [])
+        self.assertEqual(healthy.wire()["sensor_faults"], [])
+
+    def test_fitting_the_part_clears_the_absence(self):
+        # Recovery is half the contract and the half that gets skipped. The owner
+        # screws the compass in mid-session; a console that goes on calling a
+        # working instrument "not fitted" is wrong in the quiet direction, which is
+        # the direction nobody notices until a dive.
+        self.never.revive("bno085").fly(2.0)
+        w = self.never.wire()
+        self.assertEqual(w["sensors_absent"], [])
+        self.assertEqual(w["sensor_faults"], [])
+        self.assertIsNotNone(w["heading"], "the refitted compass is still being treated as absent")
+
+    def test_the_hardware_layer_and_the_frame_agree(self):
+        # One verdict read twice, the same rule sensor_faults follows: the hardware
+        # call and the field on the frame are taken in the same breath, so they
+        # cannot contradict each other in front of an operator.
+        self.assertEqual(tuple(self.never.frame().sensors_absent), self.never.hw.sensors_absent())
+        self.assertEqual(tuple(self.stopped.frame().sensors_absent), self.stopped.hw.sensors_absent())
+
+    def test_the_rule_the_real_vehicle_computes_this_from(self):
+        """`DeviceHealth` on its own, because the Pi's answer is derived from it.
+
+        RealHardware.sensors_absent() asks each chip `answered_ever()`; MockHardware
+        cannot exercise that (its deaths are set membership, so bench tests never
+        depend on a wall clock). The rule itself is pure and clock-injected, so it
+        is driven directly here — which is the only reason the never-answered case
+        is testable at all without a real dying sensor.
+        """
+        h = DeviceHealth("bno085", fail_streak=3, silence_s=2.0)
+        self.assertFalse(h.answered_ever(), "a chip that has produced nothing claims to have answered")
+        self.assertTrue(h.faulted(0.0), "never answered must still be FAULTED, not a gentler state")
+
+        h.ok(10.0)
+        self.assertTrue(h.answered_ever())
+        self.assertFalse(h.faulted(10.0))
+
+        # It goes silent. Faulted again — but it ANSWERED, so it is a part that
+        # stopped and never becomes absent again this power cycle.
+        self.assertTrue(h.faulted(20.0))
+        self.assertTrue(
+            h.answered_ever(),
+            "a chip that worked and then died is being reported as never fitted, which "
+            "turns a real failure into a shrug",
+        )
 
 
 if __name__ == "__main__":

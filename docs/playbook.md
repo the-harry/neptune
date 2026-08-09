@@ -48,12 +48,36 @@ one look, everywhere:
 | **ESTIMATED** | derived, not measured | the number wearing a visible tag (`~`, `EST`) | know it is a guess |
 | **STALE** | a gap on a still-open socket | `--`, dim — the whole bar dashes together | nothing; it returns by itself |
 | **CANNOT-TELL** | the sensor has stopped answering | `?`, amber, **wavy underline**, + an alert chip naming the part | waiting will not help; go and look |
-| **ABSENT** | never on the wire for this hull | the readout does not accuse anyone — no fault chip, no `?` | nothing; this vehicle never had it |
+| **ABSENT** | the part has never answered on this hull | `—`, grey — one unbroken rule, no `?`, no amber, **no fault chip** | nothing; this vehicle does not have it yet |
 
 STALE and CANNOT-TELL differ **by construction**: a dash reads as a dropped frame that will
 come back; a dead sensor dressed as a dropped frame is a sub flown on a number nobody is
 taking. ABSENT and CANNOT-TELL differ because *absent is not null*: a hull that never sent
 `current_a` must not be told its current sense "stopped".
+
+**ABSENT is the state most of a half-built vehicle is in, and it is the whole reason the
+distinction is worth a wire field.** Instruments are fitted to this boat one at a time, so
+for weeks at a stretch the normal condition of most of them is "not wired yet" — and a
+console that draws every one of them as a part that has just broken hands its operator four
+errands that cannot be run, on a rail whose whole job is to be believed the day the flood
+chip appears. The vehicle is the only layer that can tell the two apart and it says so:
+`sensor_faults` names what is not answering, `sensors_absent` names which of those have
+never answered at all (`api/protocol.py`; the verdict is `DeviceHealth.answered_ever`). A
+hull that does not send the field, and the bench, land on CANNOT-TELL exactly as before —
+**the loud state is the safe one to be wrong with**, because calling a real failure "never
+fitted" hides it while calling an absence a failure costs only a wasted look.
+
+**Only leaf parts are ever called absent**, and that is the same rule read again. An I2C
+bus that would not open is not an unfitted instrument, it is an errand with a fix — and it
+stands *behind* every chip on it, so calling it absent would silence the one name that
+explains three quiet gauges at once. A reading goes ABSENT only when **every** part behind
+it was never fitted; one bus fault on the path and the whole reading is CANNOT-TELL again,
+loudly.
+
+Absence buys **silence and nothing else**. Everything named absent is still named in
+`sensor_faults`, every reading behind it is still null, and no number may ever appear
+because a sensor is merely missing rather than broken — that is the same forbidden
+cannot-tell default arrived at from the other side.
 
 ---
 
@@ -68,6 +92,7 @@ else.
 |---|---|
 | `?` amber, wavy underline | cannot-tell — the sensor stopped answering (also: ballast never homed / lost count — genuinely-not-known has one word) |
 | `--` dim | stale — dropped frame on a live socket; returns by itself |
+| `—` grey, no underline, no glow | **absent** — this hull has never had the instrument. It is not the stale `--` (a *pair* of dashes, arriving on the whole bar at once and leaving by itself) and not the `?` (amber, wavy, and an errand attached): one long unbroken rule, on one reading, while everything around it reads normally, and it stays until somebody fits the part. The tooltip names the part and says plainly that nothing has stopped |
 | `~` + `EST` tag | estimated — the figure came from the throttle curve, not the paddlewheel |
 | dotted underline (HDG) | compass answered and reports itself **uncalibrated** — there is a bearing; it is suspect |
 | dashed underline (HDG) | the filter is ignoring the compass **on purpose** (gyro coast) |
@@ -80,13 +105,14 @@ else.
 | *(blank)* | compass calibrated and in use | — |
 | `MAG?` | compass uncalibrated | there IS a bearing; it is suspect |
 | `GYRO` | compass ignored deliberately (thrust swamping it) | deliberate, not broken |
-| `NO COMPASS` | no IMU ever answered | nothing to calibrate or come back to |
-| `NO BEARING` | an IMU answered this dive and has **stopped** | no bearing at all, not even a bad one |
+| `NO COMPASS` | no IMU has **ever** answered on this hull — ABSENT | nothing to calibrate or come back to, and **nothing to go and look at**: no fault chip is raised, and the bearing wears the absent rule rather than the cannot-tell `?` |
+| `NO BEARING` | an IMU answered this dive and has **stopped** | no bearing at all, not even a bad one — and this one *is* an errand, with a chip naming the compass |
 | `RAW COMPASS` | the estimator stopped; bearing fell back to the unfiltered compass | nothing is judging it — or watching for a snag |
 | `SIMULATED · NO DATA FROM THE SUB` | the console's own model is producing every reading | clears itself when a genuine frame arrives |
 | `SNAGGED` chip | high thrust, no measured speed, sustained | the shopping-trolley detector; LUT speed never counts as evidence |
 | `NO SPEED` / `EST` (speed source) | nothing reports speed / the figure is the throttle curve | blank means the wheel measured it |
-| alert chip naming the part | `DEPTH — MS5837 NOT ANSWERING` | a blank gauge with no cause reads as a dashboard glitch; a name is an errand |
+| `NOT FITTED` on an instrument-group head | every blank reading in that folded group is behind a part this hull has never had | it wears the badge's **plain** form, not the amber one — a group head is the only mark a folded cluster still shows, so four blanks may not hide, but a permanently-amber head from power-on until the part arrives is a mark nobody reads |
+| alert chip naming the part | `DEPTH — MS5837 NOT ANSWERING` | a blank gauge with no cause reads as a dashboard glitch; a name is an errand — **and therefore never raised for a part the hull calls absent**, because an errand nobody can run teaches the operator to stop reading the rail |
 
 ### The leak ladder — four drops
 
@@ -160,7 +186,7 @@ forbidden.
 | amber | suspect / advisory / uncalibrated / cannot-tell — the "look closer" colour |
 | red | fault demanding action; **pulsing red is reserved for a leak** |
 | green | proven good on direct evidence — never "probably fine" |
-| dim / grey | stale, or no claim — grey on a depth section means *no published figure*, not shallow |
+| dim / grey | stale, or no claim — grey on a depth section means *no published figure*, not shallow; and an **absent** readout wears it because a hull that has never had the instrument is making no claim at all. Grey is reused here exactly, never repainted: what separates absent from stale is the **shape** (one rule, not two dashes) and the opacity (absent is not dimmed — it is not going anywhere) |
 | cyan glow (`glow-cyan`) | the measured-depth readout's own ink |
 
 **Who may wear the depth colours differs by mode, and that is the point**

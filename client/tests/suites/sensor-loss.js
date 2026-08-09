@@ -567,6 +567,146 @@
        (stillBlank.length ? ('  — blanked by a falsy zero: '+stillBlank.join(', ')) : ''));
     await say({});
 
+    // ============ 6. THE INSTRUMENT THAT IS NOT IN THE BOAT ============
+    // A COMPASS THAT STOPPED AND A COMPASS THAT WAS NEVER FITTED ARE THE SAME NULL AND
+    // DIFFERENT FACTS, and until the vehicle learned to say which, this console told the
+    // loud story about both: a hull with no IMU wired read "the compass answered earlier
+    // in this dive and has now stopped", with a crit chip beside it sending its owner to
+    // check a cable that has never existed. That matters more than it looks, because
+    // this vehicle is being fitted one instrument at a time — "not wired yet" is the
+    // NORMAL state of most of it for weeks, so the accusation is not an edge case, it is
+    // what the console says all day. An errand nobody can run is how an operator learns
+    // to stop reading the rail, and the rail is where the flood chip is.
+    //
+    // The two frames below differ in ONE field. Everything this section asserts is a
+    // difference between them, because "the console can tell them apart" is only a claim
+    // about a pair — and the first thing asserted is that absence changes NO reading:
+    // both are blank, and a hull that put a bearing back on screen because its compass
+    // is merely missing rather than broken would be this suite's own rule, broken from
+    // the other side.
+    const IMU_DARK = {heading:null, heading_card:null, mag_cal:null,
+                      gyro_z_dps:null, accel_fwd_ms2:null, pitch_deg:null, roll_deg:null,
+                      snagged:false, gyro_only:false, sensor_faults:['bno085']};
+    const bearingLook = ()=>({text:txt('heading-val'), cls:cls('heading-val'),
+                              flag:txt('hdg-flag'), why:liveOf($('heading-val')),
+                              dial:document.body.classList.contains('heading-dead'),
+                              rail:alerts().filter(a=>/COMPASS|BEARING|NOT ANSWERING/.test(a.text))
+                                           .map(a=>a.kind+':'+a.text).join(' | ')});
+
+    // (a) THE COMPASS THAT ANSWERED AND STOPPED — unchanged, and asserted here so the
+    //     difference below cannot be won by quietly softening this one.
+    await say(Object.assign({}, IMU_DARK, {sensors_absent:[]}));
+    const stopped = bearingLook();
+    ok('a compass that STOPPED still reads cannot-tell: question mark, amber, an errand',
+       stopped.text==='?' && /\bnosensor\b/.test(stopped.cls) && stopped.flag==='NO BEARING' &&
+       /crit:/.test(stopped.rail),
+       'heading-val="'+stopped.text+'" class="'+stopped.cls+'" flag="'+stopped.flag+
+       '" rail="'+(stopped.rail||'none')+'"');
+
+    // (b) THE COMPASS THAT WAS NEVER FITTED. One field different.
+    await say(Object.assign({}, IMU_DARK, {sensors_absent:['bno085']}));
+    const absent = bearingLook();
+    ok('a compass that was NEVER FITTED renders differently from one that stopped',
+       absent.text!==stopped.text || absent.cls!==stopped.cls || absent.flag!==stopped.flag,
+       'never fitted: "'+absent.text+'" ['+absent.cls+'] '+absent.flag+
+       '   vs stopped: "'+stopped.text+'" ['+stopped.cls+'] '+stopped.flag+
+       ' — identical means the console is describing a part that is not in the boat as '+
+       'a part that broke');
+    ok('...and it says NO COMPASS, the badge that was unreachable code until now',
+       absent.flag==='NO COMPASS',
+       'hdg-flag="'+absent.flag+'" — NO BEARING means "it answered this dive and has '+
+       'stopped", which is a claim about a chip this hull has never had');
+    ok('...and the readout does not wear the cannot-tell mark, because nothing stopped',
+       absent.text==='—' && !/\bnosensor\b/.test(absent.cls) && /\bnotfitted\b/.test(absent.cls),
+       'heading-val="'+absent.text+'" class="'+absent.cls+'"');
+    ok('...and it is NOT the stale dash either - this one never comes back on its own',
+       absent.text!=='--' && !/\bis-stale\b/.test(absent.cls),
+       'heading-val="'+absent.text+'" class="'+absent.cls+'" — a dash reads as a dropped '+
+       'frame, which an operator rightly waits out; there is nothing here to wait for');
+    ok('...and above all it is NOT A NUMBER',
+       !/[0-9]/.test(absent.text),
+       'heading-val="'+absent.text+'" — an absent compass may not put a bearing on a '+
+       'heading-up map, whatever the reason for its absence');
+    ok('...and NO chip on the rail accuses anyone: there is no errand to run',
+       absent.rail==='',
+       'rail="'+(absent.rail||'none')+'" — every chip here is an instruction to go and '+
+       'look at something, and there is nothing to look at on a boat the part was never '+
+       'fitted to');
+    ok('...and the radar dial is not marked as a picture that has stopped being measured',
+       absent.dial===false && stopped.dial===true,
+       'body.heading-dead: never-fitted='+absent.dial+' stopped='+stopped.dial);
+    // THE WORDS ARE THE OTHER HALF OF THE FIX. A grey rule with the cannot-tell sentence
+    // behind it is still an accusation, just a quieter one — and the two sentences must
+    // not borrow each other's vocabulary either: "NO BEARING" is the registered badge for
+    // the OPPOSITE claim (a compass that stopped), so a tooltip leading with it on an
+    // absent readout would contradict the NO COMPASS badge sitting beside it.
+    ok('...and the tooltip says NOT FITTED, in words, without inventing an errand',
+       /NOT FITTED/.test(absent.why) && !/stopped answering/i.test(absent.why) &&
+       !/NO BEARING/.test(absent.why) && /nothing has stopped|nothing here is broken/i.test(absent.why),
+       'live tooltip="'+absent.why+'"');
+    ok('...while the compass that STOPPED still gets the sentence that sends somebody to look',
+       /stopped answering/i.test(stopped.why),
+       'live tooltip="'+stopped.why+'"');
+    ok('the frozen bearing is not shown in either case',
+       absent.text!=='284' && stopped.text!=='284' && !/284/.test(absent.text+stopped.text),
+       'never fitted="'+absent.text+'" stopped="'+stopped.text+'"');
+    // THE GROUP HEAD IS THE ONE MARK A FOLDED CLUSTER STILL SHOWS, so it is the one that
+    // would sit there in amber saying COMPASS STOPPED for the whole of every dive on a
+    // boat with no IMU. It must still SAY something — four blanks may not hide behind a
+    // fold — and what it says must be true.
+    const groupFlags = [...document.querySelectorAll('.fg-flag')]
+                       .filter(e=>/\bon\b/.test(e.className))
+                       .map(e=>(e.textContent||'').trim());
+    ok('the cluster head says NOT FITTED rather than accusing a chip of stopping',
+       groupFlags.length===0 || groupFlags.every(t=>t==='NOT FITTED'),
+       'group flags: '+(groupFlags.map(t=>'"'+t+'"').join(', ')||'none lit')+
+       ' — a mark that is lit from power-on until a part arrives is a mark nobody reads');
+
+    // (b2) AN UNFITTED COMPASS ON A BUS THAT DIED. Absence may only buy silence when
+    //      there is nothing behind the reading that ever worked. The I2C bus is a fault
+    //      with a cause and a fix, it stands BEHIND the chip rather than beside it, and
+    //      one quiet readout would hide the single name that explains three dark gauges
+    //      at once. So the conjunction: every part behind the reading, or it stays loud.
+    await say(Object.assign({}, IMU_DARK,
+                            {sensor_faults:['bno085','i2c'], sensors_absent:['bno085']}));
+    const mixed = bearingLook();
+    ok('a never-fitted compass on a DEAD BUS is still cannot-tell, and still an errand',
+       mixed.text==='?' && /\bnosensor\b/.test(mixed.cls) && mixed.flag==='NO BEARING' &&
+       /crit:/.test(mixed.rail),
+       'heading-val="'+mixed.text+'" class="'+mixed.cls+'" flag="'+mixed.flag+
+       '" rail="'+(mixed.rail||'none')+'" — the bus never being absent is what keeps one '+
+       'unfitted part from silencing a fault that took every gauge on that bus with it');
+
+    // (c) THE OWNER SCREWS THE COMPASS IN. Recovery is half the contract and the half
+    //     that gets skipped: a console that goes on calling a working instrument "not
+    //     fitted" is wrong in the direction nobody notices until a dive. Put the hull
+    //     back on the never-fitted frame first, so what is being recovered FROM is the
+    //     state this section is about and not (b2)'s dead bus.
+    await say(Object.assign({}, IMU_DARK, {sensors_absent:['bno085']}));
+    await say({sensors_absent:[]});
+    ok('fitting the part brings the bearing back, badge and all',
+       txt('heading-val')==='284°' && !/\bnotfitted\b|\bnosensor\b/.test(cls('heading-val')) &&
+       txt('hdg-flag')==='',
+       'heading-val="'+txt('heading-val')+'" class="'+cls('heading-val')+
+       '" flag="'+txt('hdg-flag')+'"');
+
+    // (d) THE SAME RULE ON THE ONE TILE THAT CANNOT USE THE SHARED PATH. The pack is
+    //     drawn by hand because it owns its own colour bands, so every rule about a
+    //     missing reading has to be written there a second time — which is exactly where
+    //     a rule stops being applied. A hull with no INA219 fitted must not be told its
+    //     pack monitor died, and it certainly must not be shown 0.0 V.
+    await say({battery_v:null, current_a:null,
+               sensor_faults:['ina219'], sensors_absent:['ina219']});
+    const pack = {text:txt('battery-v'), cls:cls('battery-v'), why:liveOf($('battery-v'))};
+    ok('a pack monitor that was never fitted is quiet on this tile too, not accused',
+       pack.text==='—' && /\bnotfitted\b/.test(pack.cls) && !/\bnosensor\b/.test(pack.cls) &&
+       /NOT FITTED/.test(pack.why),
+       'battery-v="'+pack.text+'" class="'+pack.cls+'" tooltip="'+pack.why+'"');
+    ok('...and the rail says nothing about it, because there is nothing to go and do',
+       !/PACK|NOT ANSWERING/.test(alertText()),
+       'alerts="'+alertText()+'"');
+    await say({});
+
     // ================= NOTHING ELSE BROKEN =================
     stopFeed();
     ok('no script errors', errs.length===0, errs.join(' | ')||'none');

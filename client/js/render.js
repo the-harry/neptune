@@ -154,6 +154,13 @@ function viewFromState(sim){
     // Names the chip, never a substitute for the null above: a vehicle too old to send
     // faults still blanks the number, it just cannot say which cable to go and check.
     sensorFaults: live ? (s.sensorFaults||[]) : [],
+    // AND WHICH OF THOSE NAMES ARE PARTS THIS HULL HAS NEVER HAD. Read off the same
+    // frame as the list above (core.js absentSensors) so the two cannot drift apart by
+    // a frame. It never blanks anything on its own — everything in it is already in
+    // sensorFaults and already null — it only decides whether the blank is an ERRAND or
+    // an instrument that is not fitted yet. Empty off the bench: the model's absences
+    // are the model's own business and `hull` already says there is nobody out there.
+    sensorsAbsent: live ? absentSensors() : [],
     // THE PACK GOES THROUGH THE SAME GATE AS DEPTH, and until this round it was the
     // one measured number that did not. A dead INA219 reached the bar as a confident
     // red 0.0 V with SURFACE beside it — the loudest thing on the console, invented
@@ -417,51 +424,85 @@ function metricTints(v){
    sensor is BOTH coloured (amber, so the eye lands on it) and owed an explanation.
    The memo is keyed on the sentence as well as the colour for the same reason — the
    cause arrives a frame or two after the null, and a memo on colour alone would have
-   swallowed it. */
+   swallowed it.
+
+   `glow` is opt-OUT, and there is one caller that opts out: the ABSENT readout. Every
+   glowing number on this console is a claim — a measured band, or the amber of a chip
+   that has stopped — and an instrument this hull has never had is making no claim at
+   all. It takes the grey and leaves the halo, so "no claim" is legible as no claim
+   without a second colour being invented for it. */
 const _tint={};
-function paintMetric(id, color, why){
+function paintMetric(id, color, why, glow){
   const el=$(id); if(!el) return;
-  const sig = String(color) + '|' + String(why);
+  const lit = !!color && glow!==false;
+  const sig = String(color) + '|' + String(why) + '|' + (lit?'1':'0');
   if(_tint[id]===sig) return;
   _tint[id]=sig;
   el.style.color = color || '';
-  el.style.textShadow = color ? ('0 0 8px '+color) : '';
+  el.style.textShadow = lit ? ('0 0 8px '+color) : '';
   if(why!==undefined) liveTitle(el, why || '');
 }
 
-/* ---- A MEASURED NUMBER, AND THE TWO DIFFERENT WAYS IT CAN BE MISSING ------
-   Three shapes, because two of them are not the same fact and an operator acts on
-   them differently:
+/* ---- A MEASURED NUMBER, AND THE THREE DIFFERENT WAYS IT CAN BE MISSING ----
+   Four shapes, because they are four facts and an operator acts on each differently:
 
      42.7        the sensor is reporting. Tinted by its own band.
      '--', dim   STALE — the link went quiet for a moment. The whole bar dashes
                  together and it comes back on its own; correctly ignored.
      '?', amber  CANNOT-TELL — the chip behind this reading has stopped answering.
                  Nothing on the vehicle is measuring it, and waiting will not help.
+     '—', grey   ABSENT — this hull has never had the instrument. Nothing stopped,
+                 nothing to go and look at, and no chip on the rail.
 
    The question mark is this console's existing word for "genuinely not known" (the
    unhomed syringe has always said it), and it is deliberately NOT the stale dash. That
    is the whole point of the shape: a dash reads as a dropped frame, and a dead depth
    sensor dressed as a dropped frame is a sub flown on a number nobody is taking. Three
    carriers — the mark, the amber, and the alert chip naming the chip — so none of them
-   has to be the one that gets noticed. */
-/* `deadWhy` overrides the sentence for callers whose blank has a different cause. There
-   is exactly one such cause and it is the bench: with no vehicle on the link, a missing
-   reading is not a chip that stopped, it is an instrument the console's own model never
-   had. Same mark, same amber, same '?' — genuinely-not-known is genuinely-not-known and
-   a second visual vocabulary for it would teach nobody anything — but the words have to
-   be true, and "the sensor behind this has stopped answering" is not true of a hull that
-   is not there. */
+   has to be the one that gets noticed.
+
+   AND THE FOURTH SHAPE IS WHY THIS ROUND EXISTS. The owner is fitting instruments to a
+   real vehicle one at a time, so "this boat does not have one yet" is the normal state
+   of most readings for weeks — and every one of them was being drawn as a part that had
+   just broken, with a crit chip and an errand attached. An errand nobody can run is how
+   a console teaches its operator to stop reading the rail, and the rail is where the
+   leak goes. So ABSENT is the quiet state: one unbroken rule instead of a number, the
+   grey that means "no claim" (docs/playbook.md §3), no amber, no wavy underline, no
+   glow and no chip. It is NOT the stale dash either — that is a PAIR of short dashes
+   that arrives on the whole bar at once and leaves by itself, where this is one long
+   rule on one reading while everything around it goes on reading normally, and it never
+   leaves until somebody fits the part.
+
+   `deadWhy` overrides the CANNOT-TELL sentence for callers whose blank has a different
+   cause. There is exactly one such cause and it is the bench: with no vehicle on the
+   link, a missing reading is not a chip that stopped, it is an instrument the console's
+   own model never had. Same mark, same amber, same '?' — genuinely-not-known is
+   genuinely-not-known — but the words have to be true, and "the sensor behind this has
+   stopped answering" is not true of a hull that is not there. (The bench is not ABSENT:
+   its readings would exist if a vehicle were on the link, and `hull` already says
+   plainly that there is nobody out there.) */
 function renderSensed(id, val, text, stale, tint, what, kind, v, deadWhy){
   const el=$(id); if(!el) return;
-  const dead = !stale && val==null;
-  setText(el, dead ? '?' : text, stale);
+  const missing = !stale && val==null;
+  // ABSENT is asked FIRST, and only of a reading that is already missing: absence is a
+  // fact about the part, and the null is still the whole evidence that there is no
+  // number. A vehicle that named an absent part while shipping a value measured by it
+  // would be answering a question nobody asked — the value wins, exactly as it does
+  // against sensor_faults.
+  const gone = missing && !deadWhy && sensorAbsent(kind, v.sensorFaults, v.sensorsAbsent);
+  const dead = missing && !gone;
+  setText(el, dead ? '?' : gone ? '—' : text, stale);
   el.classList.toggle('nosensor', dead);
+  // A hook of its own, so nothing can style ABSENT by accident through the cannot-tell
+  // rule and a check can ask the DOM which of the two it is looking at.
+  el.classList.toggle('notfitted', gone);
   // The sentence is built only when there is something to admit — this runs on every
   // frame, and paintMetric's memo means the healthy case must not do work to say
   // nothing.
-  paintMetric(id, dead ? 'var(--hazard)' : tint,
-              dead ? (deadWhy || noSensorWhy(what, kind, v)) : '');
+  paintMetric(id, dead ? 'var(--hazard)' : gone ? 'var(--outline)' : tint,
+              dead ? (deadWhy || noSensorWhy(what, kind, v))
+                   : gone ? notFittedWhy(what, kind, v) : '',
+              !gone);
 }
 /* THE BENCH ADMITTING WHAT IT IS NOT MODELLING. The simulator has a heading, a depth, a
    throttle and a tank; it has no hull, so it has no attitude, and the honest thing to
@@ -486,6 +527,27 @@ function noSensorWhy(what, kind, v){
        + '. The last number is not being shown, because a reading that has frozen looks '
        + 'exactly like one that is holding steady.';
 }
+/* THE INSTRUMENT THAT IS NOT IN THE BOAT — the sentence that must NOT send anybody
+   anywhere. It names the part, because naming it is what turns the grey rule into
+   information ("no compass fitted" rather than "something is missing"), and then says
+   the one thing the operator needs: nothing has failed, so there is nothing to check
+   and nothing to wait for. This is the tooltip doing the job the alert rail deliberately
+   is not doing — quiet and informative where the reading is, rather than loud where the
+   emergencies are (docs/playbook.md §2, the same rule the chart layers follow). */
+/* Deliberately NOT spelled "NO <READING>". That phrasing belongs to the cannot-tell
+   sentence, and on the bearing it would put the words NO BEARING in front of an operator
+   whose badge reads NO COMPASS — and those two are a registered pair of OPPOSITE claims
+   (docs/playbook.md §2: one is a compass that stopped, the other a compass that was never
+   there). Two vocabularies saying different things about one readout is how a screen
+   stops being read. It leads with the state's own word instead. */
+function notFittedWhy(what, kind, v){
+  const parts = faultChips(kind, v.sensorFaults).map(c=>chipMeans(c).long).join(' and ');
+  return 'NOT FITTED - nothing on this vehicle measures ' + String(what).toLowerCase()
+       + (parts ? (', and it reports ' + parts + ' as never fitted') : '')
+       + '. Nothing has stopped and nothing here is broken - there is no cable to go and '
+       + 'check and no point waiting, because this reading has never existed on this '
+       + 'hull. Fit the part and it fills in by itself.';
+}
 
 /* ---- THE PACK -------------------------------------------------------------
    Colour comes ONLY from CONFIG.battery's bands (one colour, one meaning), and the
@@ -506,24 +568,34 @@ function noSensorWhy(what, kind, v){
    back on their own, and an operator who waits this one out is waiting on a chip that
    is never going to answer. */
 let _battSig='';
+/* AND A PACK MONITOR THAT WAS NEVER FITTED IS NOT A DEAD ONE. Same three-way split as
+   renderSensed, spelled out again here because this tile owns its own colour (the bands)
+   and cannot use the shared path. Absent takes the grey, no wavy underline and no glow —
+   an instrument that is not in the boat is making no claim, and a claim is what every
+   colour on this readout means. */
 function renderBattery(v){
   const el=$('battery-v'); if(!el) return;
-  const dead = !v.stale && v.batteryV==null;
+  const missing = !v.stale && v.batteryV==null;
+  const absent = missing && sensorAbsent('battery', v.sensorFaults, v.sensorsAbsent);
+  const dead = missing && !absent;
   const band = batteryBand(v.stale ? null : v.batteryV);
   const amps = (v.currentA!=null) ? ('   —   drawing '+v.currentA.toFixed(1)+' A') : '';
-  const why  = dead ? noSensorWhy('PACK VOLTAGE', 'battery', v) : (band.text + amps);
+  const why  = dead ? noSensorWhy('PACK VOLTAGE', 'battery', v)
+             : absent ? notFittedWhy('PACK VOLTAGE', 'battery', v)
+             : (band.text + amps);
   // Signature includes staleness because setText() owns the is-stale class on this
   // element and className is assigned wholesale here: without it, one repaint on a
   // band change would quietly un-grey a dashed-out readout. It includes `why` for the
   // same reason paintMetric's does — the fault list naming the chip arrives a frame or
   // two after the null, and a signature on the band alone would swallow the sentence.
-  const sig = band.key + '|' + (v.stale?'s':'') + '|' + (dead?'d':'') + '|' + why;
+  const sig = band.key + '|' + (v.stale?'s':'') + '|' + (dead?'d':absent?'a':'') + '|' + why;
   if(_battSig===sig) return;
   _battSig=sig;
-  const color = dead ? 'var(--hazard)' : band.color;
+  const color = dead ? 'var(--hazard)' : absent ? 'var(--outline)' : band.color;
   el.style.color = color || '';
-  el.style.textShadow = color ? ('0 0 8px '+color) : '';
-  el.className = 'm-val batt-'+band.key + (v.stale?' is-stale':'') + (dead?' nosensor':'');
+  el.style.textShadow = (color && !absent) ? ('0 0 8px '+color) : '';
+  el.className = 'm-val batt-'+band.key + (v.stale?' is-stale':'')
+               + (dead?' nosensor':'') + (absent?' notfitted':'');
   liveTitle(el, why);
 }
 
@@ -655,9 +727,17 @@ function renderFlight(v){
     const gone = (v.hull && !stale)
       ? FLIGHT_METRICS.filter(m=>m.group===g.id && flight[m.key]==null) : [];
     const chips = gone.length ? faultChips(gone[0].kind, v.sensorFaults) : [];
+    // AND WHETHER ANY OF IT EVER EXISTED. A group whose every blank reading is behind a
+    // part this hull has never had must not wear "COMPASS STOPPED" in amber for the whole
+    // of every dive until the part arrives — a mark that is lit from power-on is a mark
+    // nobody reads, which is the same argument that keeps this flag off the bench. It
+    // still SAYS something, because a folded group must not hide four blanks; it says the
+    // true thing, without the amber and without the errand.
+    const absent = gone.length && gone.every(m=>sensorAbsent(m.kind, v.sensorFaults, v.sensorsAbsent));
     // Names the JOB, not the part number, and says the bus when it is the bus — one dead
     // sensor is one connector and a dead bus is every connector plus its power.
     const label = !gone.length ? ''
+                : absent                  ? 'NOT FITTED'
                 : chips.indexOf('i2c')>=0 ? 'I2C BUS DOWN'
                 : chips.length            ? chipMeans(chips[0]).short + ' STOPPED'
                 : 'NOT MEASURED';
@@ -669,13 +749,20 @@ function renderFlight(v){
     if(_flightFlagSig[g.id]===sig) return;
     _flightFlagSig[g.id]=sig;
     el.textContent=label;
-    el.className='m-flag fg-flag' + (label ? ' on suspect' : '');
-    liveTitle(el, gone.length
+    // Amber says "look closer"; there is nothing to look closer at on a part that is not
+    // in the boat, so the absent label takes the badge's plain form.
+    el.className='m-flag fg-flag' + (label ? (absent ? ' on' : ' on suspect') : '');
+    liveTitle(el, !gone.length ? ''
+      : absent
       ? (gone.length + ' of ' + FLIGHT_METRICS.filter(m=>m.group===g.id).length
+         + ' readings here are not fitted on this vehicle'
+         + (chips.length ? (' - it reports ' + chips.map(c=>chipMeans(c).long).join(' and ')
+                            + ' as never fitted') : '')
+         + '. Nothing has stopped and there is nothing to check.')
+      : (gone.length + ' of ' + FLIGHT_METRICS.filter(m=>m.group===g.id).length
          + ' readings here have no sensor behind them right now'
          + (chips.length ? (' - the vehicle names ' + chips.map(c=>chipMeans(c).long).join(' and ')) : '')
-         + '. They are shown as question marks rather than as the last numbers they gave.')
-      : '');
+         + '. They are shown as question marks rather than as the last numbers they gave.'));
   });
 }
 
@@ -759,8 +846,22 @@ let _hdgFlag='?';                 // sentinel: '' is a real state, so it cannot 
 function renderHeadingFlag(v){
   const el=$('hdg-flag'), val=$('heading-val');
   const f = v.stale ? '' : (v.headingFlag || '');
-  if(_hdgFlag===f) return;
-  _hdgFlag=f;
+  // A MARK QUALIFIES A NUMBER, so it only goes on while there IS one. Every mark in
+  // this vocabulary is a sentence about a bearing on the screen — dotted says "this
+  // bearing is suspect", dashed says "this bearing is being coasted" — and there is no
+  // bearing behind NO BEARING or NO COMPASS. Left on, the dotted underline meant for an
+  // uncalibrated compass ends up drawn under a readout that is not a compass reading at
+  // all, which on the ABSENT hull would be a mark about a part that is not in the boat.
+  // renderSensed has already given the blank its own shape ('?' wavy for cannot-tell,
+  // the grey rule for absent); this is the badge staying out of its way.
+  //
+  // Derived from the VALUE rather than from a list of flag names, deliberately: the
+  // hand-written list is exactly what broke here before (see HEADING_MARKS above), and
+  // a flag added tomorrow for a bearing that does not exist gets this right for free.
+  const num = !v.stale && v.heading != null;
+  const key = f + (num ? '' : '|blank');
+  if(_hdgFlag===key) return;
+  _hdgFlag=key;
   const d = HEADING_FLAGS[f];
   if(el){
     el.textContent = d ? d.label : '';
@@ -769,7 +870,7 @@ function renderHeadingFlag(v){
   }
   if(val){
     // The number wears whatever the flag wears. One vocabulary, one source.
-    const cls = d ? String(d.cls||'').split(/\s+/) : [];
+    const cls = (d && num) ? String(d.cls||'').split(/\s+/) : [];
     HEADING_MARKS.forEach(c=>val.classList.toggle(c, cls.indexOf(c)>=0));
   }
 }
@@ -918,14 +1019,24 @@ function alertList(v){
   //
   // Skipped while STALE, because a link that went quiet for a second is not a dead
   // sensor and must not be accused of being one.
+  //
+  // AND A PART THAT WAS NEVER FITTED GETS NO CHIP AT ALL, which is the other half of
+  // the same rule. `absent` is what this reading has to say about a blank before it can
+  // claim anything stopped: a hull being built one instrument at a time has most of its
+  // readings blank, permanently and correctly, and a rail carrying four crit chips
+  // naming four errands that do not exist is a rail nobody reads by the second dive —
+  // including on the day the flood chip is the one underneath them. The readout itself
+  // still says so, quietly, in its own tooltip (notFittedWhy), which is where a fact
+  // that asks nothing of anybody belongs.
   if(!v.stale){
+    const absent = k => sensorAbsent(k, v.sensorFaults, v.sensorsAbsent);
     const gone=[];
-    if(v.depth==null && v.pressure==null) gone.push(['DEPTH & PRESSURE','depth']);
+    if(v.depth==null && v.pressure==null && !absent('depth')) gone.push(['DEPTH & PRESSURE','depth']);
     else{
-      if(v.depth==null)    gone.push(['DEPTH','depth']);
-      if(v.pressure==null) gone.push(['PRESSURE','pressure']);
+      if(v.depth==null && !absent('depth'))       gone.push(['DEPTH','depth']);
+      if(v.pressure==null && !absent('pressure')) gone.push(['PRESSURE','pressure']);
     }
-    if(v.heading==null) gone.push(['BEARING','heading']);
+    if(v.heading==null && !absent('heading')) gone.push(['BEARING','heading']);
     // AND THE FOUR INERTIAL READINGS ARE DELIBERATELY NOT IN THIS LIST. They come off
     // the same BNO085 as the bearing, so when that chip stops they all blank in the same
     // frame — and pushing them here would put FIVE crit chips on the rail for ONE dead
@@ -955,7 +1066,7 @@ function alertList(v){
     // older Pi with a critical alarm about a reading it never had is a console that gets
     // its alarms ignored. The DRAW tile still shows the question mark and its own tooltip
     // still says nothing is measuring it; what it does not do is manufacture an errand.
-    if(v.batteryV==null)
+    if(v.batteryV==null && !absent('battery'))
       gone.push([(v.currentA==null && v.currentSeen) ? 'PACK VOLTAGE & CURRENT' : 'PACK VOLTAGE', 'battery']);
     // WHICH NAMES THE SCREEN HAS NOW ACCOUNTED FOR. Collected as we go so the sweep
     // below can tell a fault that explains a blank from one that explains nothing on
@@ -963,7 +1074,16 @@ function alertList(v){
     // up: it accounts for them exactly as a blanked gauge accounts for its chip, and
     // reporting "leak-probes" twice — once as the reason the hull is unknown and once
     // as a fault nothing is drawn from — would contradict itself on one screen.
-    const explained=leakChips.slice();
+    //
+    // AND SEEDED WITH EVERY PART THE HULL CALLS ABSENT, for a stronger reason than
+    // tidiness. The sweep below exists to catch a fault the screen dropped on the floor,
+    // and it cannot tell "nothing is drawn from this" from "nothing was ever going to
+    // be": without this, a vehicle with three instruments still to fit would raise a
+    // standing NOT ANSWERING chip for each of them, which is the accusation this whole
+    // change removes, re-entering by the back door. Nothing is lost — every one of these
+    // names is already spoken beside its own readout, in the tooltip that says the part
+    // was never fitted.
+    const explained=leakChips.concat(v.sensorsAbsent||[]);
     gone.forEach(g=>{
       const chips = faultChips(g[1], v.sensorFaults);
       chips.forEach(c=>{ if(explained.indexOf(c)<0) explained.push(c); });
@@ -1070,8 +1190,18 @@ function renderUI(v){
   // stood here, which spelled an absent pack "--V" — the STALE shape, the one that means
   // a frame was dropped and will be along shortly. renderBattery owns the colour, the
   // class and the sentence; this owns the glyph, and the two agree on `!stale && null`.
-  const battDead = !stale && v.batteryV==null;
-  setText($('battery-v'), battDead ? '?' : (v.batteryV!=null?v.batteryV.toFixed(1)+'V':'--V'), stale);
+  //
+  // AND A PACK MONITOR THIS HULL NEVER HAD GETS THE ABSENT RULE INSTEAD, the same
+  // three-way split renderSensed makes for every other reading: '?' is a chip that
+  // stopped and an errand, the grey rule is an instrument that is not in the boat. This
+  // tile is hand-drawn rather than going through renderSensed (renderBattery owns its
+  // colour and its bands), so the split has to be spelled out here — and it has to be,
+  // or the one number on this bar that cannot use the shared path would go on accusing
+  // a part nobody ever fitted while every other tile had stopped.
+  const battAbsent = !stale && v.batteryV==null && sensorAbsent('battery', v.sensorFaults, v.sensorsAbsent);
+  const battDead = !stale && v.batteryV==null && !battAbsent;
+  setText($('battery-v'), battDead ? '?' : battAbsent ? '—'
+                        : (v.batteryV!=null?v.batteryV.toFixed(1)+'V':'--V'), stale);
   // Depth and pressure are drawn further down, by renderSensed, together with the tint
   // they are or are not allowed to wear — the two decisions are one decision.
   // Pi system metrics are rendered by renderSystem() from /api/system, which is
@@ -1163,8 +1293,18 @@ function renderUI(v){
   // a null heading holds the picture (map.js setMapHeading) while telemetry is still
   // reporting a perfectly good compass, and without this the held picture would wear no
   // mark at all. Guarded on MAP existing: the map is allowed to fail alone (§3).
+  //
+  // AND NOT RAISED FOR A COMPASS THIS HULL NEVER HAD. The amber broken ring says "the
+  // picture you are looking at was being measured and is not any more" — it is about
+  // something having STOPPED, and on a boat with no IMU fitted there is no such moment
+  // and no held angle to distrust: the dial has never turned. Painting it amber for the
+  // whole of every dive until the part arrives is the standing accusation that teaches
+  // an operator to stop seeing amber. The badge still reads NO COMPASS over the dial
+  // (map.js, off the shared HEADING_FLAGS table), so the fact is never unsaid.
+  const hdgAbsent = sensorAbsent('heading', v.sensorFaults, v.sensorsAbsent);
   const hdgHeld = (typeof MAP!=='undefined') && MAP.hdgLive===false;
-  document.body.classList.toggle('heading-dead', !stale && (v.heading==null || hdgHeld));
+  document.body.classList.toggle('heading-dead',
+                                !stale && ((v.heading==null && !hdgAbsent) || hdgHeld));
   // DEPTH AND PRESSURE, each with the two ways it can be absent kept apart. The tint
   // and the number are set together on purpose: they are one claim, and the dive that
   // motivated all of this is the one where they came apart — a frozen 4.3 m wearing a

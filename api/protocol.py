@@ -327,6 +327,39 @@ class Telemetry(BaseModel):
     # health: a backend that cannot track liveness reports empty, and the nulls on
     # the individual readings remain the authoritative claim.
     sensor_faults: list[str] = Field(default_factory=list)
+    # WHICH OF THOSE HAVE NEVER ANSWERED ON THIS HULL — a strict subset of
+    # sensor_faults, in the same vocabulary, e.g. ["bno085"] beside
+    # sensor_faults ["bno085", "i2c"]. Empty means the vehicle cannot tell the two
+    # apart, which is the LOUD default: every fault then reads as a part that
+    # stopped, exactly as it did before this field existed.
+    #
+    # TWO DIFFERENT FACTS, AND THE OPERATOR'S NEXT ACTION IS THE WHOLE REASON THE
+    # WIRE HAS TO CARRY BOTH. A part that answered this power cycle and stopped is
+    # an errand: go and look at that cable. A part that has never answered is not
+    # an errand at all — on a vehicle being fitted one instrument at a time it is
+    # simply not in the boat yet, and for weeks at a stretch that is the NORMAL
+    # state of most of them. sensor_faults alone cannot say which, so the console
+    # said the loud one about both: a hull with no IMU ever wired was told its
+    # compass "answered earlier in this dive and has now stopped" — an accusation
+    # about a chip nobody had ever fitted, sending its owner to check a connector
+    # that does not exist. docs/playbook.md §1 calls the second state ABSENT and
+    # requires that the readout "does not accuse anyone".
+    #
+    # IT DOES NOT SOFTEN A SINGLE READING. Everything named here is also named in
+    # sensor_faults and every value it measures is null on the same frame; absence
+    # buys silence on the alert rail and nothing else. A number may never appear
+    # because a sensor is merely missing rather than broken — that would be the
+    # cannot-tell default this whole chain exists to forbid, arrived at from the
+    # other side.
+    #
+    # api/hardware.py decides it (DeviceHealth.answered_ever) because the vehicle
+    # is the only layer that can know; this end and the client only ever read it.
+    # It names LEAF PARTS ONLY — never the I2C bus that would not open, never a
+    # GPIO group that failed to come up, never the limit switches reading
+    # impossibly. Those are faults with causes and fixes, they stand behind the
+    # chips rather than beside them, and silence about a fixable fault is the
+    # failure this whole chain exists to prevent. See sensors_absent() there.
+    sensors_absent: list[str] = Field(default_factory=list)
     # --- Pi system health (REAL readings; see api/sysinfo.py) ------------------
     # All Optional on purpose: None means "could not read this probe" and renders
     # as "--" topside. A real 0 (e.g. an idle CPU) stays a 0 and is never faked.

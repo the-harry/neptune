@@ -420,6 +420,72 @@ def leak_probe_fault_from(
 LEAK_UNKNOWN = "UNKNOWN"
 
 
+# WHAT GOES DARK WHEN EACH PART STOPS ANSWERING, in the operator's words rather
+# than the chip's. A log line that says "ms5837 stopped answering" is a fact about
+# a part number; the line an operator can act on says which GAUGES just went
+# blank, because that is what they are looking at when they reach for the log. The
+# keys are exactly the DeviceHealth keys, which are exactly the names
+# sensor_faults() puts on the wire — one vocabulary, so a line in the LOGS overlay
+# and a chip named on the alert rail can be matched by eye without a decoder ring.
+DEVICE_READINGS = {
+    "bno085": "heading, turn rate, forward acceleration, pitch/roll and mag_cal",
+    "ms5837": "depth and pressure",
+    "ina219": "pack voltage and current",
+    "leak-probes": f"the hull state (NORMAL becomes {LEAK_UNKNOWN} — nobody is checking it)",
+    "sensor-thread": "water speed and the tether link, and nothing refreshes the chips above",
+}
+
+
+def liveness_edge(
+    key: str, health: DeviceHealth, was_live: bool, announced: bool, now: float
+) -> tuple[str, str] | None:
+    """Has this instrument just CHANGED state, and what should the log say?
+
+    Returns ("info"|"warning", sentence), or None when nothing changed. Pure, and
+    the clock is injected — same rule and the same reason as DeviceHealth itself
+    (§24.4): logic that can only be reached by waiting on a real dying sensor on a
+    real Pi is logic nobody runs, and this is the code that decides whether a
+    failure gets written down at all.
+
+    FOUR TRANSITIONS, THREE OF WHICH HAD NO LINE ANYWHERE ON THIS VEHICLE:
+
+      * FIRST GOOD READ — the moment an instrument becomes real. Nothing said this.
+        On a vehicle being fitted one sensor at a time it is the most useful line
+        in the boot: it is the difference between "the wiring is right" and "the
+        console is being polite about nothing".
+      * STOPPED ANSWERING — including, and especially, WITHOUT RAISING.
+        `_device_failed` fires on a raise; the frozen MS5837 this whole module is
+        written around raised nothing at all for the rest of the dive.
+      * ANSWERING AGAIN — a reseated connector. Recovery is half the contract.
+      * NEVER ANSWERED — which is NOT a transition and deliberately says nothing.
+        The boot line names those once; repeating it would drown the other three on
+        exactly the half-built vehicle that needs them most.
+
+    `announced` is what separates a first arrival from the third reseat of a bad
+    connector: `answered_ever()` stays true forever once it flips, so on its own it
+    cannot tell those apart — and they are different lines with different meanings.
+    """
+    live = not health.faulted(now)
+    if live == was_live:
+        return None
+    what = DEVICE_READINGS.get(key, "the readings taken from it")
+    if live:
+        if not announced:
+            return ("info", f"{key} ANSWERED for the first time this power-cycle — {what} are live")
+        return ("info", f"{key} is ANSWERING AGAIN — {what} can be believed once more")
+    # WHY it stopped, because the two causes send an operator to different places:
+    # a streak of raises is a bus answering badly (loom, connector, address clash),
+    # and silence with no raise is a driver or a thread that stopped without
+    # complaining. Naming which one it was is the difference between a line that
+    # starts an errand and a line that only records a disappointment.
+    why = (
+        f"{health.fails} consecutive raises"
+        if health.fails >= health.fail_streak
+        else f"no good read for {now - (health.last_ok or now):.1f}s"
+    )
+    return ("warning", f"{key} STOPPED ANSWERING ({why}) — {what} now read cannot-tell")
+
+
 def leak_state_from(warn_wet: bool, flood_wet: bool, sampling: bool = True, probe_fault: str | None = None) -> str:
     """The leak stage: "FLOOD" | "WARN" | "UNKNOWN" | "NORMAL".
 
@@ -685,6 +751,36 @@ class HardwareBase(ABC):
         """
         return ()
 
+    def sensors_absent(self) -> tuple[str, ...]:
+        """Which of sensor_faults() have NEVER answered on this hull, e.g. ("bno085",).
+
+        A STRICT SUBSET OF sensor_faults(), and the distinction it carries is the
+        difference between two errands: a part that answered this power cycle and
+        stopped is a thing to go and look at; a part that has never answered at
+        all is, on a vehicle being built one instrument at a time, simply not
+        fitted yet. Both are cannot-tell for the READING — neither may ever put a
+        number on screen — but only one of them is a fault.
+
+        THE FAILURE THIS EXISTS FOR. `DeviceHealth` has always known the
+        difference (`answered_ever()`), and it stayed inside the hardware layer:
+        everything above it saw one undifferentiated null plus one name in
+        sensor_faults, so the console described every unfitted instrument as a
+        part that broke. On a hull with no IMU wired the bearing read "the
+        compass answered earlier in this dive and has now stopped" — an accusation
+        about a chip that was never in the boat, and an errand nobody can run.
+        docs/playbook.md's state ladder calls that state ABSENT and says the
+        readout "does not accuse anyone"; this is how the vehicle says which one
+        it is, because the vehicle is the only layer that knows.
+
+        AN EMPTY TUPLE MEANS "THIS BACKEND CANNOT TELL THEM APART", not "nothing
+        is absent" — and that default is deliberately the LOUD one. Reporting a
+        fault as an absence would silence a real failure; reporting an absence as
+        a fault only sends somebody to look at a connector that is not there. The
+        first is a lie about the hull, the second is a wasted walk, so the
+        unknowable case takes the second.
+        """
+        return ()
+
     # --- lifecycle ---------------------------------------------------------
     def update(self, dt: float) -> None:
         """Advance any internal simulation (mock only). No-op for real HW."""
@@ -804,6 +900,14 @@ class MockHardware(HardwareBase):
         # holding the last comfortable value — "NORMAL", "4 bars", the last speed.
         # See _stall_leak_sampling() and _stall_sensor_thread().
         self._stalled: set[str] = set()
+        # --- chips this hull HAS NEVER HAD --------------------------------------
+        # A STRICT SUBSET OF _dead, and the reason it is a second set rather than a
+        # third state is that everything above the hardware layer must treat the two
+        # identically for the READING: an unfitted chip answers exactly the nothing a
+        # dead one does, so every readback gate below stays `in self._dead` and cannot
+        # be got wrong per-sensor. What differs is only what the vehicle SAYS about
+        # it, and sensors_absent() is where that is said. See _unfit_sensor().
+        self._unfitted: set[str] = set()
         log.info("MockHardware active (bench simulation)")
 
     # actuators
@@ -1030,6 +1134,14 @@ class MockHardware(HardwareBase):
         # in normal operation — see _kill_sensor() and _stall_leak_sampling().
         return tuple(sorted(self._dead | self._stalled))
 
+    def sensors_absent(self) -> tuple[str, ...]:
+        # Which of those have NEVER answered on this hull. Empty on a healthy bench
+        # AND on a bench where something was killed mid-run — the bench's chips were
+        # all answering at power-on, so a kill is always a part that stopped. Only
+        # _unfit_sensor() puts a name here, because only it describes a vehicle that
+        # never had the part in the first place.
+        return tuple(sorted(self._unfitted))
+
     # sim advance
     def update(self, dt: float) -> None:
         if dt <= 0.0:
@@ -1164,8 +1276,15 @@ class MockHardware(HardwareBase):
                 "%s, because NORMAL is a claim nobody is checking",
                 LEAK_UNKNOWN,
             )
-        else:
+        elif "leak-probes" in self._stalled:
+            # SAID OUT LOUD, like the stall was. Recovery used to be the silent half
+            # of this hook, and a log that records a subsystem stopping and never
+            # records it starting again cannot be read backwards: an operator
+            # scrolling the LOGS overlay would find the stall and have no way to tell
+            # whether it is still standing. Guarded on the set so an un-stall of
+            # something that was never stalled says nothing.
             self._stalled.discard("leak-probes")
+            log.info("MOCK: leak probe sampling resumed — the hull state can be measured again")
 
     def _stall_sensor_thread(self, stalled: bool) -> None:
         """STOP THE SENSOR LOOP GOING ROUND — the failure that hides all the others.
@@ -1189,8 +1308,11 @@ class MockHardware(HardwareBase):
                 "MOCK: sensor loop stopped — water speed goes not-fresh, the "
                 "link reads -1, and the leak probes stop being sampled with it"
             )
-        else:
+        elif "sensor-thread" in self._stalled:
+            # Same reason as the leak sampler above: a stall that is logged and a
+            # recovery that is not leaves the log claiming a fault that has gone.
             self._stalled.discard("sensor-thread")
+            log.info("MOCK: sensor loop running again — water speed and the link are being sampled")
 
     def _kill_sensor(self, device: str) -> None:
         """Stop a named chip MID-RUN: from now on it answers nothing at all.
@@ -1255,6 +1377,49 @@ class MockHardware(HardwareBase):
             device,
         )
 
+    def _unfit_sensor(self, device: str) -> None:
+        """This hull HAS NEVER HAD this chip: it is not fitted, and never was.
+
+        THE STATE MOST OF THIS VEHICLE IS IN, and the one the bench could not
+        produce. The owner is fitting instruments one at a time, so for weeks at a
+        stretch the normal condition of most of them is "not wired yet" — and
+        without this hook the only shape of absence the bench could make was
+        _kill_sensor(), which describes a part that ANSWERED and STOPPED. Every
+        check written on the bench therefore described the vehicle being built as
+        a vehicle breaking, and so did the console: the bearing on a hull with no
+        IMU read "the compass answered earlier in this dive and has now stopped".
+
+        The readings are identical to _kill_sensor's by construction — the device
+        is added to `_dead` as well, so every readback gate stays one membership
+        test and no sensor can be got half-right. What changes is the SENTENCE the
+        vehicle offers for the null: the name appears in sensors_absent() as well
+        as sensor_faults(), and the console renders ABSENT (no fault chip, no
+        accusation) rather than cannot-tell. See docs/playbook.md §1.
+
+        Fitting it later is _revive_sensor(): a chip that has been screwed in and
+        answers is not absent and not dead, which is the same recovery contract
+        the kill hook has.
+
+        Usage:
+            hw._unfit_sensor("bno085")    # this boat has no compass yet
+            assert hw.read_heading() is None
+            assert hw.sensor_faults() == ("bno085",)
+            assert hw.sensors_absent() == ("bno085",)
+        """
+        if device not in self.DEVICES:
+            raise ValueError(
+                f"_unfit_sensor({device!r}): unknown device. Fittable chips are "
+                f"{', '.join(self.DEVICES)} — the same names RealHardware faults "
+                f"under and sensor_faults() reports."
+            )
+        self._dead.add(device)
+        self._unfitted.add(device)
+        log.warning(
+            "MOCK: %s is not fitted on this hull — it answers cannot-tell, and "
+            "the vehicle reports it as absent rather than as a part that stopped",
+            device,
+        )
+
     def _revive_sensor(self, device: str) -> None:
         """The chip answers again — a reseated connector, a bus that recovered.
 
@@ -1263,12 +1428,19 @@ class MockHardware(HardwareBase):
         is its own fault, and one nobody would notice until a dive. The mock's
         readings resume from the CURRENT simulated truth, never from the value
         that was frozen when it died.
+
+        IT ALSO FITS AN ABSENT CHIP — the connector that was never there is now
+        there and answering. A part that has answered is neither dead nor absent,
+        so both memberships go together; leaving the name in `_unfitted` would
+        have the vehicle go on calling a working instrument "not fitted", which is
+        the recovery half of this contract failing in the quieter direction.
         """
         if device not in self.DEVICES:
             raise ValueError(
                 f"_revive_sensor({device!r}): unknown device. Killable chips are " f"{', '.join(self.DEVICES)}."
             )
         self._dead.discard(device)
+        self._unfitted.discard(device)
         log.info("MOCK: %s answering again", device)
 
     def _force_skipped_steps(self, steps: int) -> None:
@@ -1372,6 +1544,15 @@ class RealHardware(HardwareBase):
     # own schedule (~10 Hz), leak sampling divides down to 10 Hz and the INA219
     # to 2 Hz — pack voltage does not move fast enough to be worth more.
     SENSOR_HZ = 50.0
+
+    # The leak probes are sampled every Nth sensor tick, i.e. at
+    # SENSOR_HZ / LEAK_SAMPLE_DIVIDER = 10 Hz. NAMED, because it is one half of a
+    # figure that matters off this page: the time between water touching a probe
+    # and the vehicle admitting it is `leak_debounce_samples / that rate` — a
+    # deliberate half second, and the dominant term in the whole pin-to-console
+    # path. api/tests/test_latency.py derives its budget from these two numbers, so
+    # a magic 5 buried in a modulo would let the budget go stale in silence.
+    LEAK_SAMPLE_DIVIDER = 5
 
     # MS5837 commands. D1/D2 at OSR 8192 (the highest oversampling) take 17.2 ms
     # each — the reason the depth read is a state machine rather than a sleep.
@@ -1618,6 +1799,37 @@ class RealHardware(HardwareBase):
             "sensor-thread": DeviceHealth("sensor-thread", fail_streak=1, silence_s=1.0),
         }
 
+        # --- liveness EDGES, so no instrument changes state in silence ---------
+        #
+        # DeviceHealth answers "is this chip answering right now" and the readbacks
+        # ask it fifteen times a second. Nobody was watching it CHANGE, and that is
+        # the half an operator needs: the console blanks a gauge the instant a
+        # verdict flips, and until now the boat's log recorded that flip only when
+        # something happened to RAISE. The failure this whole file exists for — a
+        # sensor that goes SILENT — produces no exception at all, so the loudest
+        # event on the vehicle was the quietest line in the log. `_device_failed`
+        # cannot cover it either: it fires on a raise, not on the verdict, and it
+        # is rate-limited to one line a minute, so a chip that dies sixty seconds
+        # after a NAK dies without a word.
+        #
+        # False for every key, before anything has run: NEVER ANSWERED IS FAULTED
+        # (see DeviceHealth), so seeding these True would make the first sweep of
+        # every boot announce five sensors dying. Seeded False, a chip that was
+        # never fitted stays quiet — its absence is stated once by the boot line
+        # below, and an absence is not a transition — while the first good read of
+        # one that IS fitted is a real edge and says so.
+        self._live: dict[str, bool] = dict.fromkeys(self._health, False)
+        # Which keys have already had their FIRST GOOD READ announced. Separate
+        # from _live because answered_ever() stays true forever once it flips, so
+        # it cannot tell a first arrival from the third reseat of a bad connector —
+        # and those are different lines with different meanings.
+        self._first_seen: set[str] = set()
+        # --- leak probe raw edges (see _leak_tick) -----------------------------
+        # None = never sampled, which is not the same as "dry".
+        self._probe_wet: dict[str, bool | None] = {"warn": None, "flood": None}
+        self._probe_edge_at: dict[str, float] = {}
+        self._probe_edge_n: dict[str, int] = {}
+
         # --- buses ------------------------------------------------------------
         self._bus = None
         self._imu = None
@@ -1643,7 +1855,18 @@ class RealHardware(HardwareBase):
         # because none of them has answered yet — the sensor thread has only just
         # started. That is the honest line to print, and it is the same list the
         # console will be shown, so a boot log and a screen can be compared.
-        log.info("RealHardware active (GPIO + I2C); not answering yet: %s", ",".join(self.sensor_faults()) or "none")
+        # THE ROLL CALL, AND IT IS THE FIRST HALF OF EVERY SENSOR'S LIFE STORY.
+        # The list of what is NOT answering was already here; what was missing was
+        # what IS — and the two together are what makes the log readable forwards.
+        # Somebody fitting one instrument at a time needs to see their group appear
+        # on this line the first time they boot after soldering it, without having
+        # to infer its arrival from the absence of its name somewhere else.
+        log.info(
+            "RealHardware active — GPIO groups fitted: %s; not fitted: %s; not answering yet: %s",
+            ",".join(sorted(n for n, ok in self._have.items() if ok)) or "none",
+            ",".join(sorted(n for n, ok in self._have.items() if not ok)) or "none",
+            ",".join(self.sensor_faults()) or "none",
+        )
 
     @staticmethod
     def _gpio_available() -> bool:
@@ -2043,6 +2266,59 @@ class RealHardware(HardwareBase):
         dead = {key for key, h in self._health.items() if h.faulted(now)}
         return tuple(sorted(self._faults | dead))
 
+    def sensors_absent(self) -> tuple[str, ...]:
+        """Which of sensor_faults() have NEVER answered THIS POWER CYCLE.
+
+        THE FACT THE VEHICLE ALREADY KNEW AND NEVER SAID. `DeviceHealth` has
+        carried `answered_ever()` since liveness was written — it is what keeps
+        the boot log from announcing a recovery on every first good read — and it
+        stopped at this class's edge, so the console had one undifferentiated null
+        for two different vehicles: the one whose compass died in the water, and
+        the one that has never had a compass screwed to it. The second is the
+        NORMAL condition of most of this boat for weeks at a time, and describing
+        it as a breakage is how a console teaches its operator to skip the rail.
+
+        ONE SOURCE, AND IT IS THE LEAF PARTS ONLY: a `_health` device with no good
+        read behind it. `faulted()` is already true for those (never answered is
+        faulted), so every name here is in sensor_faults() by construction.
+
+        THE LATCHED SUBSYSTEM FAULTS ARE DELIBERATELY NOT HERE, and each for its
+        own reason. Getting this wrong would be worse than not shipping the field
+        at all, because absence buys silence and silence about a fixable fault is
+        the failure this whole chain exists to prevent.
+
+          * `i2c` — THE BUS THAT WOULD NOT OPEN. On the vehicle this is written
+            against, /dev/i2c-1 does not exist because I2C is not enabled in
+            raspi-config, and that is an ERRAND with a clear fix — not a part
+            nobody has fitted. It also stands behind all three chips, so calling
+            it absent would silence the one name that explains three quiet gauges
+            at once. A bus that will not open stays loud.
+          * A GPIO GROUP THAT DID NOT COME UP (`_have[name] is False`). It reads
+            like the not-fitted case and is not: gpiozero constructs a device for
+            an unwired pin perfectly happily, so a group that RAISED did not raise
+            because nothing is soldered to it — it raised because of a pin factory
+            that would not load, a pin already in use, a bad pin number. That is a
+            bring-up failure with a cause, and it is the one thing the per-group
+            bring-up exists to name.
+          * `ballast-limits` — both limit switches reading triggered at once is an
+            impossible READING from switches that are wired and answering. An
+            absence is the lack of a reading, never a wrong one.
+
+        What this leaves is exactly the question the owner is asking week to week:
+        the bus is up, so is THIS chip on the end of it yet? A chip that has never
+        answered on a working bus is not fitted (or not working, which from here
+        is the same evidence and the same non-errand: nothing has been lost, and
+        it will fill in the moment the part answers). One that answered and went
+        quiet has an errand, and keeps it.
+
+        Intersected with sensor_faults() so the subset invariant is enforced here
+        rather than assumed by every reader: a name that is absent but somehow not
+        faulted would be a part the console is told to stay quiet about while
+        nothing else on screen accounts for it.
+        """
+        absent = {key for key, h in self._health.items() if not h.answered_ever()}
+        return tuple(sorted(absent & set(self.sensor_faults())))
+
     # ---- interrupt handlers (gpiozero edge threads) -----------------------
     def _on_paddle_pulse(self) -> None:
         self._paddle.pulse(time.monotonic())
@@ -2193,7 +2469,7 @@ class RealHardware(HardwareBase):
             self._device_ok("sensor-thread", now)
             # --- GPIO, on no bus at all, and therefore isolated from the bus ---
             try:
-                if tick % 5 == 0:
+                if tick % self.LEAK_SAMPLE_DIVIDER == 0:
                     self._leak_tick(now)  # 10 Hz, per the debounce spec
             except Exception as exc:  # noqa: BLE001
                 # A probe pin that will not read is a fault of ITS OWN — named, and
@@ -2227,6 +2503,17 @@ class RealHardware(HardwareBase):
                     self._link_tick()
             except Exception as exc:  # noqa: BLE001
                 log.warning("sensor tick failed: %s", exc)
+            # LAST, AND IN ITS OWN TRY, for the same reason everything above is:
+            # this is the loop that keeps the vehicle's instruments alive, and an
+            # exception raised by the code that WATCHES them must never be the thing
+            # that stops them. Last, because it reads the verdicts the ticks above
+            # have just written — a sweep taken before them would report every edge
+            # one tick late, which on a 50 Hz loop is nothing, and would report the
+            # first good read of the boot as happening before the read.
+            try:
+                self._note_liveness_edges(time.monotonic())
+            except Exception as exc:  # noqa: BLE001
+                log.warning("liveness edge sweep failed: %s", exc)
             tick += 1
             next_t += period
             self._stop.wait(max(0.0, next_t - time.monotonic()))
@@ -2261,14 +2548,45 @@ class RealHardware(HardwareBase):
             log.info("%s is answering again", key)
 
     def _device_ok(self, key: str, now: float) -> None:
-        """This chip just answered: the streak resets and the window restarts."""
-        h = self._health[key]
-        # Reported before the state is updated, and only for a device that had
-        # actually worked before — otherwise the first good read of every boot
-        # announces a recovery from a failure that never happened.
-        if h.answered_ever() and h.faulted(now):
-            log.info("%s is answering again", key)
-        h.ok(now)
+        """This chip just answered: the streak resets and the window restarts.
+
+        DELIBERATELY SILENT. It used to log the recovery from here, which covered
+        exactly one of the four transitions a sensor makes and covered it in the
+        one place that cannot see the other three: a death by SILENCE never calls
+        this method at all, so the log said "answering again" about a chip it had
+        never said anything else about. Every transition is now taken from the same
+        verdict, once a tick, by _note_liveness_edges() — one reader, one rule, and
+        a revival that cannot appear without the death that preceded it.
+        """
+        self._health[key].ok(now)
+
+    def _note_liveness_edges(self, now: float) -> None:
+        """Write down every change in "is this instrument answering". Only changes.
+
+        THE EDGE IS THE EVENT. `faulted()` is a LEVEL: it is true on every one of
+        the fifty ticks a second that follow a chip dropping off the bus, and a line
+        per tick is not a record of a fault, it is a denial-of-service on the log
+        the fault has to be read out of. So the verdict is compared against the last
+        one and only the flip is written down.
+
+        The DECISION is liveness_edge() at module scope, pure and clock-injected;
+        this is the bookkeeping around it — which keys have flipped and which have
+        already been introduced. Split that way for the reason §24.4 gives about
+        DeviceHealth itself: the rule has to be exercisable on a bench, and nothing
+        that can only be reached by owning a Pi with a dying sensor on it is.
+
+        Runs on the sensor thread and is arithmetic on two dicts — no bus traffic,
+        nothing that can block, in keeping with the rest of this loop.
+        """
+        for key, h in self._health.items():
+            edge = liveness_edge(key, h, self._live[key], key in self._first_seen, now)
+            self._live[key] = not h.faulted(now)
+            if edge is None:
+                continue
+            level, sentence = edge
+            if self._live[key]:
+                self._first_seen.add(key)
+            getattr(log, level)("%s", sentence)
 
     def _device_failed(self, key: str, msg: str, *args) -> None:
         """One attempt on this chip raised.
@@ -2556,8 +2874,25 @@ class RealHardware(HardwareBase):
         # chaining them would make a flood conditional on the warn probe still
         # working — which is exactly the probe most likely to be underwater and
         # corroded.
-        self._warn_debounce.sample(self._is_wet(self._leak_warn_in))
-        self._flood_debounce.sample(self._is_wet(self._leak_flood_in))
+        warn_wet = self._is_wet(self._leak_warn_in)
+        flood_wet = self._is_wet(self._leak_flood_in)
+        # Read BEFORE the sample, because sample() is what changes them: a dry
+        # sample zeroes wet_run, so asking afterwards how many wet samples the run
+        # had reached always answers zero — the number the line exists to carry.
+        warn_before = (self._warn_debounce.latched, self._warn_debounce.wet_run)
+        flood_before = (self._flood_debounce.latched, self._flood_debounce.wet_run)
+        self._warn_debounce.sample(warn_wet)
+        self._flood_debounce.sample(flood_wet)
+        # THE PIN ITSELF, WHICH IS THE ONE THING THE FIRST BRING-UP COULD NOT SEE.
+        # The console was correct at every layer and the probe still did nothing,
+        # and the only way anyone found out was `pinctrl get 17` over ssh — a tool
+        # that is not on the boat, not in the LOGS overlay, and not available to
+        # somebody standing on a towpath. The debounce is deliberate and half a
+        # second long, so between the water arriving and the alarm there is a window
+        # in which the vehicle knows something the operator does not. These lines
+        # are that window, written down.
+        self._note_probe_edge("warn", warn_wet, self._warn_debounce, warn_before, now)
+        self._note_probe_edge("flood", flood_wet, self._flood_debounce, flood_before, now)
         # HERE, not at the call site, and for the same reason _pressure_tick marks
         # itself only on the COLLECT stage: the liveness has to be attached to the
         # work, not to the call. Marked from the loop, a _leak_tick that returned
@@ -2566,6 +2901,79 @@ class RealHardware(HardwareBase):
         # read_leak() would go on saying NORMAL. Both probes are sampled above
         # before this line is reached, so reaching it IS the evidence.
         self._device_ok("leak-probes", now)
+
+    # Minimum gap between two RAW probe lines for the same probe. A corroded probe
+    # can chatter at the sample rate, and twenty lines a second would bury the
+    # latch line that matters. Flips inside the gap are COUNTED and reported on the
+    # next line that gets through — dmesg's "repeated N times", for the same reason
+    # the client's LOG bus coalesces its high-rate categories. The latch itself is
+    # never gated: it is one-way and fires once.
+    PROBE_EDGE_GAP_S = 1.0
+
+    def _note_probe_edge(self, name: str, wet: bool, deb: LeakDebouncer, before: tuple[bool, int], now: float) -> None:
+        """One probe's raw pin, and its debounce, as EVENTS rather than as a level.
+
+        Three things happen to a leak probe and all three were silent:
+
+          * IT GOES WET. Not an alarm yet — that is what the debounce is for — but
+            it is the first evidence of water and it is exactly what somebody
+            testing a freshly soldered probe with a wet comb is waiting to see.
+            Logged with the count so far, so a probe that reads wet for two samples
+            and dries is visibly different from one that latches.
+          * IT LATCHES. `leak_debounce_samples` sustained wet samples. This is the
+            transition the alarm is built on, and rov.py/main.py announce the STAGE
+            that results; this says which PROBE produced it and after how long.
+          * IT GOES DRY AGAIN BEFORE LATCHING. The one an operator most needs and
+            the one nothing anywhere recorded: a probe that flickers wet and dry is
+            a wiring fault, not weather, and under the old silence it left no trace
+            at all — the console simply never alarmed and nobody could say why.
+        """
+        was_latched, run_before = before
+        prev = self._probe_wet.get(name)
+        self._probe_wet[name] = wet
+        if deb.latched and not was_latched:
+            log.warning(
+                "leak probe %s LATCHED — %d consecutive wet samples at %.0f Hz. This is water, not a splash",
+                name.upper(),
+                deb.samples,
+                self.SENSOR_HZ / self.LEAK_SAMPLE_DIVIDER,
+            )
+            return
+        if prev is None or wet == prev:
+            return
+        # Rate-limited, and it says how many it swallowed rather than swallowing
+        # them quietly: a count of suppressed flips IS the diagnosis for a probe
+        # that is chattering.
+        self._probe_edge_n[name] = self._probe_edge_n.get(name, 0) + 1
+        if now - self._probe_edge_at.get(name, -1e9) < self.PROBE_EDGE_GAP_S:
+            return
+        flips = self._probe_edge_n.pop(name, 1)
+        self._probe_edge_at[name] = now
+        extra = f" (+{flips - 1} more change(s) since the last line)" if flips > 1 else ""
+        if wet:
+            log.info(
+                "leak probe %s reads WET — %d of %d samples toward a latch%s",
+                name.upper(),
+                deb.wet_run,
+                deb.samples,
+                extra,
+            )
+        elif deb.latched:
+            # The latch is one-way on purpose (see LeakDebouncer): water that has
+            # reached a probe has reached it. Say the pin went dry anyway, or the
+            # log implies the alarm is still being fed by live water.
+            log.info(
+                "leak probe %s reads dry again, but its latch STANDS — only a re-arm clears it%s",
+                name.upper(),
+                extra,
+            )
+        else:
+            log.info(
+                "leak probe %s went dry again after %d wet sample(s) — no latch%s",
+                name.upper(),
+                run_before,
+                extra,
+            )
 
     def _link_tick(self) -> None:
         # An Ethernet tether has no signal strength — it is a wire. Rather than

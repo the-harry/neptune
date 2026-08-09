@@ -27,6 +27,33 @@ log = logging.getLogger("neptune.rov")
 
 _CARDINALS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 
+# EVERY READING ON THE FRAME WHOSE NULL IS A CANNOT-TELL, and what to call it in a
+# sentence. This is the list the console blanks, so it is the list the log has to
+# be able to account for: `.specs/design.md` §24.5 says the null and the chip's
+# name are one decision read twice, and until now only ONE of those two readings
+# was ever written down anywhere. A gauge going blank is the loudest event on the
+# console and it happened in complete silence on the vehicle.
+#
+# The labels are the operator's words, not the field names, because the reader of
+# this line is looking at a dashboard and not at protocol.py.
+INSTRUMENT_READINGS = (
+    ("depth", "depth"),
+    ("pressure", "pressure"),
+    ("heading", "bearing"),
+    ("mag_cal", "compass calibration"),
+    ("battery_v", "pack voltage"),
+    ("current_a", "pack current"),
+    ("gyro_z_dps", "turn rate"),
+    ("accel_fwd_ms2", "forward acceleration"),
+    ("pitch_deg", "pitch"),
+    ("roll_deg", "roll"),
+    ("ballast_level", "ballast level"),
+)
+
+# The leak stages that are NOT a claim the hull is dry. Everything here reaches the
+# log at WARNING; NORMAL is the one stage that is good news and it goes to INFO.
+_LEAK_ALARMING = ("WARN", "FLOOD", "UNKNOWN")
+
 
 def _clamp(v: float, lo: float = -1.0, hi: float = 1.0) -> float:
     return lo if v < lo else hi if v > hi else v
@@ -84,6 +111,13 @@ class RovState:
         # doubt are not the same claim, and the console should be able to tell an
         # operator which one it is showing them.
         self.leak_rearms = 0
+        # --- what the last frame SAID, so a change can be noticed --------------
+        # None means "no frame has been built yet". The first frame is a BASELINE,
+        # never a set of transitions: on a half-built vehicle every gauge is already
+        # cannot-tell at power-on, and announcing eleven instruments "failing" on
+        # tick one would be the warning-that-fires-every-time this project keeps
+        # deleting. An absence is stated once, calmly, and only a CHANGE is an event.
+        self._said: dict | None = None
         hw.set_armed(False)
 
     # ---- inbound application --------------------------------------------
@@ -385,7 +419,7 @@ class RovState:
         except Exception:  # noqa: BLE001 — not a pair; the backend is broken, not the sub
             log.debug("read_pitch_roll() did not return a pair; reporting cannot-tell", exc_info=True)
             pitch, roll = None, None
-        return Telemetry(
+        tel = Telemetry(
             armed=self.armed,
             left=round(self.left, 3),
             right=round(self.right, 3),
@@ -453,6 +487,14 @@ class RovState:
             # measure. list() because the hardware hands back a tuple and the
             # contract is JSON.
             sensor_faults=list(self.hw.sensor_faults()),
+            # AND WHICH OF THOSE WERE NEVER FITTED, off the same handle in the same
+            # frame for the same reason: a name and a null are one verdict read
+            # twice, and this is that verdict read a third time — is this part an
+            # errand, or is it simply not in the boat? Passed through untouched.
+            # This layer has no business deciding which absences are excusable; it
+            # would be guessing, and a guess about whether a fault is real is the
+            # one place a "helpful" default silences a genuine failure.
+            sensors_absent=list(self.hw.sensors_absent()),
             # speed_ms / speed_src / snagged / gyro_only are deliberately left at
             # their defaults here. They are ESTIMATOR outputs, not hardware readings:
             # the paddlewheel yields an unsigned magnitude and only the nav filter
@@ -481,3 +523,127 @@ class RovState:
             net_cam_signal=metrics.get("net_cam_signal"),
             mock=self.hw.is_mock,
         )
+        # SAID BEFORE IT IS SENT. Everything above is a snapshot of what the console
+        # is about to be shown, and this is the only place in the system that holds
+        # the whole snapshot at once — the hardware layer knows its own chips, the
+        # client knows what arrived, and neither of them can say "the bearing went
+        # blank and here is the chip that took it with it" in one sentence.
+        #
+        # GUARDED, for the same reason read_pitch_roll() above is: this method runs
+        # on the control loop with nothing over it catching anything, so a raise in
+        # here would take telemetry, the watchdog and the blackbox down together —
+        # over a log line. Observability is worth a great deal and it is not worth
+        # the failsafe.
+        try:
+            self._note_instrument_edges(tel)
+        except Exception:  # noqa: BLE001 — a log line must never stop the vehicle
+            log.debug("instrument edge logging failed; the frame is unaffected", exc_info=True)
+        return tel
+
+    # ---- observability: instruments changing state ------------------------
+    def _note_instrument_edges(self, tel: Telemetry) -> None:
+        """Write down every instrument transition in this frame. LOGGING ONLY.
+
+        Nothing here reads back into the vehicle, changes a field, or can refuse
+        anything: it compares this frame with the last one and writes English. A
+        raise in here would take the control loop, the watchdog and the blackbox
+        down over a log line, so the caller's contract is that this cannot happen —
+        which is why it only ever touches values it was handed.
+
+        WHY IT IS AN EDGE DETECTOR AND NOT A STATUS LINE. Telemetry is 15 Hz. A
+        line per tick describing a dead sensor is nine hundred lines a minute, and
+        the LOGS overlay's ring is four thousand lines deep — one stuck sensor
+        would evict the entire history of the dive inside five minutes, which is
+        the opposite of observability. The transitions ARE the story; the levels
+        between them are already on screen.
+
+        WHY IT LIVES HERE. This is the frame the client receives, so what is logged
+        is what the operator was actually shown — not what a lower layer believed.
+        It also works on BOTH backends: MockHardware has no DeviceHealth, so a
+        bench dying under `_kill_sensor` produced no vehicle log line at all, and
+        the bench is where every one of these paths gets walked.
+        """
+        reporting = {field: getattr(tel, field, None) is not None for field, _ in INSTRUMENT_READINGS}
+        faults = frozenset(tel.sensor_faults or ())
+        now = {
+            "reporting": reporting,
+            "faults": faults,
+            "leak": tel.leak_state,
+            "probe_fault": tel.leak_probe_fault,
+            "tether_down": tel.signal is not None and tel.signal < 0,
+        }
+        was, self._said = self._said, now
+        if was is None:
+            # THE BASELINE, and it is INFO because it is not news — it is the
+            # heading of the page. Without it a sensor that was absent from
+            # power-on has no line anywhere and its "life story" begins in the
+            # middle; with it, the log opens by naming which instruments answered
+            # and which did not, which is the exact question somebody fitting one
+            # sensor at a time is holding the console to answer.
+            live = [label for field, label in INSTRUMENT_READINGS if reporting[field]]
+            dark = [label for field, label in INSTRUMENT_READINGS if not reporting[field]]
+            log.info(
+                "instruments at first frame — reporting: %s | cannot-tell: %s | not answering: %s | hull: %s",
+                ", ".join(live) or "nothing",
+                ", ".join(dark) or "nothing",
+                ", ".join(sorted(faults)) or "nothing",
+                tel.leak_state,
+            )
+            return
+
+        # --- readings that went dark, and the parts that took them -------------
+        lost = [label for field, label in INSTRUMENT_READINGS if was["reporting"][field] and not reporting[field]]
+        back = [label for field, label in INSTRUMENT_READINGS if not was["reporting"][field] and reporting[field]]
+        gained = sorted(faults - was["faults"])
+        cleared = sorted(was["faults"] - faults)
+        # ONE LINE, NOT SIX. A BNO085 dropping off the bus takes five readings with
+        # it in the same instant; five separate warnings read as five unrelated
+        # failures and send the reader looking for five causes. The two halves are
+        # kept apart because a part can stop without a NUMBER going blank — the
+        # leak probes and the sensor thread are exactly that — and "no reading
+        # changed" is a confusing thing to say about a real fault.
+        if lost:
+            log.warning(
+                "INSTRUMENT LOST: %s now read cannot-tell%s",
+                ", ".join(lost),
+                (
+                    f" (not answering: {', '.join(gained)})"
+                    if gained
+                    else " — no part was named, so the null is the whole claim"
+                ),
+            )
+        elif gained:
+            log.warning(
+                "PART STOPPED ANSWERING: %s — no numbered gauge changed; the hull state and the link are what it costs",
+                ", ".join(gained),
+            )
+        if back:
+            log.info(
+                "INSTRUMENT BACK: %s reading again%s",
+                ", ".join(back),
+                f" ({', '.join(cleared)} answering again)" if cleared else "",
+            )
+        elif cleared:
+            log.info("PART ANSWERING AGAIN: %s", ", ".join(cleared))
+
+        # --- the hull, which is a claim and not a number -----------------------
+        if now["leak"] != was["leak"]:
+            # Every stage change, both directions — main.py announces the ALARM on
+            # a RISING edge only, deliberately, so water receding and the sampler
+            # going quiet were both invisible. "FLOOD back to WARN" is not an
+            # emergency and is absolutely a thing the log has to contain.
+            level = log.warning if tel.leak_state in _LEAK_ALARMING else log.info
+            level("HULL %s -> %s (probe fault: %s)", was["leak"], tel.leak_state, tel.leak_probe_fault or "none")
+        if now["probe_fault"] != was["probe_fault"]:
+            if tel.leak_probe_fault:
+                log.warning(
+                    "LEAK PROBE FAULT: %s — a dead probe reads dry forever, so the hull state cannot be trusted",
+                    tel.leak_probe_fault,
+                )
+            else:
+                log.info("leak probe fault cleared — the probes read consistently again")
+        if now["tether_down"] != was["tether_down"]:
+            if now["tether_down"]:
+                log.warning("TETHER: no carrier — the link bars are a cannot-tell, not four bars")
+            else:
+                log.info("TETHER: carrier is back")
