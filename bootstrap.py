@@ -103,15 +103,33 @@ MAP_DEPS = (
 # because install.sh builds the Pi's venv from that file.
 #
 # They are reported for one reason: so that "not installed" can be told apart from "the
-# thing it measures came out at zero". A run of api/tests/run.py --coverage on a machine
-# without coverage prints no figures at all, deliberately, and this section is where you
-# find out why before you go looking for a bug in the runner.
+# thing it measures came out at zero", or from "the checker had no complaints". A run of
+# api/tests/run.py --coverage on a machine without coverage prints no figures at all, and
+# python lint.py on a machine without black checks no formatting at all - both say so and
+# both exit non-zero, and this section is where you find out why before you go looking
+# for a bug in a runner.
 #
-# Keep this list in step with the dev tooling section of api/requirements.txt.
+# ONE STRUCTURE FOR ALL OF THEM, not one per tool. What they have in common is the only
+# thing this section is about: they are desk tools, they are absent by default, absence is
+# correct on both machines in this system, and nothing here installs one. Splitting the
+# formatter off from the coverage tool would be two blocks saying the same paragraph.
+#
+# Keep this list in step with the dev tooling and code tools sections of
+# api/requirements.txt, which carry the pinned versions and the install commands.
 DEV_TOOLS = (
     ("coverage", "coverage",
      "python api/tests/run.py --coverage - which lines and branches of api/ the "
      "suites actually execute"),
+    ("black", "black",
+     "python lint.py - formatting at 120 columns, and --fix to apply it"),
+    ("flake8", "flake8",
+     "python lint.py - the lint proper at 120 columns (setup.cfg; flake8 cannot "
+     "read pyproject.toml)"),
+    ("isort", "isort",
+     "python lint.py - import order, on black's profile so the two agree"),
+    ("mypy", "mypy",
+     "python lint.py - types over api/: light by default, strict at the public "
+     "boundaries (protocol, hardware, nav.models, camera.models)"),
 )
 
 
@@ -512,12 +530,17 @@ def dev_tools() -> None:
         return
     print("  Optional, absent by default, and NOT counted below. None of it is in")
     print("  api/requirements.txt - install.sh builds the Pi's venv from that file, and")
-    print("  the vehicle has no use for a tool that watches tests it never runs.")
-    print("  Without it the test runner behaves exactly as it always has and names what")
-    print("  is missing instead of printing a figure it did not measure.")
+    print("  the vehicle has no use for a tool that watches tests it never runs or")
+    print("  shapes source it only executes.")
+    print("  Without them the runners behave exactly as they always have: api/tests/run.py")
+    print("  names what is missing instead of printing a figure it did not measure, and")
+    print("  python lint.py names each absent tool, refuses to call the run clean, and")
+    print("  exits non-zero. Nothing is silently skipped and nothing silently passes.")
     print("\n  Nothing here is installed by this check. If you want it:")
     print(f"      {py or sys.executable} -m pip install "
           + " ".join(pkg for pkg, _ in absent))
+    print("  api/requirements.txt carries the same command with a version pin on each of")
+    print("  the code tools and the reason for the pin written beside it.")
 
 
 def api_suite_totals(py: Path | None):

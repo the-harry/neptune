@@ -20,17 +20,16 @@ Exit status is **0 only if every check passed**, so it works as a pre-push gate.
 ## Where the numbers live
 
 **The runners are the only thing in this repo entitled to state a check total, and no
-document repeats one.** This page used to open with `~95 s, 249 checks`. That line was the
-stalest of **four different totals for one suite that were in circulation simultaneously**
-— 214 in `bootstrap.py`, 249 here, 286 in `client/README.md` and `.specs/design.md`, and a
-fifth number in reality — because each had been copied forward from whichever tree its
-writer had open rather than from a run. Two of them went stale in the very commit that
-"fixed" them.
+document repeats one.** The rule was earned: this page, `bootstrap.py`, `client/README.md`
+and `.specs/design.md` once carried **four different totals for the same suite at the same
+time**, none of which matched what a run actually printed. Each had been copied forward
+from whichever tree its writer had open rather than from a run, and two went stale in the
+very commit that "fixed" them.
 
-A stale count is worse than no count. Someone who reads 286 and watches a different number
-scroll past has been told the bench is running something other than what it is, and then
-has no reason to believe anything else the page says. That is the real cost: it is not one
-wrong number, it is the credibility of every number next to it.
+A stale count is worse than no count. Someone who reads a total here and watches a
+different number scroll past has been told the bench is running something other than what
+it is, and then has no reason to believe anything else the page says. That is the real
+cost: it is not one wrong number, it is the credibility of every number beside it.
 
 So the rule, and it is now kept by construction rather than by discipline:
 
@@ -207,8 +206,8 @@ it passes.
 0.000–0.016% (a few digits of telemetry and antialiasing), so the threshold is **0.1%**,
 about six times the floor. This matters more than it sounds: at the 2% I first reached
 for, the exit button growing from 28 px to 44 px went completely unnoticed — it is only
-0.13% of the screen. At 0.1% the same change reports **0.91% drift** while all 24 numeric
-checks still pass, which is precisely the gap a picture is here to cover.
+0.13% of the screen. At 0.1% the same change reports **0.91% drift** while every numeric
+check still passes, which is precisely the gap a picture is here to cover.
 
 **`map-zoom-and-rov` is recorded but never compared.** Its picture is *about* the map:
 satellite tiles arrive from the network and the vehicle moves underneath them, so two

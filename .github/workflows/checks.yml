@@ -1,0 +1,184 @@
+# The gate: the code checks, and both test suites, on every push and every pull request.
+#
+# THREE JOBS RATHER THAN ONE, because they answer three different questions and a single
+# red X that could mean any of them is a red X people stop reading. "checks" says whether
+# the source is shaped the way this repo says it is; "api" says whether the vehicle's
+# logic still holds; "client" says whether the console still draws what it claims. They
+# run in parallel and each one names itself when it fails.
+#
+# NO DISPLAY IS REQUIRED BY ANY OF THEM, and specifically not by the api suite: it is
+# stdlib unittest, it imports the api's own modules, and it never opens a window. There
+# is no xvfb here and there must never be one added for it. The client suite drives real
+# Chrome, which client/tests/run.py starts HEADLESS by itself (--headed is opt-in) and
+# which needs no X server either.
+#
+# NOTHING HERE IS INSTALLED ON THE VEHICLE. install.sh builds the Pi's venv from
+# api/requirements.txt, where the four code tools and the map libraries are all commented
+# out with the reason beside them. This runner is a desk, so it installs the desk's tools
+# — and it takes their VERSIONS from that same file rather than repeating them, so the pin
+# a person reads and the pin CI enforces cannot drift apart.
+name: Checks
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# No paths filter, on purpose. pages.yml has one because publishing the client on a
+# docs-only push is pointless; a GATE with a paths filter is a gate that can be walked
+# around by touching the wrong file, and the day it is wrong is the day nobody notices it
+# stopped running.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The VEHICLE's interpreter, not the newest one. Raspberry Pi OS bookworm ships 3.11
+  # and that is the python this api has to keep working under; a pipeline green on 3.13
+  # certifies a machine this project does not have. The dev handheld runs something newer
+  # and that is fine — two interpreters that both pass is information, one that is neither
+  # machine is not.
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ---------------------------------------------------------------- the code checks
+  checks:
+    name: lint.py (black, flake8, isort, mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Read the pinned tool versions out of api/requirements.txt
+        # ONE SOURCE OF TRUTH. The dev block in that file is commented out — it has to be,
+        # install.sh builds the Pi's venv from it — so it cannot be `pip install -r`'d, and
+        # the obvious alternative is to type the four versions again here. That is how a
+        # desk on black 26 and a pipeline on black 25 start handing each other reformatting
+        # diffs. So the pins are lifted from the file, and the run FAILS LOUDLY if they are
+        # not all there rather than quietly installing whatever pip feels like today.
+        run: |
+          pins=$(sed -n 's/^# \(black\|flake8\|isort\|mypy\)==\([0-9][^ ]*\)$/\1==\2/p' api/requirements.txt)
+          n=$(printf '%s\n' "$pins" | grep -c .)
+          if [ "$n" -ne 4 ]; then
+            echo "Expected 4 pinned code tools in api/requirements.txt, found $n:"
+            printf '%s\n' "$pins"
+            echo "The pins are the ones lint.py reports against; a partial read would install"
+            echo "unpinned tools and produce a verdict from versions nobody chose."
+            exit 1
+          fi
+          echo "PINS<<EOF" >> "$GITHUB_ENV"
+          printf '%s\n' "$pins" >> "$GITHUB_ENV"
+          echo "EOF" >> "$GITHUB_ENV"
+          printf 'using:\n%s\n' "$pins"
+
+      - name: Install the api's dependencies, and the handheld map libraries
+        # mypy needs them. Without pydantic and fastapi importable, every wire model on the
+        # public boundary degenerates into an unresolved import and the type check reports
+        # a catastrophe that is really a bare interpreter.
+        #
+        # numpy and scipy are installed for a narrower reason: SO THAT THIS RUNNER SEES THE
+        # SAME LIBRARIES A DESK SEES. A type checker's verdict depends on what it can
+        # import, and a pipeline missing two libraries the handheld has would reach a
+        # different count from the same source and each machine would think the other was
+        # broken. They are absent from the vehicle for their own good reasons, written out
+        # in api/requirements.txt; a runner is a desk.
+        #
+        # The Pi-only lines in that file stay commented out — gpiozero on a runner is
+        # exactly as wrong as scipy on the vehicle, and pyproject.toml expects them absent.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r api/requirements.txt
+          pip install "numpy>=2.0" "scipy>=1.11" "Pillow>=10.0"
+
+      - name: Install the code tools at the pinned versions
+        run: pip install $PINS
+
+      - name: python lint.py
+        # THE ENTRY POINT ITSELF, not a copy of its contents. Four hand-written tool
+        # invocations here would be a second definition of what "checked" means, and the
+        # first time the two disagreed the argument would be about which one is the repo's
+        # real standard. There is one, it is that file, and it reads the same pyproject.toml
+        # and setup.cfg an editor reads.
+        #
+        # Exit 1 = it found something. Exit 2 = a tool could not be RUN, which is not a pass
+        # and is not treated as one here either.
+        run: python lint.py
+
+  # ---------------------------------------------------------------- the api suite
+  api:
+    name: api tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install the api's dependencies, and the handheld map libraries
+        # THE MAP LIBRARIES ARE INSTALLED HERE AND NOWHERE NEAR THE PI. numpy, scipy and
+        # Pillow are commented out in api/requirements.txt because install.sh builds the
+        # vehicle's venv from that file and a 3B+ would spend hours compiling scipy for a
+        # layer it never draws. A CI runner is a desk: it has them in seconds, and without
+        # them the bank suite reports its checks as skipped-for-a-missing-package and the
+        # whole run comes back INCOMPLETE — which is the runner being honest, and a gate
+        # that is permanently honest about not having run is not a gate.
+        # The versions are the ones that file documents for the handheld.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r api/requirements.txt
+          pip install "numpy>=2.0" "scipy>=1.11" "Pillow>=10.0"
+
+      - name: python api/tests/run.py
+        # NO DISPLAY, NO BROWSER, NO XVFB. This suite is stdlib unittest over the api's own
+        # modules. If it ever appears to need a screen, something has imported the console
+        # into the vehicle and that is the finding.
+        #
+        # --no-venv because the interpreter has already been chosen, by setup-python above.
+        # The runner would otherwise look for a repo venv, and a checkout that grew one in
+        # a cache would silently move the run to a python this job never configured.
+        #
+        # Exit 2 (a suite that could not load, or checks skipped for a missing package) is
+        # a failure here exactly as it is on a desk. "We could not run it" is not "it
+        # passed", and the whole reason that exit code exists is so a gate stops on it.
+        run: python api/tests/run.py --no-venv
+
+  # ---------------------------------------------------------------- the client suite
+  client:
+    name: client tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Confirm there is a browser to drive
+        # client/tests/run.py finds Chrome itself and reports "no browser" as could-not-run
+        # rather than as a pass. This step exists so that the reason is at the top of the
+        # log instead of buried, if a runner image ever drops it.
+        run: google-chrome --version
+
+      - name: python client/tests/run.py
+        # HEADLESS ALREADY, by the runner's own default — there is no display on this
+        # machine and none is wanted. No dependency install: the client is vanilla JS with
+        # zero dependencies and no build step, and the test runner is stdlib python driving
+        # Chrome over CDP.
+        #
+        # --loose-visual, AND WHY. The visual baselines in client/tests/baseline/ were
+        # blessed on the handheld, in that machine's Chrome, with that machine's fonts.
+        # Compared here they drift for reasons that have nothing to do with the change
+        # under test — a different font stack renders the same DOM differently — so a
+        # pixel verdict from this runner measures the runner. The drift is still COMPUTED
+        # and still PRINTED in the visual section of the report, so a real layout change
+        # shows up in the log; it just does not get to fail a build on evidence this
+        # machine cannot produce. Visual drift remains a FAILURE by default on the desk
+        # that owns the baselines, which is where re-blessing is a deliberate act.
+        # Every non-visual check gates here exactly as it does on a desk.
+        run: python client/tests/run.py --loose-visual

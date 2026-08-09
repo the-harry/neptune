@@ -1,0 +1,204 @@
+# NEPTUNE — configuration for the DESK-ONLY code tools, and nothing else.
+#
+# THIS FILE DOES NOT MAKE THIS REPO A PACKAGE. There is no [build-system] and no
+# [project] table here on purpose: nothing about NEPTUNE is `pip install`-able, the api
+# is run from a checkout by uvicorn and the client is served as files. This file exists
+# so that `python lint.py` and a CI job and a person's editor all reach the SAME verdict
+# about the same line, instead of three tools disagreeing about a repo none of them was
+# configured for.
+#
+# NOTHING HERE IS A PI RUNTIME DEPENDENCY. install.sh builds the vehicle's venv from
+# api/requirements.txt, where every tool named below is COMMENTED OUT with the reason
+# written beside it. A formatter on a Raspberry Pi 3B+ is a download over a canal-side
+# hotspot for work that happens at a desk.
+#
+# ONE ENTRY POINT RUNS ALL OF THEM:  python lint.py
+# It reports a tool that is absent as ABSENT — never as a pass.
+
+# --------------------------------------------------------------------------- black
+[tool.black]
+# 120, matching flake8's max-line-length below. The two numbers are the same number and
+# must stay that way: a formatter that wraps at one width and a linter that complains at
+# another is a fight nobody can win, and the loser is whoever has to read the diff.
+#
+# WHY 120 AND NOT BLACK'S OWN 88. This code carries its reasoning in it — long
+# descriptive names, and comment lines that are sentences rather than labels. At 88 the
+# existing tree wraps into an unreadable stack of continuations and the review diff of
+# the reformatting commit becomes impossible to read for meaning.
+line-length = 120
+# 3.9 is the floor bootstrap.py enforces (check_common). Naming it stops black using a
+# syntax the Pi's interpreter would not accept, and stops the output changing shape
+# depending on which python happened to run the formatter.
+target-version = ["py39"]
+# Directories that hold no source of ours: virtualenvs on either machine, python's and
+# mypy's caches, and data/ — which is what the Pi writes at runtime, not something anyone
+# wrote.
+#
+# client/ IS NOT EXCLUDED, and that is deliberate. The client is vanilla JS with a
+# zero-dependency, zero-build rule, and none of these tools touches a .js file — but
+# client/tests/ is real python (a CDP driver, a PNG comparator and a 900-line runner) and
+# excluding the whole directory would quietly leave the console's entire test harness
+# unformatted and unlinted while the report said everything was checked.
+extend-exclude = '''
+/(
+    \.venv
+  | \.git
+  | \.mypy_cache
+  | __pycache__
+  | data
+)/
+'''
+
+# --------------------------------------------------------------------------- isort
+[tool.isort]
+# The black profile, which is the whole point: isort and black have a real disagreement
+# about how a wrapped import list looks, and this is the setting that ends it. Without
+# it the two tools rewrite each other's output forever and `--check` never goes quiet.
+profile = "black"
+line_length = 120
+# The same set as black's extend-exclude above, spelled as globs. client/ is absent from
+# it for the same reason it is absent there: client/tests/ is python.
+extend_skip_glob = ["*/.venv/*", "*/data/*", "*/.mypy_cache/*"]
+# api/ is the python root for this project — the code does `from config import settings`
+# and `from nav.x import y`, exactly as api/tests/run.py sets it up and exactly as
+# uvicorn runs it. Without this, `config` and `nav` look like third-party packages and
+# isort files them under the wrong heading, which is a diff that changes meaning.
+src_paths = ["api", "."]
+
+# --------------------------------------------------------------------------- mypy
+[tool.mypy]
+# THE SHAPE OF THIS SECTION IS THE POINT, so read this before loosening or tightening it.
+#
+# Strict everywhere would be dishonest tooling. This codebase duck-types on purpose:
+# the test fixtures stand in for hardware and for sensor sources by having the right
+# methods and nothing else, which is the correct way to test an ABC-shaped seam and is
+# not going to grow annotations to satisfy a checker. Blanket strictness over that
+# produces hundreds of findings nobody intends to act on, and a checker whose output is
+# routinely scrolled past is worse than no checker: it teaches people that red is normal,
+# and then the one real finding scrolls past with the rest.
+#
+# So: a light default over all of api/, and STRICT AT THE PUBLIC BOUNDARIES — the seams
+# where this system meets something that is not itself, and where a wrong type is a wrong
+# frame on a wire or a wrong command to a thruster. They are listed in the last override
+# block below, each with the reason it is on the list.
+#
+# 3.10 IS NOT THIS PROJECT'S FLOOR AND IS NOT CLAIMED TO BE. bootstrap.py enforces 3.9;
+# the vehicle runs whatever Raspberry Pi OS ships. mypy 2.x REFUSES to analyse below 3.10
+# ("Python 3.9 is not supported"), so 3.10 is the closest this checker can stand to the
+# real floor, and the gap is written down here rather than papered over by naming a
+# version that would let 3.11-only syntax through unremarked.
+python_version = "3.10"
+# api/ is the python root (see isort's src_paths). Without this every intra-api import
+# is unresolved and the whole run degenerates into "cannot find module".
+mypy_path = "api"
+files = ["api"]
+# The tests are checked at the default level like everything else, but they are NOT a
+# boundary and never appear in the strict list below — see the note at the top.
+exclude = '(^|/)(\.venv|\.mypy_cache|__pycache__|data)/'
+# Third-party packages with no type information. Named ONE BY ONE rather than with a
+# global ignore_missing_imports, because "this library ships no stubs" and "I typed the
+# module path wrong" produce the identical error, and a blanket ignore silently accepts
+# the second. Everything here is either Pi-only (absent on a dev box by design) or a
+# desk-only map library.
+ignore_missing_imports = false
+# Errors are worth having only if they are actionable, so say where each came from.
+show_error_codes = true
+pretty = false
+# A cast or an ignore that has stopped being needed is a small lie about the code that
+# reads as "this was hard here". Both are reported so they get removed.
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unused_configs = true
+# `def f(x: int = None)` means Optional[int] under the old implicit rule. It does not
+# mean that here: this project's whole doctrine is that None is a distinct answer, so a
+# None default has to be written down as one.
+no_implicit_optional = true
+strict_equality = true
+
+# HALF OF THIS REPO'S RULE ABOUT SUPPRESSIONS, enforced by mypy itself: an ignore must
+# name the error code it is silencing. Without a code it does not silence the error
+# somebody was looking at, it silences every error that line will ever produce, including
+# the finding nobody has written yet.
+#
+# The OTHER half — that a written reason stands beside it — is not something mypy can
+# check, so `python lint.py` checks it: a SUPPRESSIONS pass over every comment in this
+# project's python, which needs no package installed and therefore cannot come back
+# "absent" on the machine that has no tools.
+enable_error_code = ["ignore-without-code"]
+
+# --- Pi-only libraries. RealHardware imports each LAZILY, inside itself, so a dev box
+# never has them; that is the designed state, not a gap. There are no stubs for any of
+# them and writing some would be inventing a contract for silicon we do not control.
+[[tool.mypy.overrides]]
+# Each name here is one that hardware.py actually imports, and no more: warn_unused_configs
+# above turns a pattern nothing matches into a note, so a stale entry cannot sit here
+# looking like it is doing something.
+module = ["gpiozero", "smbus2", "adafruit_bno08x", "adafruit_bno08x.*", "board", "busio"]
+ignore_missing_imports = true
+
+# --- desk-only map libraries, imported inside the functions that need them so the api
+# starts without them (see api/requirements.txt, handheld section). scipy ships no stubs.
+[[tool.mypy.overrides]]
+module = ["scipy", "picamera2", "picamera2.*"]
+ignore_missing_imports = true
+
+# --- numpy, which DOES ship type information — and that is the problem. Its stubs are
+# written in syntax newer than the python_version above, so mypy stops on a [syntax]
+# error inside numpy's own .pyi before it has looked at a single line of NEPTUNE, and
+# the whole run reports one error in a file nobody here wrote. Skipping the follow means
+# numpy is Any inside nav/lidar.py and nav/bank.py: their array arithmetic is NOT
+# type-checked, which is the honest cost and is written here so it is not mistaken for
+# coverage. Neither module is a public boundary; both are desk-side map processing.
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
+follow_imports = "skip"
+follow_imports_for_stubs = true
+ignore_missing_imports = true
+
+# --- THE PUBLIC BOUNDARIES. Strict here and nowhere else.
+#
+#   protocol        The client/server wire contract over /ws/control, and the single
+#                   source of truth for it. A field whose type is wrong here is a frame
+#                   the console renders wrongly, or a command the vehicle mis-reads.
+#   hardware        The HardwareBase ABC and its two implementations. This is where
+#                   `float | None` means "the sensor is not answering" rather than
+#                   "zero", and the entire liveness doctrine (.specs/design.md §24)
+#                   rests on that distinction surviving in the type system as well as in
+#                   the prose. An Optional dropped here is a plausible number shown to
+#                   an operator.
+#   nav.models      The /api/* response models — the same wire contract, one layer over.
+#   camera.models   The camera CGI/route models, likewise.
+#
+# main.py is deliberately NOT here. It is the composition root: FastAPI decorators,
+# asyncio plumbing and the control loop, where strictness lands almost entirely on
+# framework glue rather than on the contract. The contract it serves is in the four
+# modules above, and that is where checking it is worth something.
+#
+# WHY THE FLAGS ARE SPELLED OUT INSTEAD OF `strict = true`. Because `strict = true` in a
+# per-module override does not stay in that module. MEASURED on mypy 2.3.0 against this
+# tree: `module = ["protocol"]` + `strict = true` took the run from 143 findings to 2053,
+# almost all of them missing annotations in api/tests/ — mypy accepted the setting
+# without complaint and then applied it globally. A config that quietly means the
+# opposite of what it says is the exact failure this repo refuses to ship, so the flags
+# below are the contents of --strict, enumerated, where they demonstrably stay put.
+#
+# The list is --strict's own, verbatim from `mypy --help` for the pinned version, minus
+# warn_redundant_casts — that one is global-only, mypy says so on stderr if you put it
+# here, and it is already on in the global section above, so the boundaries get it
+# anyway. If the pin moves and --strict grows a flag, this block does NOT grow it
+# automatically, and that is deliberate: a boundary getting stricter is a decision with a
+# diff, not a surprise arriving with a version bump.
+[[tool.mypy.overrides]]
+module = ["protocol", "hardware", "nav.models", "camera.models"]
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+extra_checks = true

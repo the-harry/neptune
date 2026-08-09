@@ -32,3 +32,8 @@ Thumbs.db
 # Test screenshots: captured every run, and a live instrument never photographs
 # identically twice. The BASELINE is committed; what a run saw is not.
 client/tests/screenshots/
+
+# mypy's incremental cache. lint.py points mypy at a cache under the system temp
+# so a check never leaves anything in the tree, but a bare `mypy api/` run by hand
+# still drops one here.
+.mypy_cache/

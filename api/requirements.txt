@@ -94,6 +94,55 @@ Pillow>=10.0
 # would be the same lie as a depth reading from a sensor that is not answering.
 # coverage>=7.4
 
+# --- code tools (TOPSIDE ONLY — pip-installable, DO NOT install on the Pi) ---
+# WHAT THEY ARE FOR. `python lint.py` is one command that runs all four over this repo
+# and prints one report. Their settings live in pyproject.toml (black, isort, mypy) and
+# setup.cfg (flake8, which does not read pyproject.toml and has said for years that it
+# will not). Neither config file makes this repo a package — there is no [project] table
+# and no setuptools metadata in either.
+#   black   formatting, 120 columns. The reformatting itself is its own commit, kept
+#           apart from every change of behaviour so a diff that moves a thousand lines
+#           never has one that changes a decision hidden inside it.
+#   flake8  the lint proper, 120 columns, the same number as black's — two tools
+#           disagreeing about the width is a fight the reader loses.
+#   isort   import order, on black's profile so the two stop rewriting each other.
+#   mypy    types over api/. LIGHT by default and STRICT AT THE PUBLIC BOUNDARIES:
+#           protocol.py (the /ws/control wire contract), hardware.py (the HardwareBase
+#           contract, where `float | None` means the sensor is not answering rather than
+#           zero), nav/models.py and camera/models.py (the /api/* response shapes).
+#           Deliberately NOT strict everywhere — the test fixtures duck-type on purpose,
+#           and a checker that shouts about that teaches people to scroll past it.
+#
+#   pip install "black==26.5.1" "flake8==7.3.0" "isort==8.0.1" "mypy==2.3.0"
+#
+# EXACT PINS HERE, WHERE EVERY OTHER SECTION IN THIS FILE USES `>=`. A library is pinned
+# loosely because a newer one does the same job; a FORMATTER is not a library. Black 26
+# and Black 25 disagree about lines this repo already contains, so a desk on one and a CI
+# job on the other hand each other a reformatting diff on every push and neither is
+# wrong. The same goes for a linter and a type checker: the verdict IS the version. When
+# a pin moves it moves here, once, and `python lint.py` says so out loud — it reads these
+# pins out of this file and reports any tool running at a different version, rather than
+# carrying a second copy of the numbers that could drift from these.
+#
+# WHY THEY ARE COMMENTED OUT, like the sections above. install.sh builds the Pi's venv
+# from THIS FILE with one exclusion and one only —
+#     grep -viE '^\s*Pillow' api/requirements.txt
+# — so an uncommented `black` here is a formatter, a linter and a type checker downloaded
+# onto a Raspberry Pi 3B+ over a canal-side hotspot, to shape source the vehicle only
+# ever executes. The Pi serves the ROV; the code is written at a desk.
+#
+# THE ENTRY POINT WORKS WITHOUT THEM, AND SAYS WHICH ONE IS MISSING. `python lint.py`
+# probes for each tool before running it, names by tool the ones that are absent, prints
+# the command above, and exits NON-ZERO with an INCOMPLETE verdict — never a clean one.
+# A checker that skips what it cannot run and prints "ok" is the same instrument as a
+# depth readout showing 0.0 with the sensor unplugged. One check needs nothing installed
+# and therefore always runs: that every `# type: ignore` carries an error code and a
+# written reason, and every `# noqa` carries a code.
+# black==26.5.1
+# flake8==7.3.0
+# isort==8.0.1
+# mypy==2.3.0
+
 # --- Pi only (NOT pip-installable — install via apt) ---
 # sudo apt install -y python3-picamera2
 # picamera2 provides the real CSI camera MJPEG feed.
