@@ -21,7 +21,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from .config import READ_TO_WRITE, SLOW_PROPERTIES, WRITE_TO_READ, cam_settings
+from .config import SLOW_PROPERTIES, WRITE_TO_READ, cam_settings
 
 log = logging.getLogger("neptune.cam.cgi")
 

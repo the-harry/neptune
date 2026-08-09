@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 from pathlib import Path
 
 # A steady segment: control input held still enough, for long enough, to mean anything.
@@ -469,7 +468,7 @@ def report(path: Path, ground_truth: float | None = None) -> int:
     enc, why_enc = encoder_speed(samples)
     if enc:
         print(f"  from tether payout: {enc['lut_points']}")
-        print(f"  -> nav SpeedLUT points (python -m nav.cli speed-cal ...)")
+        print("  -> nav SpeedLUT points (python -m nav.cli speed-cal ...)")
     elif ground_truth:
         gt, why = speed_from_ground_truth(samples, ground_truth)
         if gt:

@@ -18,7 +18,7 @@ import time
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import Response, StreamingResponse
+from starlette.responses import Response
 from starlette.routing import Route
 
 SERVER_HEADER = "AIT Multimedia Network Solution, UPnP/1.0 devices/1.6.19"

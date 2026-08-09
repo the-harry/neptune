@@ -89,7 +89,6 @@ os.environ["ROV_LOG_DIR"] = str(_TMP / "log")
 os.environ.setdefault("WOLFANG_T_FAST", "0.25")
 os.environ.setdefault("WOLFANG_T_SLOW", "0.25")
 
-from config import settings  # noqa: E402
 from nav import calibrate, cli  # noqa: E402
 from nav.config import settings as nav_settings  # noqa: E402
 from nav.divelog import DiveLog  # noqa: E402

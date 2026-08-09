@@ -916,7 +916,7 @@ def _print_national_status(crt) -> int:
         f"{card['bytes'] / 1e6:.0f} MB"
     )
     print(f"verdict  : {'FETCH NEEDED — ' if stale else 'complete — '}{why}")
-    print(f"serve it : GET /api/crt   and   GET /api/crt/<layer>")
+    print("serve it : GET /api/crt   and   GET /api/crt/<layer>")
     return 1 if stale else 0
 
 
@@ -986,7 +986,7 @@ def _crt_national(args, crt) -> int:
         # NOT written. Printed in full: a warning nobody reads is worth no warning.
         print(f"  warn   : {w}")
     print(f"provenance: {crt.national_provenance_path()}")
-    print(f"serve it : GET /api/crt   and   GET /api/crt/<layer>")
+    print("serve it : GET /api/crt   and   GET /api/crt/<layer>")
     return 0 if res.get("ok") else 1
 
 
@@ -1359,7 +1359,7 @@ async def _area_fetch_run(svcmod, name: str, bbox, zmin: int, zmax: int, radius,
     # would be the one place in this chain where a layer that never landed looks
     # fetched.
     after = svcmod.area_completeness(name)
-    print(f"\non this card now:")
+    print("\non this card now:")
     for key in [k for k, _, _ in svcmod.FETCH_SOURCES]:
         s = after["sources"].get(key) or {}
         print(f"  {key:<11} {s.get('status', '?'):<10} {s.get('title', '')}")

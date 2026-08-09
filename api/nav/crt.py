@@ -1731,7 +1731,7 @@ async def download_national(progress=None, *, refresh: bool = False) -> dict:
             "scope": "national",
             "busy": True,
             "error": (
-                f"a national fetch is already running"
+                "a national fetch is already running"
                 + (f" (process {holder.get('pid')}, started " f"{holder.get('started')})" if holder else "")
                 + " — these are rate-limited public services, two jobs would "
                 "halve the rate each, and both would be appending pages to "

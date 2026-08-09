@@ -1221,7 +1221,7 @@ def report(
     t = ds["tally"]
     print("\n--- BOTTOM EVIDENCE ---")
     print(f"  {ds['contacts']} touchdown(s), {ds['contact_samples']} sample(s): the sub " f"stopped descending")
-    print(f"  while the syringe was still filling, so something solid was holding it up.")
+    print("  while the syringe was still filling, so something solid was holding it up.")
     print(
         f"  ({t['flat_runs']} flat stretch(es) examined: {t['too_short']} too brief, " f"{t['no_fill']} with no fill,"
     )

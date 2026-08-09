@@ -1043,8 +1043,6 @@ class TheCorridorComesFromTheVector(BankTestCase):
     the covered section is what tells the two apart."""
 
     def test_the_corridor_is_as_wide_as_it_says_and_no_wider(self):
-        import numpy as np
-
         inside = self.t["dy"] <= 32
         got = self.cls_ != bank.BANK_CLASS_OUTSIDE
         miss = inside & ~got & ~self.t["nodata"]
@@ -1143,8 +1141,6 @@ class NodataNeverReachesTheArithmetic(BankTestCase):
         )
 
     def test_the_sentinel_never_reaches_the_elevation_range(self):
-        import numpy as np
-
         got = lidar.decode_dtm(geotiff_bytes(elevation()))
         real = elevation()[~self.t["nodata"]]
         self.assertAlmostEqual(
@@ -1166,7 +1162,7 @@ class NodataNeverReachesTheArithmetic(BankTestCase):
         levels = [float(r["level_m_od"]) for r in self.w["raster"].levels]
         self.assertTrue(levels, "no water level was detected at all")
         self.assertTrue(
-            all(l > 0.0 for l in levels),
+            all(level > 0.0 for level in levels),
             f"a detected water level is at or below zero: {levels}. There is a nodata "
             f"hole in the middle of this fixture's channel and its value is {NODATA}.",
         )
@@ -1487,7 +1483,7 @@ class Provenance(BankTestCase):
             "this check can only bite outside 2022; if the bench clock " "really says 2022, read the vintage by hand",
         )
         blob = json.dumps(self.prov, default=str)
-        self.assertIn("2022", blob, f"nothing in the provenance record mentions 2022 at all")
+        self.assertIn("2022", blob, "nothing in the provenance record mentions 2022 at all")
         self.assertIn(
             "2022",
             str(self.prov.get("vintage_warning") or ""),

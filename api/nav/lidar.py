@@ -1081,7 +1081,7 @@ def _state_of(parts: dict, stats: dict) -> tuple[str, str]:
     vintage = settings.lidar_survey_vintage
     if not got:
         return "absent", (
-            f"No LIDAR was stored for this area. "
+            "No LIDAR was stored for this area. "
             + (
                 f"{len(failed)} sub-request(s) failed and can be retried."
                 if failed

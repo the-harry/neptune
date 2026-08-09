@@ -137,7 +137,7 @@ class Simulator:
 
     @property
     def duration(self) -> float:
-        return sum(l.duration_s for l in self.path)
+        return sum(leg.duration_s for leg in self.path)
 
     @property
     def finished(self) -> bool:

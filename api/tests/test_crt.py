@@ -65,7 +65,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-import inspect
 import json
 import math
 import re
@@ -612,9 +611,9 @@ class LayerDiscovery(CrtTestCase):
     """The service is asked what it has. Nothing assumes layer 0."""
 
     def test_inventory_reads_the_layer_ids_off_the_service(self):
-        fake = self.serve(FakeArcGIS())
+        self.serve(FakeArcGIS())
         found = self.arun(crt.inventory())
-        ids = sorted(l["layer_id"] for l in found if l.get("layer_id") is not None)
+        ids = sorted(layer["layer_id"] for layer in found if layer.get("layer_id") is not None)
         self.assertEqual(
             ids,
             sorted(s["lid"] for s in SERVICES),
@@ -629,17 +628,18 @@ class LayerDiscovery(CrtTestCase):
             "none — that is the hardcoded id, not a discovered one",
         )
         self.assertFalse(
-            [l for l in found if l.get("error")],
-            f"a service came back unreadable: " f"{[(l['name'], l['error']) for l in found if l.get('error')]}",
+            [layer for layer in found if layer.get("error")],
+            f"a service came back unreadable: "
+            f"{[(layer['name'], layer['error']) for layer in found if layer.get('error')]}",
         )
 
     def test_both_the_hub_and_the_hardcoded_services_are_reached(self):
         # The four layers that most directly stop a small ROV — sluices, safety gates,
         # stop-plank grooves, outfalls — are not on the Hub at all, so a discovery
         # that only walks the Hub silently drops exactly the hazards this is for.
-        fake = self.serve(FakeArcGIS())
+        self.serve(FakeArcGIS())
         found = self.arun(crt.inventory())
-        sources = {l["source"] for l in found}
+        sources = {layer["source"] for layer in found}
         self.assertEqual(
             sources,
             {"hub", "org"},
@@ -666,7 +666,7 @@ class LayerDiscovery(CrtTestCase):
         # The double answers a wrong layer id with {"error": ...} and HTTP 200, which
         # is what ArcGIS really does. json.loads is perfectly happy with it, and zero
         # features get counted out of it — an empty hazard file, from an error.
-        fake = self.serve(FakeArcGIS())
+        self.serve(FakeArcGIS())
         bad = f"{ORG}/{SERVICES[0]['service']}/FeatureServer/0/query?f=geojson"
         got = self.arun(crt._get_json(bad, tries=1))
         self.assertIsNone(got, f"an ArcGIS error body was returned as data: {got!r}")
@@ -834,7 +834,7 @@ class Provenance(CrtTestCase):
         super().setUp()
         self.fake, self.result = self.download()
         self.prov = self.provenance()
-        self.by_key = {l["layer_key"]: l for l in self.prov["layers"]}
+        self.by_key = {layer["layer_key"]: layer for layer in self.prov["layers"]}
 
     def test_every_written_layer_records_the_service_it_came_from(self):
         self.assertTrue(self.by_key, f"no layers recorded: {self.prov}")
@@ -961,7 +961,7 @@ class PartialFetch(CrtTestCase):
             key,
             skipped,
             f"the layer simply vanished from the record: {sorted(skipped)} / "
-            f"{sorted(l['layer_key'] for l in prov['layers'])}",
+            f"{sorted(layer['layer_key'] for layer in prov['layers'])}",
         )
         self.assertEqual(
             skipped[key].get("skipped"), "fetch-failed", f"recorded as {skipped[key].get('skipped')!r}: {skipped[key]}"

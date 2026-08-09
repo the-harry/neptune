@@ -16,7 +16,7 @@ import time
 import xml.etree.ElementTree as ET
 
 import httpx
-from fastapi import APIRouter, Body, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 
 from .cgi import PRIORITY_TELEMETRY, PRIORITY_USER, CgiClient

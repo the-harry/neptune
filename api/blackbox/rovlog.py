@@ -90,6 +90,13 @@ class Offset:
             return o0
         return o0 + (o1 - o0) * (ct - t0) / (t1 - t0)
 
+    def onto_pi(self, t: float, from_client: bool) -> float:
+        """`t` on the Pi's timebase. A Pi timestamp is already there and comes back
+        untouched — the correction only ever applies to the client's clock, and the
+        one bug this guards is applying it to the side that did not need it, which
+        moves the two logs APART by exactly the offset and looks like a real lag."""
+        return t + self.at(t) if from_client else t
+
     def reliable_at(self, ct: float) -> bool:
         """A sample near ct with acceptable jitter/sample-count."""
         if not self.samples:
@@ -109,7 +116,7 @@ def merge(nav: list[dict], client: list[dict]) -> list[dict]:
         merged.append({**r, "side": "pi", "at": r.get("t", 0)})
     for r in client:
         ct = r.get("t", 0)
-        rec = {**r, "side": "client", "at": ct + off.at(ct), "raw_t": ct}
+        rec = {**r, "side": "client", "at": off.onto_pi(ct, from_client=True), "raw_t": ct}
         if not off.reliable_at(ct):
             rec["align_unreliable"] = True
         merged.append(rec)
@@ -138,6 +145,17 @@ def _pct(vals, p):
     vals = sorted(vals)
     k = max(0, min(len(vals) - 1, int(round((p / 100) * (len(vals) - 1)))))
     return round(vals[k], 1)
+
+
+def _spread(vals) -> dict:
+    """The four numbers every millisecond figure in this report is quoted as.
+
+    `n` travels with them and is not decoration: a p95 taken from three samples is not
+    a p95, and _pct returns None from no samples at all — which is the difference
+    between "nothing was slow" and "nothing was measured", and the reader cannot tell
+    them apart without the count.
+    """
+    return {"p50": _pct(vals, 50), "p95": _pct(vals, 95), "max": _pct(vals, 100), "n": len(vals)}
 
 
 def _seqset_from_ranges(events, name):
@@ -200,29 +218,21 @@ def diverge(nav: list[dict], client: list[dict]) -> dict:
             tb = b_times.get(cid)
             if tb is None:
                 continue
-            aa = ta + (off.at(ta) if a_side == "client" else 0)
-            bb = tb + (off.at(tb) if b_side == "client" else 0)
-            vals.append(bb - aa)
+            began = off.onto_pi(ta, a_side == "client")
+            ended = off.onto_pi(tb, b_side == "client")
+            vals.append(ended - began)
         return vals
 
+    # One name per stage, spelled out: apply→ack is the Pi answering itself and
+    # apply→confirm is the whole round trip, and abbreviated they differ by a letter.
     intent = _cid_times(client, "cmd_intent")
-    lat_ia = stage(intent, applied, "client", "pi")  # intent → apply
-    lat_aa = stage(applied, ack_send, "pi", "pi")  # apply  → ack
-    lat_ac = stage(applied, confirmed, "pi", "client")  # apply  → confirm
+    intent_to_apply = stage(intent, applied, "client", "pi")
+    apply_to_ack = stage(applied, ack_send, "pi", "pi")
+    apply_to_confirm = stage(applied, confirmed, "pi", "client")
     rep["latency_ms"] = {
-        "intent_to_apply": {
-            "p50": _pct(lat_ia, 50),
-            "p95": _pct(lat_ia, 95),
-            "max": _pct(lat_ia, 100),
-            "n": len(lat_ia),
-        },
-        "apply_to_ack": {"p50": _pct(lat_aa, 50), "p95": _pct(lat_aa, 95), "max": _pct(lat_aa, 100), "n": len(lat_aa)},
-        "apply_to_confirm": {
-            "p50": _pct(lat_ac, 50),
-            "p95": _pct(lat_ac, 95),
-            "max": _pct(lat_ac, 100),
-            "n": len(lat_ac),
-        },
+        "intent_to_apply": _spread(intent_to_apply),
+        "apply_to_ack": _spread(apply_to_ack),
+        "apply_to_confirm": _spread(apply_to_confirm),
     }
 
     # --- staleness (§4) ---
@@ -233,11 +243,8 @@ def diverge(nav: list[dict], client: list[dict]) -> dict:
     ]
     THRESH = 500
     rep["staleness_ms"] = {
-        "p50": _pct(ages, 50),
-        "p95": _pct(ages, 95),
-        "max": _pct(ages, 100),
+        **_spread(ages),
         "windows_over_%dms" % THRESH: sum(1 for a in ages if a > THRESH),
-        "n": len(ages),
     }
 
     # --- video divergence (§4.2) — consumer stats; producer side not logged here ---
@@ -264,15 +271,14 @@ def diverge(nav: list[dict], client: list[dict]) -> dict:
 
 
 def _one_sided(nav, client, off, gap_s):
-    def times(evs, aligned):
-        return sorted((e["t"] + (off.at(e["t"]) if aligned else 0)) for e in evs if "t" in e)
+    def times(evs, from_client):
+        return sorted(off.onto_pi(e["t"], from_client) for e in evs if "t" in e)
 
     pi_t = times(nav, False)
     cl_t = times(client, True)
     if not pi_t or not cl_t:
         return {"note": "need both sides to detect one-sided outages"}
     out = []
-    span = (min(pi_t[0], cl_t[0]), max(pi_t[-1], cl_t[-1]))
 
     def find_silence(ts, other, label):
         for i in range(1, len(ts)):
@@ -681,7 +687,13 @@ def timeline(nav, client, around: float, window: float) -> list[str]:
             continue
         side = r["side"]
         tag = "PI  " if side == "pi" else "  CL"
-        flag = " ~unrel" if r.get("align_unreliable") else ""
+        # A client row's time is the client's clock TRANSLATED onto the Pi's, and merge()
+        # marks the translations it could not stand behind — extrapolated more than 30 s
+        # from any clock_sync, or interpolated off a jittery one. The mark is printed
+        # beside the time it qualifies, because the whole use of this view is reading an
+        # ordering out of that column, and an estimate that looks exactly like a
+        # measurement is how "the client saw it first" gets concluded from arithmetic.
+        flag = "~unrel" if r.get("align_unreliable") else ""
         d = r.get("d", "")
         cid = (" [" + r["c_id"][:8] + "]") if r.get("c_id") else ""
         col = f"{r['at']:.1f}"
@@ -689,7 +701,7 @@ def timeline(nav, client, around: float, window: float) -> list[str]:
             body = _tlm_brief(d)
         else:
             body = json.dumps(d, separators=(",", ":")) if d else ""
-        row = f"{col:>14}  {tag}  {r.get('e','?'):<16}{cid} {body}"
+        row = f"{col:>14} {flag:<6} {tag}  {r.get('e', '?'):<16}{cid} {body}"
         lines.append(row)
     return lines
 

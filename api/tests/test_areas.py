@@ -960,10 +960,10 @@ class InterruptedTest(AreaTestCase):
         self.assertNotEqual(
             state,
             "present",
-            f"a download that died after 3 tiles left the area reading PRESENT. An "
-            f"MBTiles file appears on disk with the FIRST tile, so a stat() says yes "
-            f"3% of the way through - and the map then draws what landed and clear "
-            f"water everywhere else.",
+            "a download that died after 3 tiles left the area reading PRESENT. An "
+            "MBTiles file appears on disk with the FIRST tile, so a stat() says yes "
+            "3% of the way through - and the map then draws what landed and clear "
+            "water everywhere else.",
         )
         self.assertIn(
             state,
@@ -1007,7 +1007,6 @@ class InterruptedTest(AreaTestCase):
         """RESUMABLE. The tiles that did land are not thrown away and are not re-fetched."""
         self.net.fail_tiles_after = 5
         self.set_origin()
-        got = self.net.tiles
         meta = _area_meta()
         self.assertIsNotNone(meta)
         archive = nav_settings.areas_dir / f"{meta['name']}.mbtiles"
