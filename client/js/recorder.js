@@ -15,6 +15,24 @@
 
    Everything here is wrapped so a recorder fault can never break piloting.
    ============================================================================ */
+/* PUBLISHED ON `window` DELIBERATELY, AND THE OMISSION WAS EXPENSIVE.
+
+   A top-level `const` in a classic script is lexically scoped to the script — it never
+   becomes a property of `window`. Every consumer of the recorder guards itself with
+   `if (window.REC && REC.enabled)`, so with no assignment here EVERY ONE OF THOSE
+   GUARDS WAS PERMANENTLY FALSE and most of the blackbox was dead code that read as
+   live: no correlation id on any command (so §3's eight-stage command lifecycle tied
+   nothing to anything), no session adopted from the Pi, no telemetry or ack recorded,
+   and the §2 SNTP clock exchange never running at all.
+
+   It hid for so long because `REC.init()` is called with a BARE `REC`, which resolves
+   lexically and works fine — so the recorder genuinely started, `enabled` really was
+   true, and the session file on disk really was written. Everything that asked
+   `window.REC` first got silence; everything that asked `REC` directly got a working
+   object. Two names for one thing, one of which did not exist.
+
+   The guards stay as they are: they are the right shape for a subsystem that must
+   never be able to break piloting. This line is what makes them mean something. */
 const REC = {
   enabled:false, ready:false,
   db:null, mem:[],                 // IndexedDB handle; in-memory fallback if IDB is unavailable
@@ -404,3 +422,7 @@ function _beaconFlush(){
     }
   }catch(e){/* ignore */}
 }
+
+// See the note on the declaration: without this, every `window.REC` guard in the
+// console is false and the blackbox's correlation half never runs.
+window.REC = REC;
