@@ -26,3 +26,4 @@
 *.png         binary
 *.jpg         binary
 *.woff2       binary
+*.pdf         binary
