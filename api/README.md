@@ -49,6 +49,13 @@ from disk and point it at the host via `?host=…`.
   strictly worse than an honest simulation. Set `NEPTUNE_HW=real` to require real
   hardware and fail loudly instead.
 
+  > **SOFTWARE GAP (2026-08-18):** the vehicle (`docs/hardware.md`) puts all sensing on
+  > an ESP32 brainstem over USB serial; the Pi keeps only two DRV8871 pairs
+  > (GPIO 23/24, 5/6). `RealHardware`'s pin constants describe the retired bench
+  > vehicle — do **not** fill in the `TODO(hardware)` methods against Pi GPIO. The
+  > integration work is `RealHardware` as a serial client of the brainstem
+  > (`docs/hardware.md` §8; ledger §20).
+
   **Pi system health is always real**, regardless of the vehicle backend — see below.
 
 ## API (matches the client exactly)
@@ -332,5 +339,5 @@ cannot-tell behaviour for free and cannot drift from it.
 They are **diagnostic**, not navigational — nothing safety-critical branches on attitude,
 and forward acceleration is never integrated twice into a position. What each one is worth
 at the bench, what a healthy one looks like, and what a bad one means is in
-[`docs/hardware.md` §6.4](../docs/hardware.md) — including the one that reads a fouled prop
+[`docs/hardware.md` §13](../docs/hardware.md) — including the one that reads a fouled prop
 before the operator can feel it.

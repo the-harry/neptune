@@ -7,6 +7,47 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 
 ---
 
+## The parts are bought, and they are not the parts the software describes
+
+- ⚠️ **The vehicle this codebase implements stopped existing on 2026-08-18, and for a few
+  hours the repo went on saying its parts were not bought while ~£500 of different parts
+  were on their way.** A two-week mobile design campaign (recorded end to end; distilled
+  into `docs/handoff/NEPTUNE-HANDOFF-PROMPT.md` plus 20 companion files, now the canonical
+  hardware description) specified and ordered the whole v1 boat — and it is **not** the
+  boat `docs/hardware.md`'s body, `api/hardware.py` and `api/config.py` describe. The
+  campaign deleted the syringe (peristaltic pump + TPU bag, flow-counted), retired the
+  paddlewheel (YF-TM02 ram-flow + PAS quadrature with direction), replaced the 2S pack
+  (3S3P, 12.6 V full — the same class of change as "the 24 V scale is dead", one pack
+  later), moved every sensor and slow actuator onto an **ESP32 brainstem over USB serial**
+  with reflexes that survive a hung Pi, promoted the burn-wire drop weight from v2 stub to
+  bought v1 hardware behind a two-pin ARM+FIRE interlock, and left the Pi holding exactly
+  four GPIO pins (two DRV8871 pairs) plus camera, nav, blackbox and tether.
+
+  **What landed: the documents now describe the vehicle that was bought.**
+  `docs/hardware.md` was rewritten wholesale around the ordered BOM — hull, frame, pump
+  ballast, 3S power tree, commander/brainstem pin maps, burn-wire release, sonar plan,
+  bench checklist, bathtub ceremony — with the campaign's drawings embedded from
+  `docs/handoff/` (all 21 campaign files, now in the repo) and a `SOFTWARE GAP` marker
+  wherever the code lags; **§20 of that page is the gap ledger and is the integration
+  backlog.** The retired vehicle's full documentation lives in that file's git history.
+  `design.md` §27 records what happens to each mechanism section; R7.4/R7.5/R10.6 in
+  `requirements.md` are rewritten normative to the fitted mechanisms (the syringe-era
+  end-stop criteria live in git history); `playbook.md` §8 reserves the new console
+  vocabulary. The honesty doctrine (§24, R7.6) transfers untouched: a brainstem that dies
+  on a USB cable is the same shape as a chip that dies on I²C, one level up.
+
+  **Open, named, and owned by the integration that starts next** (the code side of the same
+  delta): the ESP32 serial protocol + firmware and `RealHardware`-as-serial-client; the
+  3S battery bands (12.6/10.5/9.9/9.0 — confirm at the bathtub); `ballast_ml` with
+  purge-homing replacing step-homing; flow/PAS speed ingest with direction; three leak
+  zones with 2-of-3 reflex gating; the burn-wire two-step command with its own `c_id`
+  stage; the ESP32 link joining the liveness table; and the soundings bottom-contact
+  signature moving from "syringe still taking on water" to "`ballast_ml` still rising".
+  Bench facts that gate all of it, from handoff §15: **the recovered 3S pack sits deeply
+  discharged (~3.0 V/group) — BMS on and a supervised recovery charge is the only item in
+  the project with a clock on it**; the YF-TM02's flow floor and the PAS minimum-cadence
+  gating are unverified and decide which speed sensor is primary.
+
 ## The console can be trusted about a hull that is only half built
 
 - 🧪 **A console that stopped reading disabled the failsafe.** `ConnectionManager`
@@ -201,7 +242,7 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
   chip that caused it; amps and volts likewise die together, because they are one chip.
 
   **What they are for is now written where the person holding the soldering iron will read
-  it** (`docs/hardware.md` §6.4): turn rate is the independent witness that catches a
+  it** (`docs/hardware.md` §13): turn rate is the independent witness that catches a
   compass being pushed by the thrusters' own magnetic field, or a gyro bias that walks the
   dead-reckoned track sideways; forward acceleration catches a 90° mounting error before it
   becomes a mystery in the dive log, and separates *"the paddlewheel died"* from *"the sub
@@ -859,8 +900,8 @@ again, grep the quoted line and it will be there.
 | ⚠️ | **A hazard card's AGE is printed and compared with nothing.** The pre-dive gate covers *presence* and *readability*: **`NavService.readiness()`** (`api/nav/service.py`) fails the `CRT hazard layers cached…` check when the active area has no card, when any layer's fetch failed, or when a file on it will not parse — so arriving at new water cannot silently produce an empty map. What no code anywhere does is judge the date it then prints: the detail string ends `f"fetched {crt_block.get('fetched')}; "` and nothing compares that with today. `grep -rn "max_age\|age_days\|expiry\|expires" api/nav/crt.py api/nav/nominal.py client/js/crt.js` returns **nothing**, and `nav/config.py` has no interval either — so a card pulled a year ago passes the identical check as one pulled this morning, while the Trust adds stop-plank grooves and takes weirs out of service in between. Deliberately not guessed at now, and that is the whole finding: the right interval is a question about how fast those layers actually change, nobody here has watched them long enough to answer it, and a number invented to fill the gap would be the estimate-dressed-as-measurement this system refuses everywhere else. Needs one season of re-fetches to say | field trial |
 | ⚠️ | **`DPC_WATCHDOG_VIOLATION` — IDENTIFIED: `amdkmdag.sys` (AMD display driver) overruns its ISR.** `Failure.Bucket: 0x133_ISR_amdkmdag!unknown_function`, driver `32.0.23027.3001`. The dashboard no longer adds sustained compositing load, but the defect itself needs an AMD driver update or rollback | hardware |
 | ⚠️ | **USB tether NIC drops off the bus** (`Present: False`), needs a physical replug; suspect the hub/port/power path | hardware |
-| ⚠️ | **The parts are not bought.** The v1 build is specified end-to-end in `docs/hardware.md`, but `RealHardware._gpio_available()` still returns a hardcoded `wired = False`, so `NEPTUNE_HW=auto` lands on the bench simulator and says so. That flag is now flipped **with the first module on the pins** — §10 step 3, not the last step — because since `bd743ad` a chip that is absent reads as absent, per chip, all the way to the console: every module not yet wired shows `?` and names itself, and each one visibly comes alive as its connector seats. "Flip it last" was correct when an unwired loom presented constants as instrument readings; that failure no longer exists, and the old order now costs a staged build its per-module acceptance test | hardware |
-| ⚠️ | **Every calibration constant is still a placeholder** — `NAV_M_PER_PULSE`, `NAV_M_PER_SPOOL_TICK`, `NEPTUNE_BALLAST_SPAN_STEPS`, `NEPTUNE_SURFACE_PSI`, `NAV_IMU_YAW_OFFSET_DEG`. They exist so the code runs on the bench; each has a procedure in `docs/hardware.md` §8 and each needs water | field trial |
+| ⚠️ | **The parts are bought (2026-08-18) — and they are not the parts `RealHardware` drives.** The full v1 bill is ordered (`docs/handoff/` §13; ~£500), which retires the old first line of this row — but the software side of it got harder, not easier: `RealHardware` implements the pre-campaign vehicle, and the bought one puts everything except two DRV8871 pairs behind an ESP32 serial link (`docs/hardware.md` §8; ledger §20). What survives from the old row unchanged: `NEPTUNE_HW_WIRED` flips **with the first module on the pins** (`docs/hardware.md` §16's staged bring-up), not the last, because a part that is absent reads as absent, per part, all the way to the console, and each module visibly comes alive as its connector (now possibly a USB cable) seats | integration |
+| ⚠️ | **Every calibration constant is still a placeholder** — `NAV_M_PER_PULSE`, `NAV_M_PER_SPOOL_TICK`, `NEPTUNE_BALLAST_SPAN_STEPS`, `NEPTUNE_SURFACE_PSI`, `NAV_IMU_YAW_OFFSET_DEG`. They exist so the code runs on the bench; each has a procedure in `docs/hardware.md` §14 and each needs water — and the pump/flow constants that replace the syringe/paddlewheel ones arrive with integration (§20 ledger) | field trial |
 | ⚠️ | **`NAV_FILTER` promotion is undecided** — `dr` remains the default until `nav.cli replay --filter both` says otherwise on a real dive log. There are no real dive logs | field trial |
 | ⚠️ | **No GNSS on the Ally** — Wi-Fi positioning needs internet, so the field workflow is tap-on-map. A USB GNSS on the Pi feeding `/api/origin` is the real answer | hardware |
 | ⚠️ | **Chrome geolocation policy unverified** — kept as belt-and-braces; nothing depends on it | topside |
@@ -911,18 +952,23 @@ again, grep the quoted line and it will be there.
   including the Pi-only hardware libraries, which it never installs.
 - **The vehicle is specified** (`docs/hardware.md`): bill of materials, pin map, I²C
   addresses, wiring and build notes, power tree and every calibration procedure, all mirrored
-  from the code that reads them. What is missing is the parts, not the plan.
+  from the code that reads them. The parts arrived on 2026-08-18 — to a newer design than
+  the one mirrored, so `docs/hardware.md` was rewritten to the bought vehicle; its §20 and
+  the entry at the top of this file carry what the code still owes it.
 
 ### Still open — and honest about it
 
-- **Nothing has been on a bench yet.** The v1 vehicle is fully specified (`docs/hardware.md`)
-  and the backend is written against it, but not one of those parts has been bought, wired or
-  measured. `_gpio_available()`'s `wired` flag stays `False` until the first module actually
-  goes on the pins (`docs/hardware.md` §10, step 3), so
-  `NEPTUNE_HW=auto` falls back to the bench simulator and flags itself — which is the correct
-  behaviour for a vehicle that cannot yet see. Until then a "real" dive has no IMU, no depth
-  sensor and no encoder, which is why `calibrate` refuses most numbers and why the operator
-  dot, not the sub, is the only position the system actually knows.
+- **Nothing has been on a bench yet — but the parts are bought (2026-08-18), and they are
+  not the parts the backend was written against.** The ordered vehicle
+  (`docs/hardware.md`; gap ledger in its §20) moves all
+  sensing to an ESP32 brainstem, swaps the syringe for a pump, the paddlewheel for
+  flow/PAS, and the 2S pack for a 3S — so integration is reconciliation work, not just
+  wiring. `_gpio_available()`'s `wired` flag stays `False` until the first module actually
+  goes on the pins (`docs/hardware.md` §16), so `NEPTUNE_HW=auto` falls back to
+  the bench simulator and flags itself — which is the correct behaviour for a vehicle that
+  cannot yet see. Until then a "real" dive has no IMU, no depth sensor and no encoder,
+  which is why `calibrate` refuses most numbers and why the operator dot, not the sub, is
+  the only position the system actually knows.
 - **The motion constants are guesses.** `subMaxSpeedMs`, `headingRatePerS` and the
   ballast→depth curve have never been measured against water. The tooling to fix that now
   exists; the measurement does not.

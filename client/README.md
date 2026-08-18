@@ -246,6 +246,11 @@ the lower one.
 
 ### The battery is 2S, and 24 V was somebody else's vehicle
 
+> **The vehicle's pack is 3S — 12.6 V full, 9.0 V floor — as of 2026-08-18
+> (`docs/hardware.md` §7). SOFTWARE GAP: the console still enforces the 2S bands below;
+> they move at integration (`docs/hardware.md` §20), and this section's own rule is the
+> reason they must.**
+
 The pack is **8.4 V full, 7.4 V nominal**. A `24.8 V` reading and a `20.0 V` sag floor
 describe a different vehicle, and a threshold that describes a different vehicle does not
 fail loudly — it reads "full" forever.
@@ -288,6 +293,12 @@ Two states are surfaced for it, and they are not the same thing:
 
 ### The syringe admits when it doesn't know
 
+> **The vehicle's ballast is a peristaltic pump + bag with flow-counted millilitres
+> (`docs/hardware.md` §6). SOFTWARE GAP: the shipped control is still the syringe
+> below; its shape and wording follow the mechanism at integration
+> (`docs/playbook.md` §8). The admit-unknown behaviour survives the mechanism
+> unchanged.**
+
 Ballast is a stepper driving a plunger with **no position sensor**: the level is a step
 count, and a step count means nothing until it has been zeroed against the empty end stop.
 So from power-on until the first homing, the syringe shows an **explicit unknown** — not
@@ -316,7 +327,7 @@ hands is never going to hover.
 | **pack current** | `current_a` | **the fouled-prop reading.** Draw up with speed down at the same throttle is something wrapped round a propeller — the camera looks forward, not aft, and a fouled prop still spins and still makes noise |
 
 What a healthy one looks like at the bench, and what each bad one means, is in
-[`docs/hardware.md` §6.4](../docs/hardware.md). What the fields mean on the wire is in
+[`docs/hardware.md` §13](../docs/hardware.md). What the fields mean on the wire is in
 [`api/README.md`](../api/README.md).
 
 **Every one of these has a real zero, and every one of those zeros is the calm answer.**

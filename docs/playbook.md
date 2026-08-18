@@ -307,3 +307,37 @@ being amended.
 10. **Update the registries**: the §2/§3 tables here, the tooltip/demo explanations, and
     an appended entry in `.specs/tasks.md`. Counts are never written into prose — the
     runners print them.
+
+---
+
+## 8. RESERVED — vocabulary the bought vehicle will need (2026-08-18)
+
+The v1 hardware is bought and it is not the vehicle the shipped console describes
+(`docs/hardware.md`; gap ledger §20). Per the header rule, this file may reserve ahead of
+code — so
+these entries are **reserved, none shipped**, each to be designed through §7's checklist
+when its subsystem integrates:
+
+- **The ballast control stops being a syringe.** The mechanism becomes a pump + bag
+  measured in millilitres; §19 of `design.md` requires the control's shape to tell the
+  truth about the mechanism, so the syringe glyph and its drag-up-to-fill wording follow
+  the syringe out. The `?`-until-homed state and the depth-colour fill both survive; the
+  homing action's sentence becomes about purging a pump, not driving a plunger.
+- **The leak ladder gains zone identity.** Three probes (FWD tray / MID battery / AFT
+  cap) mean a wet stage can also say **which seal to suspect** — new words on the same
+  four drops, plus a presentation for "2-of-3 agree" gating the auto-surface reflex.
+  The ladder itself (NORMAL / UNKNOWN / WARN / FLOOD, wet outranks cannot-tell) is
+  unchanged.
+- **A fourth connection glyph: the brainstem.** Pi↔ESP32 over USB is a link the operator
+  can genuinely lose, distinct from tether and camera. It needs its own glyph, its own
+  evidence sources (§18 rules apply: direct evidence only), and its death takes every
+  sensing readout to cannot-tell under one name — the same shape as `I2C BUS DOWN`.
+- **Speed source words change.** `paddle` / `kf-paddle` become the flow sensor and the
+  PAS ring; the PAS senses **direction**, which retires "sign comes from the throttle"
+  and needs its own mark the day a measured *backwards* becomes possible.
+- **The beacon is a state, not just a lamp.** The red flasher runs in the surface
+  routine (0.2 s on / 1.8 s off) and is also a Pi-dead reflex; the console must show
+  *commanded* vs *reflex* beacon distinctly, because one of them means the Pi is gone.
+- **ARM/FIRE honesty for the burn wire.** The release is two-step through the brainstem;
+  the console's control must carry the ARMED / DISARMED / FIRED / cannot-tell ladder,
+  hold-to-fire per §5, with the consequence in the label.

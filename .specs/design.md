@@ -1061,7 +1061,7 @@ the answer everyone wants. Nothing in a bare digital input can distinguish *dry*
 physically impossible (flood wet while warn is dry — water reaching the upper probe passed
 the lower one; both wet on a dry deck), and the pre-dive readiness check surfaces it at arm
 time. The rest is covered by a five-second dip test on the bench, documented in
-`docs/hardware.md` §5.1, because a procedure that is written down is cheaper than a sensor
+`docs/hardware.md` §13, because a procedure that is written down is cheaper than a sensor
 that lies.
 
 ---
@@ -1935,3 +1935,67 @@ This session's own soundings are binned live and drawn with the **same** surveye
 — same quantity, same sensor — but counted **apart** in the panel row, because no dive log
 has been written for them yet and a row that added them into one number would claim the Pi
 holds a survey it has never been sent.
+
+---
+
+## 27. 2026-08-18: the vehicle was bought, and it is not the one §19/§22/§23 describe
+
+Every major v1 part was ordered on 2026-08-18 (~£500), to a design that finished two weeks
+of evolution *after* this document's mechanisms were built. `docs/hardware.md` is now the
+**bought vehicle's** document — rewritten around the ordered BOM, drawings embedded from
+`docs/handoff/` (the campaign's 21 files), with a `SOFTWARE GAP` marker wherever the code
+lags and the ledger of those gaps in its §20. This section does not restate any of that;
+it says what happens to **this document** when integration lands, so a reader mid-change
+knows which sections are the record of the code and which are the record of a mechanism
+that is leaving.
+
+**Sections that describe a superseded mechanism** (they stay until the code moves, because
+they are the record of what runs today — but do not build new work on them):
+
+- **§19 (the ballast syringe)** — the syringe, stepper and end stops were deleted from the
+  bought design; ballast is a peristaltic pump + collapsible bag with flow-counted
+  millilitres, closed-loop on an ESP32. The *drawing* rule of §19 (the control's shape
+  tells the truth about the mechanism) means the syringe glyph follows the syringe out.
+- **§22 (the battery is 2S)** — the bought pack is 3S3P (12.6 V full, 9.0 V floor at
+  3.0 V/cell). §22's own doctrine executes itself again, one pack later: thresholds
+  describe the pack that is fitted, and the obsolete scale is purged everywhere including
+  mocks, tests and client expectations.
+- **§23 (ballast unknown until homed)** — the *principle* survives verbatim; the mechanism
+  changes from "zero a step counter against an end stop" to "purge-home the pump against
+  the empty bag, then count millilitres through the flow sensor". Level stays null before
+  the first home.
+- **§21 (two-stage leak)** — the ladder, latching and debounce survive; the bought vehicle
+  carries **three zone probes** (FWD tray / MID battery / AFT cap) on the ESP32, so the
+  ladder gains zone identity (which seal to suspect) and the auto-surface reflex gates on
+  2-of-3 agreement, on the brainstem, so it works with the Pi hung.
+
+**The structural change is a brainstem.** All sensing and slow actuation moves to an
+ESP32-WROOM-32 on USB serial (10 Hz JSONL up, a small acked command vocabulary down); the
+Pi keeps camera, thrusters (two DRV8871 pairs — its only remaining GPIO), navigation,
+blackbox and tether. Three consequences for this document's mechanisms:
+
+- **§24's doctrine is unchanged and gains one link.** The serial link joins the liveness
+  chain exactly where the I²C bus sits today: a bus-like *front* that is never absent,
+  stands in front of every part behind it, and takes them all to cannot-tell under one
+  name when it dies. The six-file null-preservation chain gains a seventh file (the
+  ESP32's own firmware), and the four-round lesson — any one coercing layer destroys the
+  property silently — is the reason the firmware is written to the same rule.
+- **§12's flight recorder gains a witness and a stage.** ESP32 commands are sequence-acked
+  into the `c_id` chain (a ninth stage), and the brainstem keeps its own ring buffer — a
+  third witness that survives Pi death, with its firmware version + SHA in
+  `session_start`.
+- **§18's glyph set gains a losable link.** Pi↔brainstem is a link the operator can
+  genuinely lose, separate from the tether and the camera; it needs its own evidence
+  sources and its own glyph. Reserved in `docs/playbook.md` §8, not designed here.
+
+**Newly real, previously stubbed:** the burn-wire drop weight is bought v1 hardware
+(continuous-loop bridle, one burn point, ESP32 two-pin ARM+FIRE interlock — the release
+fires only if the brainstem's own state agrees). `release_dropweight()` becomes a two-step
+command with its own correlation stage; its trigger doctrine (operator-explicit always,
+except a dead-vehicle countdown) is in the drop-weight release PDF in `docs/handoff/`.
+
+**Deliberately unchanged by any of it:** the topside architecture (§1–§7, §10–§11), the
+camera plane, the estimator and its promotion gate (§20), the hazard card (§25), the depth
+inks (§26) — and §26's bottom-contact rule changes only its instrument name: the signature
+becomes *descent stopped while `ballast_ml` was still rising*, which is the same physics
+the syringe wording described.

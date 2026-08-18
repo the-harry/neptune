@@ -1,5 +1,15 @@
 # The mathematics of NEPTUNE
 
+> **Instrument names (2026-08-18):** on the vehicle as bought (`docs/hardware.md`), the
+> "paddlewheel" in these stories is the **flow sensor + PAS ring** — still pulses, so
+> the period maths, the LUT fusion, the snag logic and the prop-wash rule apply
+> unchanged, and the PAS adds the one thing no maths could invent: **direction** — and
+> the ballast "syringe" is the **pump + bag** (`ballast_ml`; "no such instrument" and
+> null-until-homed behave identically; bottom-contact is "`ballast_ml` still rising").
+> No formula changes. The prose keeps the old names until the code renames them
+> (`docs/hardware.md` §20). No spool encoder was bought — the tether bound stays the
+> modelled over-estimate §4 describes.
+
 ## How to read this
 
 Everything in here is explained twice.

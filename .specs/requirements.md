@@ -482,8 +482,11 @@ flood.
 the gauge is capable of ever reading low.
 
 **Acceptance criteria**
-1. THE thresholds SHALL be those of the 2S pack actually fitted, AND the obsolete 24 V scale
-   SHALL NOT remain anywhere in the system, including mocks, tests and client expectations.
+1. THE thresholds SHALL be those of the **3S pack actually fitted** (2026-08-18: 3S3P
+   INR18650, 12.6 V full, 9.0 V floor at 3.0 V/cell — `docs/hardware.md` §7), AND obsolete
+   scales SHALL NOT remain anywhere in the system, including mocks, tests and client
+   expectations — the 24 V scale once, the 2S scale now. *(SOFTWARE GAP: the shipped bands
+   are still the 2S pack's; `docs/hardware.md` §20.)*
 2. THE console SHALL show the voltage as a number at all times.
 3. Colour SHALL come ONLY from the configured bands, AND that colour SHALL NOT be borrowed by
    anything else.
@@ -493,25 +496,32 @@ the gauge is capable of ever reading low.
 6. THE thresholds SHALL be configurable without a code change.
 
 ### R7.5 — Ballast position is unknown until it is homed
-**As an** operator, **I want** the syringe to admit it does not know where it is, **so that**
-I do not dive on a number derived from a step counter that was never zeroed.
+**As an** operator, **I want** the ballast to admit it does not know where it is, **so that**
+I do not dive on a number derived from a counter that was never zeroed.
+
+*(Mechanism as fitted, 2026-08-18: a peristaltic pump + collapsible bag with an inline flow
+sensor counting millilitres, closed-loop on the ESP32 — no stepper, no end stops.
+`docs/hardware.md` §6. The criteria below are written to that mechanism. SOFTWARE GAP: the
+shipped code still implements the retired syringe — `docs/hardware.md` §20 — and its old
+end-stop criteria live in this file's git history.)*
 
 **Acceptance criteria**
 1. BEFORE the first homing, THE system SHALL report the ballast level as unknown, AND SHALL
    NOT report 0, 50 % or any other plausible value.
 2. THE console SHALL present that unknown explicitly AND SHALL offer the action that resolves
    it.
-3. WHEN homing completes against the empty end stop, THEN the counter SHALL be zeroed and the
-   level SHALL become known.
-4. Reaching either end stop SHALL stop motion in that direction immediately, including
-   mid-command.
-5. AN end-stop wire that breaks SHALL read as triggered, so a failed switch SHALL stop motion
-   rather than be silently absent.
-6. WHEN the full end stop is reached at a count disagreeing with the configured span beyond
-   the configured tolerance, THEN the system SHALL log it, flag that re-homing is needed, and
-   surface that to the operator rather than continuing to publish a level it knows is wrong.
-7. THE operator-facing behaviour of the syringe control SHALL be unchanged: 0..1 of the
-   calibrated stroke, drag up to fill.
+3. Homing SHALL be a purge against the empty bag (the pump run to a defined empty state),
+   AFTER WHICH the flow-counted level SHALL be absolute for the session — `0` SHALL mean
+   *measured empty*, a measurement and not a placeholder.
+4. THE flow count SHALL be checked against pump runtime; a disagreement beyond the
+   configured tolerance SHALL be logged, flagged as needing re-homing, and surfaced to the
+   operator rather than continuing to publish a level the system knows is suspect — a worn
+   pump tube or a clogging sensor is this mechanism's skipped-step.
+5. A bag-side fault signature (level drifting against commands WITHOUT depth correlation,
+   with the tray probe wet) SHALL be distinguishable in the logs from a hull leak (which is
+   depth-correlated), because the two demand different responses from the bank.
+6. THE operator-facing control SHALL be 0..1 of the calibrated authority, AND its shape and
+   wording SHALL tell the truth about the mechanism (`docs/playbook.md` §8).
 
 ### R7.6 — A sensor that has stopped answering says so, and nothing downstream fills it in
 **As an** operator, **I want** a reading whose sensor has died to go blank rather than
@@ -772,17 +782,21 @@ measured.
 tell me which thing was missing, **so that** I am not handed a plausible depth map built out
 of a sub hovering at neutral buoyancy.
 
+*(Wording updated 2026-08-18 to the fitted pump mechanism — same physics, same refusal
+ladder; the evidence channel is the flow-counted `ballast_ml`. SOFTWARE GAP:
+`api/nav/soundings.py` still reads the syringe-era channel — `docs/hardware.md` §20.)*
+
 **Acceptance criteria**
 1. A depth sample SHALL count as bottom evidence ONLY where the journal shows the sub
-   descending, then holding depth, WHILE the syringe was still taking on water. A flat depth
-   alone SHALL NOT qualify.
+   descending, then holding depth, WHILE the ballast was still taking on water
+   (`ballast_ml` still rising). A flat depth alone SHALL NOT qualify.
 2. A hold that was not preceded by a recorded descent SHALL NOT qualify, so a sub floating at
-   the surface with the syringe filling SHALL NOT be read as a landing.
+   the surface with the ballast filling SHALL NOT be read as a landing.
 3. WHERE a journal yields no contact, THEN NO cells SHALL be produced AND the refusal SHALL
    NAME the rung that failed.
 4. THE refusals SHALL be distinct sentences for distinct facts, at minimum: no samples; no
    depth column; a depth column that never answered; no ballast column; a ballast column that
-   never answered (the syringe was never homed); flat stretches with no fill; too shallow; no
+   never answered (the ballast was never homed); flat stretches with no fill; too shallow; no
    descent; too brief.
 5. A null in EITHER the depth or the ballast channel SHALL end a contact run rather than be
    stepped over, so a stretch nobody watched cannot be read as one continuous hold.

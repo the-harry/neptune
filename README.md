@@ -26,6 +26,8 @@ default route.
 neptune/
 ├── client/      topside dashboard (vanilla-JS PWA, zero deps)
 ├── api/         FastAPI backend + rovlog analysis CLI
+├── docs/        hardware, maths, playbook — and docs/handoff/, the bought vehicle's canon
+├── .specs/      requirements, design rationale, changelog
 ├── deploy/      nginx.conf, go2rtc.yaml, systemd units
 └── install.sh   one-shot Pi installer / updater
 ```
@@ -75,6 +77,21 @@ is readable without opening every file:
 
 Start with `design.md` if you are about to change something. Most of what looks like an odd
 choice is a failure that has already happened on this hardware.
+
+## 🔩 The vehicle (bought 2026-08-18)
+
+**Every major v1 part is bought** (~£500, one design campaign): 130 × 400 mm acrylic hull
+with dome, 390 thruster pods at 8 V, peristaltic-pump ballast, rebuilt 3S pack, ESP32
+brainstem over USB, burn-wire drop weight, TL88 sonar plan.
+**[`docs/hardware.md`](docs/hardware.md) is the vehicle's document** — BOM, wiring, pin
+maps, calibrations, bench checklist — with the campaign's drawings and design PDFs beside
+it in [`docs/handoff/`](docs/handoff/).
+
+**The code lags the vehicle:** `api/hardware.py` and `api/config.py` still implement the
+old bench vehicle (2S bands, syringe ballast, paddlewheel, Pi-GPIO sensing). The gap
+ledger is [`docs/hardware.md` §20](docs/hardware.md) — that list **is** the integration
+backlog, and integration is the next phase. Until it lands, `NEPTUNE_HW=auto` keeps
+falling back to the bench simulator, honestly.
 
 ## Documentation
 
