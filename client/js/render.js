@@ -23,7 +23,7 @@ function simulate(dt){
   // the bench a pack pinned at the 6.0 V floor — a red, pulsing, SURFACE-NOW battery
   // on a simulator with no battery in it. The model owns this while it is flying.
   if(s.batteryV==null)
-    s.batteryV = (CONFIG.battery && CONFIG.battery.fullV) || 8.4;
+    s.batteryV = (CONFIG.battery && CONFIG.battery.fullV) || 12.6;
   let b=s.input.ballast;
   if(Date.now()<s.surfaceUntil) b='empty'; // SURFACE command drains ballast
   if(b==='fill')  s.ballastLevel += sim.ballastRatePerS*dt;
@@ -37,9 +37,9 @@ function simulate(dt){
   s.left  = clamp(c.throttle + c.steer, -1, 1);
   s.right = clamp(c.throttle - c.steer, -1, 1);
   s.heading = (s.heading + c.steer*sim.headingRatePerS*dt + 360)%360;
-  // Sags toward the documented 2S floor, not toward a 20 V number belonging to a
+  // Sags toward the documented 3S floor, not toward a number belonging to a
   // pack this sub has never had. CONFIG.battery is the single place those bands live.
-  s.batteryV = Math.max((CONFIG.battery&&CONFIG.battery.floorV)||6.0,
+  s.batteryV = Math.max((CONFIG.battery&&CONFIG.battery.floorV)||9.0,
                         s.batteryV - sim.batteryDrainVPerS*dt);
   // SPEED IN SIM IS AN ESTIMATE AND SAYS SO. There is no paddlewheel on the bench,
   // so this is the throttle curve — exactly the source the HUD styles as an estimate.
@@ -971,9 +971,9 @@ function alertList(v){
   if(band.key==='crit' && v.batteryV!=null)
     push('batt','crit',ALERT_ICONS.batt,
          'BATTERY ' + v.batteryV.toFixed(1) + 'V · SURFACE',
-         'PACK CRITICAL - the 2S battery is below '
-       + (((CONFIG.battery||{}).critV)||6.6) + ' V. Surface now: '
-       + (((CONFIG.battery||{}).floorV)||6.0) + ' V is the hard floor and the cells are '
+         'PACK CRITICAL - the 3S battery is below '
+       + (((CONFIG.battery||{}).critV)||9.9) + ' V. Surface now: '
+       + (((CONFIG.battery||{}).floorV)||9.0) + ' V is the hard floor and the cells are '
        + 'damaged below it, and a browning-out Pi drops the tether link with it.');
   // THE SNAG, AND THE TWO THINGS THAT ARE NOT A SNAG.
   //
@@ -1340,7 +1340,7 @@ function renderUI(v){
   if(_prev.leakStage!==v.leakStage) renderLeak(v.leakStage);
   // Link ms
   setText($('link-ms'), (v.linkMs!=null? v.linkMs+' ms':'-- ms'), false);
-  // §5 readings that carry their own honesty: the pack on its 2S bands, water speed
+  // §5 readings that carry their own honesty: the pack on its 3S bands, water speed
   // as a measurement or an estimate, and how much the heading is worth.
   renderBattery(v);
   renderSpeed(v);

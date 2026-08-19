@@ -1,0 +1,16 @@
+# NEPTUNE — pin the ESP32 brainstem to a stable name (docs/hardware.md §8).
+#
+# A devkit enumerates as /dev/ttyUSB0 *or* /dev/ttyUSB1 depending on what else
+# is plugged in and in which order, and the API should not gamble on that. This
+# rule symlinks whatever CP210x / CH340 bridge the devkit carries to /dev/ttyESP,
+# which is the first place api/brainstem.py's find_port() looks.
+#
+# Install (install.sh will carry this at integration; by hand until then):
+#   sudo cp deploy/udev/99-neptune-brainstem.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# TWO ESP32s (the brainstem + the future sonar front-end) are told apart by
+# serial number: run `udevadm info -a /dev/ttyUSB0 | grep serial` once per
+# board and pin each with ATTRS{serial}=="..." when the second board arrives.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="ttyESP"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="ttyESP"

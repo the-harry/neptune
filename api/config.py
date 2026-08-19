@@ -61,24 +61,26 @@ class Settings:
     psi_per_meter: float = field(default_factory=lambda: _f("NEPTUNE_PSI_PER_M", 1.42))
     leak_warn_at: str = field(default_factory=lambda: _s("NEPTUNE_LEAK_WARN", "WARN"))
 
-    # --- battery: 2S Li-ion (8.4 V full, 7.4 V nominal) ----------------------
-    # THE OLD 24 V SCALE IS OBSOLETE. It was a placeholder from before the pack
-    # existed; anything still comparing against 20-25 V is describing a different
-    # vehicle and will read "full" forever on this one.
+    # --- battery: 3S Li-ion (12.6 V full, 11.1 V nominal) --------------------
+    # THE PACK ACTUALLY FITTED (2026-08-18): 3S3P INR18650, docs/hardware.md §7.
+    # The 2S scale is obsolete the same way the 24 V scale was before it — a
+    # threshold that describes a different vehicle does not fail loudly, it
+    # reads "full" forever. Same per-cell judgements, three cells now:
     #
-    # Bands — one colour, one meaning, and the colour comes ONLY from here:
-    #   >= battery_warn_v (7.0)   green   — dive on
-    #   <  battery_warn_v (7.0)   amber   — finish the pass and head back
-    #   <  battery_crit_v (6.6)   red     — SURFACE prompt
-    #      battery_floor_v (6.0)  the documented hard floor (3.0 V/cell). Below it
-    #                             Li-ion cells are damaged, not merely flat. Nothing
-    #                             in software enforces it — it is the number the
-    #                             operator must never reach, which is why it is
-    #                             written down instead of left to folklore.
-    battery_full_v: float = field(default_factory=lambda: _f("NEPTUNE_BATT_FULL", 8.4))
-    battery_warn_v: float = field(default_factory=lambda: _f("NEPTUNE_BATT_WARN", 7.0))
-    battery_crit_v: float = field(default_factory=lambda: _f("NEPTUNE_BATT_CRIT", 6.6))
-    battery_floor_v: float = field(default_factory=lambda: _f("NEPTUNE_BATT_FLOOR", 6.0))
+    #   >= battery_warn_v (10.5)  green   — dive on            (3.5 V/cell)
+    #   <  battery_warn_v (10.5)  amber   — finish the pass    (below 3.5)
+    #   <  battery_crit_v (9.9)   red     — SURFACE prompt     (3.3 V/cell)
+    #      battery_floor_v (9.0)  the documented hard floor (3.0 V/cell). Below
+    #                             it Li-ion cells are damaged, not merely flat.
+    #                             Nothing in software enforces it — it is the
+    #                             number the operator must never reach, which is
+    #                             why it is written down instead of left to
+    #                             folklore. Confirm the warn margin against the
+    #                             recovered pack's sag at the bathtub ceremony.
+    battery_full_v: float = field(default_factory=lambda: _f("NEPTUNE_BATT_FULL", 12.6))
+    battery_warn_v: float = field(default_factory=lambda: _f("NEPTUNE_BATT_WARN", 10.5))
+    battery_crit_v: float = field(default_factory=lambda: _f("NEPTUNE_BATT_CRIT", 9.9))
+    battery_floor_v: float = field(default_factory=lambda: _f("NEPTUNE_BATT_FLOOR", 9.0))
 
     # --- hardware tunables (RealHardware; mirrored in docs/hardware.md) -------
     # Ballast is an open-loop NEMA 17 through an A4988: there is no position
@@ -96,13 +98,16 @@ class Settings:
     # needs-rehome instead of continuing to publish a level derived from a
     # counter we now know is wrong.
     ballast_span_tolerance: float = field(default_factory=lambda: _f("NEPTUNE_BALLAST_SPAN_TOL", 0.05))
-    # Thrusters own the Pi's two hardware PWM channels (GPIO12/13). ~2 kHz is
-    # above audible whine for a brushed motor and well inside what the H-bridges
-    # switch cleanly.
+    # Thrusters: two DRV8871 pairs on GPIO 23/24 and 5/6 — the Pi's ONLY GPIO
+    # (docs/hardware.md §8). No pin shares a PWM channel with another, so the
+    # old channel-sharing trap is gone; PWM rides the direction pin itself.
+    # ~2 kHz is above audible whine for a brushed motor and well inside what
+    # the drivers switch cleanly. pigpio's DMA timing remains the jitter
+    # upgrade and needs no rewiring.
     thruster_pwm_hz: float = field(default_factory=lambda: _f("NEPTUNE_THRUSTER_PWM_HZ", 2000.0))
-    # Lights run SOFTWARE PWM — GPIO12/18 share hardware channel 0 and GPIO13/19
-    # share channel 1, so there are only two hardware channels and the thrusters
-    # need both. ~200 Hz is flicker-free for LEDs and cheap enough in software.
+    # The lamp's PWM lives on the ESP32 now (LEDC, 8 kHz — above camera
+    # banding; firmware/brainstem). This constant survives for the MOCK only,
+    # which still models the old Pi-driven lamp pins.
     light_pwm_hz: float = field(default_factory=lambda: _f("NEPTUNE_LIGHT_PWM_HZ", 200.0))
     # Below this magnitude the H-bridge gets duty 0 instead of a trickle: a tiny
     # commanded value cannot turn a prop but does make the bridge sing, and a
@@ -120,8 +125,20 @@ class Settings:
     cam_fps: int = field(default_factory=lambda: _i("NEPTUNE_CAM_FPS", 24))
     cam_jpeg_quality: int = field(default_factory=lambda: _i("NEPTUNE_CAM_Q", 80))
 
+    # --- brainstem (the ESP32 on USB serial — docs/hardware.md §8) -----------
+    # Empty port = autodetect: /dev/ttyESP (the udev rule the Pi installs),
+    # then the USB-serial patterns a devkit enumerates as. Pin it explicitly
+    # when two serial devices share the machine.
+    brainstem_port: str = field(default_factory=lambda: _s("NEPTUNE_BRAINSTEM_PORT", ""))
+    brainstem_baud: int = field(default_factory=lambda: _i("NEPTUNE_BRAINSTEM_BAUD", 115200))
+    # The ballast bag's working swing in millilitres — what ballast_ml=full
+    # means as a level of 1.0. The 500 ml flask runs part-filled (±250 g of
+    # authority, docs/hardware.md §6); the bathtub ceremony confirms the figure.
+    ballast_capacity_ml: float = field(default_factory=lambda: _f("NEPTUNE_BALLAST_ML", 250.0))
+
     # --- hardware backend ---
-    # "auto" picks real GPIO if the libs import, else the bench mock.
+    # "auto" picks the real backend when either half exists (a GPIO stack for
+    # the thrusters, or a brainstem answering on serial), else the bench mock.
     # Force with "mock" or "real".
     hardware_backend: str = field(default_factory=lambda: _s("NEPTUNE_HW", "auto"))
 

@@ -7,6 +7,68 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 
 ---
 
+## The brainstem exists on both ends of its cable
+
+- 🧪 **The commander/brainstem split is written — ESP32 firmware, Pi serial client, and
+  the backend rebuilt around them — so the console can be tested the day the parcel
+  arrives instead of the day the boat is finished.** Ledger rows 1–3 and 8 of
+  `docs/hardware.md` §20, plus the vehicle halves of 4–7, in one round.
+
+  **What exists now.** `firmware/brainstem/brainstem.ino` (Arduino C++, one sketch, one
+  library — Adafruit BNO08x; the MS5837 and INA219 are raw-register `Wire` ports of the
+  Pi's known-good code, kept as non-blocking state machines so pump metering and
+  telemetry never stall behind a 17.2 ms conversion). It owns the chips, three leak
+  zones with the five-sample latch and wet-at-boot capture, the pump loop (`pump_ml`
+  metered by flow count, purge-home where flow-silence IS the datum, no-flow fault as
+  the mechanism's skipped-step), lamp/beacon, the ARM+FIRE burn interlock (FIRE refused
+  unless armed — two pins, two commands, one check), the reflexes (2-of-3 leak → beacon
+  + bag-empty + flag; sustained undervolt below the 3S floor), a 48-event ring buffer
+  (the blackbox's third witness), and an **announced bench mode** with per-chip
+  kill/revive — the whole cannot-tell chain, rehearsable over the real cable against a
+  bare devkit. `api/brainstem.py` is the Pi half: 10 Hz JSONL up, id'd/acked commands
+  down, the link wearing its own DeviceHealth as a **bus-front** (silence ⇒ the one
+  name "brainstem" fronts every reading behind it — naming the chips too would claim
+  knowledge nobody has). `RealHardware` is now two DRV8871 pairs (GPIO 23/24, 5/6 — the
+  Pi's whole GPIO) plus that link; **either half may be missing**, is named, and arming
+  is refused without the bridges — so a laptop with only the breadboard ESP32 lights
+  the whole console, which is the point of the split. The 3S purge rode along: bands
+  12.6/10.5/9.9/9.0 through config, mock, client config and every fixture, and the
+  dead-scale police in `test_telemetry.py` now hunts BOTH dead corridors (a 2S 8.4 V
+  banding "critical" on the 3S scale is the trap pointing the other way).
+
+  **Three honesty traps caught while writing it, kept because they are the expensive
+  part.** Bench mode must never stamp the REAL DeviceHealth records — a bench session
+  that left `ever=true` behind would have a never-fitted probe read "was here and
+  stopped" forever after: simulation leaking into reality through the liveness
+  bookkeeping. Bench frames must not carry the real leak pins either — input-only
+  GPIO 34/35/39 have no internal pull-ups, so a bare devkit's zones float WET, and the
+  bench walk would have opened on a FLOOD. And the Pi mirrors leak latches STICKY, so
+  wet outranks cannot-tell across a link death — a FLOOD seen in any frame stands
+  until a frame shows the vehicle's own latch cleared.
+
+  **One hardware fact the firmware forced into the open** (now on the §19 watch list):
+  a peristaltic pump reverses by reversing its motor, and the handoff's power tree
+  drew a single IRLZ44N — which can only ever FILL the bag. No purge-home, no
+  pump-out, no reflex bag-empty. A third DRV8871 on ESP32 pins 18/17 is the natural
+  part; the firmware supports the single-MOSFET build (`PIN_PUMP_IN2 -1`) and refuses
+  empty-direction commands out loud rather than pretending.
+
+  *Verified by running, macOS bench, 2026-08-19.* The api suite is green across all 15
+  suites — including the new `brainstem` suite (link liveness, fault passthrough,
+  ladder mapping, sticky latches, command vocabulary, the two-step interlock order, the
+  breadboard construction case), all over an injected in-memory transport — and the
+  latency suite's debounce derivation now greps the FIRMWARE for its rate, so the
+  budget follows the sampler to its new home. The client suite passes every check
+  (sensor-loss's two hardcoded `8.1V` assertions were the last 2S survivors, invisible
+  to the identifier police); its exit code remains the standing unblessed-baseline
+  finding logged below, and this Mac renders a different window size than the Ally's
+  baselines, so blessing here would vandalise them — totals are not quoted, run them.
+  The firmware **compiles clean** (arduino-cli 1.5.1, esp32 core 3.3.11: 26 % flash,
+  11 % RAM, zero warnings) and carries an LEDC shim for core 2.x — but **it has never
+  met silicon**: the first devkit out of the parcel walks `firmware/README.md` §2
+  before anything else trusts it. Still owed from ledger row 1: acks into the blackbox
+  `c_id` chain, and firmware version + SHA into `session_start`.
+
 ## The parts are bought, and they are not the parts the software describes
 
 - ⚠️ **The vehicle this codebase implements stopped existing on 2026-08-18, and for a few

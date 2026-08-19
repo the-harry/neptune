@@ -338,6 +338,10 @@ when its subsystem integrates:
 - **The beacon is a state, not just a lamp.** The red flasher runs in the surface
   routine (0.2 s on / 1.8 s off) and is also a Pi-dead reflex; the console must show
   *commanded* vs *reflex* beacon distinctly, because one of them means the Pi is gone.
+  *(Interim, shipped 2026-08-19 with the split: the console's GREEN button drives the
+  beacon — the green ring does not exist on the bought vehicle, and a dead control
+  tells nobody anything. The button's wording still says green; this entry is the
+  debt.)*
 - **ARM/FIRE honesty for the burn wire.** The release is two-step through the brainstem;
   the console's control must carry the ARMED / DISARMED / FIRED / cannot-tell ladder,
   hold-to-fire per §5, with the consequence in the label.

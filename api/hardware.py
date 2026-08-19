@@ -3,12 +3,18 @@
 Two backends:
   * MockHardware — a self-contained bench simulator. Fully working with no
     hardware attached, so the whole server (and the client) can be exercised on
-    a laptop. `is_mock` is True → telemetry carries `mock: true`.
-  * RealHardware — the Pi 3B+ backend: gpiozero for GPIO, smbus2 for I2C, one
-    background sensor thread, one bounded-rate stepper thread. Every hardware
-    import is lazy and inside that class, because this file is edited on a
-    machine with no GPIO and a module-scope `import gpiozero` there takes the
-    whole server down at import time.
+    a laptop. `is_mock` is True → telemetry carries `mock: true`. Its internal
+    vehicle model still speaks the syringe-era mechanism (an axis with end
+    stops) — interface-identical to the pump at every readback, and its full
+    modernisation rides ledger row 4 (docs/hardware.md §20).
+  * RealHardware — the vehicle as bought (docs/hardware.md §8): two DRV8871
+    thruster pairs on the Pi's own pins, and EVERYTHING else behind the ESP32
+    brainstem on USB serial (api/brainstem.py; firmware/brainstem/ is the far
+    end). Either half may be missing and the backend still constructs, names
+    the missing half, and tells the truth about it — a laptop with only the
+    breadboard ESP32 lights the whole console. Every hardware import (gpiozero,
+    pyserial) is lazy and inside the class, because this file is edited on a
+    machine with neither.
 
 `get_hardware()` selects one based on settings.hardware_backend ("auto" tries
 real, falls back to mock).
@@ -431,8 +437,13 @@ DEVICE_READINGS = {
     "bno085": "heading, turn rate, forward acceleration, pitch/roll and mag_cal",
     "ms5837": "depth and pressure",
     "ina219": "pack voltage and current",
+    "ina219-rail": "the thruster rail's own volts and amps (the fouled-prop witness)",
     "leak-probes": f"the hull state (NORMAL becomes {LEAK_UNKNOWN} — nobody is checking it)",
     "sensor-thread": "water speed and the tether link, and nothing refreshes the chips above",
+    # THE BUS-FRONT, one level up: the serial link to the ESP32 that carries
+    # every chip above. Link down ⇒ all of them are cannot-tell under this one
+    # name — naming the chips too would claim knowledge nobody has.
+    "brainstem": "every sensor reading on the vehicle — the ESP32 link carries them all",
 }
 
 
@@ -858,10 +869,12 @@ class MockHardware(HardwareBase):
         self._magnet = False
         self._lights = {"green": (True, 0.8), "white": (False, 0.2)}
         self._dropped = False
-        # 2S Li-ion: 8.4 V full, 7.4 V nominal. 8.3 V is a healthy pack an hour
-        # off the charger. THE OLD 24.8 V IS GONE — it described a vehicle that
-        # was never built, and every threshold in the system now reads 2S.
-        self._voltage = 8.3
+        # 3S Li-ion: 12.6 V full, 11.1 V nominal — the pack actually fitted
+        # (3S3P INR18650, docs/hardware.md §7). 12.4 V is a healthy pack an
+        # hour off the charger. THE 2S SCALE IS GONE the same way the 24 V one
+        # went before it: a threshold that describes a different vehicle does
+        # not fail loudly, it reads "full" forever (R7.4.1).
+        self._voltage = 12.4
         self._heading = 284.0
         self._gyro_z = 0.0
         self._accel_fwd = 0.0
@@ -1167,10 +1180,11 @@ class MockHardware(HardwareBase):
         self._payout_m = max(0.0, self._payout_m + speed * dt)
         # Gentle sag, faster under load, and it stops at the documented hard
         # floor rather than pretending a Li-ion pack keeps delivering below
-        # 3.0 V/cell. From 8.3 V the amber band arrives in about an hour of
-        # loitering, which is roughly what the real pack does.
+        # 3.0 V/cell. Rates are the 2S model's ×1.5 (three cells sag three
+        # cells' worth): from 12.4 V the amber band arrives in about an hour
+        # of loitering, which is roughly what a real pack does.
         load = (abs(self._left) + abs(self._right)) / 2.0
-        self._voltage = max(settings.battery_floor_v, self._voltage - (0.0004 + 0.0015 * load) * dt)
+        self._voltage = max(settings.battery_floor_v, self._voltage - (0.0006 + 0.00225 * load) * dt)
 
     def _step_ballast(self, dt: float) -> None:
         """Walk the stepper at the configured rate, switches and all."""
@@ -1458,469 +1472,216 @@ class MockHardware(HardwareBase):
 
 
 # ---------------------------------------------------------------------------
-# Real Pi backend — Pi 3B+, gpiozero + smbus2, one sensor thread
+# Real vehicle backend — DRV8871 thrusters on the Pi's own pins, EVERYTHING
+# else behind the ESP32 brainstem on USB serial (docs/hardware.md §8)
 # ---------------------------------------------------------------------------
+def drv8871_duty(v: float, deadband: float) -> tuple[float, float]:
+    """-1..1 → (IN1 duty, IN2 duty) for one DRV8871. Pure: testable off-Pi.
+
+    The DRV8871 has no EN pin: PWM on IN1 with IN2 low drives forward, PWM on
+    IN2 with IN1 low drives reverse, both low coasts. Below the deadband both
+    go to zero — a few percent of duty cannot turn a prop but does make the
+    driver sing, and a whining idle sounds exactly like a fault to whoever is
+    holding the tether.
+    """
+    v = max(-1.0, min(1.0, float(v)))
+    if abs(v) < deadband:
+        return (0.0, 0.0)
+    if v > 0:
+        return (v, 0.0)
+    return (0.0, -v)
+
+
 class RealHardware(HardwareBase):
-    """The vehicle as actually built (docs/hardware.md is this class, on paper).
+    """The vehicle as bought: a commander/brainstem split (docs/hardware.md §8).
 
-    THREADING. Three threads touch this object:
-      * the asyncio event loop calls every public method, and none of them may
-        block — they write a GPIO pin or return a cached value, nothing else;
-      * `_sensor_loop` owns ALL I2C traffic and the 10 Hz leak sampling, and is
-        the only writer of the `_c_*` cache;
-      * `_stepper_loop` owns the ballast axis and is the only writer of its
-        counter. gpiozero's own edge threads call the two interrupt handlers.
+    THE PI'S GPIO FOOTPRINT IS FOUR PINS — the two DRV8871 pairs below. Every
+    sensor, the pump, the lamps and the burn interlock live on the ESP32
+    brainstem, reached over one USB serial cable (api/brainstem.py owns that
+    cable and its protocol; firmware/brainstem/ is the other end).
 
-    There is no lock on the sensor cache. Each cached value is a single object
-    rebound by one writer and read by the loop; under the GIL that rebinding is
-    atomic, and taking a lock on the read path is precisely the blocking this
-    module's header forbids. Values that must stay mutually consistent (pitch
-    with roll, speed with its freshness flag) are stored as one tuple and
-    rebound whole, so a reader can never see half an update.
+    EITHER HALF MAY BE MISSING AND THE VEHICLE IS STILL REAL — a laptop with
+    the breadboard ESP32 on USB has no GPIO, so the thruster group faults, is
+    named, and arming is refused; a Pi with the loom but the brainstem cable
+    out has thrusters and a console full of honest cannot-tells under the one
+    name "brainstem". Only BOTH halves missing refuses to construct, and
+    NEPTUNE_HW=auto then falls back to the announced bench simulator.
+
+    LIVENESS moved one level up with the sensors. The serial link carries its
+    own DeviceHealth (the bus-front: link down ⇒ every reading behind it is
+    cannot-tell under one name, exactly as `i2c` fronted its chips); per-chip
+    verdicts are computed AT the bus by the firmware, which nulls a dead chip's
+    readings in the same frame that names it in `faults`. This class does not
+    second-guess those verdicts — it gates everything on the link and passes
+    the vehicle's own word through.
+
+    THREADING: the asyncio event loop calls every public method; none blocks.
+    BrainstemLink owns its reader thread and its snapshot is a single rebound
+    reference (GIL-atomic), the same discipline the old sensor cache used.
+    reset_leak_latches() is the one deliberate exception — it waits up to half
+    a second for the vehicle's verdict, because its caller must relay WHY a
+    re-arm was refused, and a human pressed that button.
     """
 
     is_mock = False
 
-    # ---- pin map (BCM) — mirrored exactly in docs/hardware.md -------------
-    #
-    # THE PWM CHANNEL-SHARING PITFALL, which dictates this entire map: the Pi's
-    # two hardware PWM channels are each exposed on two pins. GPIO12 and GPIO18
-    # are both channel 0; GPIO13 and GPIO19 are both channel 1. Driving 12 and 18
-    # at once does not give two independent PWMs — the second takes the first's
-    # frequency and duty with it, and the symptom is one motor mysteriously
-    # tracking another. FOUR INDEPENDENT HARDWARE PWMs ARE IMPOSSIBLE ON THIS
-    # CHIP. The thrusters need clean PWM more than anything else does, so they
-    # take channel 0 and channel 1. The lights run software PWM at ~200 Hz, which
-    # no LED and no eye can tell apart. GPIO18 and GPIO19 are left UNUSED so that
-    # nothing can quietly claim half a channel later.
-    PIN_THRUST_L_EN = 12  # H-bridge A EN  — port motor speed   (hardware PWM ch0)
-    PIN_THRUST_L_IN1 = 5  # H-bridge A IN1 — port motor, ahead
-    PIN_THRUST_L_IN2 = 6  # H-bridge A IN2 — port motor, astern
-    PIN_THRUST_R_EN = 13  # H-bridge B EN  — starboard motor speed (hardware PWM ch1)
-    PIN_THRUST_R_IN1 = 16  # H-bridge B IN1 — starboard motor, ahead
-    PIN_THRUST_R_IN2 = 26  # H-bridge B IN2 — starboard motor, astern
-    PIN_LIGHT_WHITE = 20  # MOSFET gate — both 3 W bow spots, switched as ONE channel
-    PIN_LIGHT_GREEN = 21  # MOSFET gate — 5 V green LED ring around the hull
-    PIN_BALLAST_STEP = 23  # A4988 STEP — one pulse, one step
-    PIN_BALLAST_DIR = 24  # A4988 DIR  — high = fill (plunger toward the FULL stop)
-    PIN_BALLAST_EN = 25  # A4988 /EN  — ACTIVE LOW: low enables the driver
-    PIN_LIMIT_EMPTY = 22  # limit switch at the EMPTY end of the syringe stroke
-    PIN_LIMIT_FULL = 27  # limit switch at the FULL end
-    PIN_LEAK_WARN = 17  # leak probe at the lowest point of the hull
-    PIN_LEAK_FLOOD = 4  # leak probe ~2 cm above the WARN probe
-    PIN_PADDLE = 10  # paddlewheel hall sensor (A3144), one pulse per magnet
-    PIN_SPOOL_A = 9  # tether spool encoder channel A
-    PIN_SPOOL_B = 11  # tether spool encoder channel B
-    #
-    # BOTH limit switches are wired NORMALLY-CLOSED TO GROUND against the
-    # internal pull-ups. Un-triggered the switch holds the pin LOW; pressing the
-    # lever OPENS the contact and the pull-up takes the pin HIGH. So TRIGGERED ==
-    # HIGH — and a cut switch lead, a pulled connector or a corroded contact all
-    # read as HIGH too, i.e. as "triggered". A broken switch therefore fails to a
-    # stop instead of to a silent absence, which is the only acceptable direction
-    # for a hard stop on an axis with no position sensor. The visible consequence
-    # is that with the switches unplugged BOTH read triggered and the syringe
-    # refuses to move at all — which is exactly how an unfinished harness should
-    # behave, and the stepper thread names that case rather than obeying it.
-    #
-    # Both leak probes use the internal pull-ups the other way round: dry is an
-    # open circuit (pin HIGH), and water bridging the interleaved wires pulls the
-    # pin LOW. WET == LOW.
-    #
-    # I2C1 is GPIO2 (SDA) / GPIO3 (SCL) — one bus, three chips, no address
-    # conflicts:
-    I2C_BUS = 1
-    ADDR_BNO085 = 0x4A  # IMU: fused yaw, gyro, linear accel, mag cal status
-    ADDR_MS5837 = 0x76  # MS5837-30BA depth/pressure
-    ADDR_INA219 = 0x40  # pack voltage + current, high-side shunt
+    # ---- pin map (BCM) — mirrored exactly in docs/hardware.md §8 ----------
+    # DRV8871: IN1/IN2 only, no EN. PWM rides the direction pin itself
+    # (drv8871_duty above). gpiozero's default factory bit-bangs PWM on any
+    # pin; pigpio's DMA timing remains the jitter upgrade and needs no rewiring.
+    PIN_THRUST_L_IN1 = 23  # port motor, ahead
+    PIN_THRUST_L_IN2 = 24  # port motor, astern
+    PIN_THRUST_R_IN1 = 5  # starboard motor, ahead
+    PIN_THRUST_R_IN2 = 6  # starboard motor, astern
 
-    # The INA219 breakout ships with a 0.1 Ω shunt. If a different shunt is
-    # fitted, the current reading scales by exactly the wrong factor and nothing
-    # looks broken — change it here and in docs/hardware.md together.
-    INA219_SHUNT_OHMS = 0.1
-
-    # Sensor thread base rate. The IMU runs every tick (50 Hz, inside the
-    # BNO085's 20-50 Hz report range), the depth state machine advances on its
-    # own schedule (~10 Hz), leak sampling divides down to 10 Hz and the INA219
-    # to 2 Hz — pack voltage does not move fast enough to be worth more.
+    # THE LEAK DEBOUNCE BUDGET'S DERIVATION, preserved. Leak sampling now
+    # happens on the brainstem at 10 Hz (firmware LEAK_HZ; the same figure is
+    # named in api/brainstem.py as LEAK_SAMPLE_HZ) — which is exactly the rate
+    # the Pi used to derive as SENSOR_HZ / LEAK_SAMPLE_DIVIDER. Both constants
+    # stay because the pin-to-console latency budget in tests/test_latency.py
+    # is built from them, and a budget that loses its derivation goes stale in
+    # silence. Changing the firmware's rate means changing these WITH it.
     SENSOR_HZ = 50.0
-
-    # The leak probes are sampled every Nth sensor tick, i.e. at
-    # SENSOR_HZ / LEAK_SAMPLE_DIVIDER = 10 Hz. NAMED, because it is one half of a
-    # figure that matters off this page: the time between water touching a probe
-    # and the vehicle admitting it is `leak_debounce_samples / that rate` — a
-    # deliberate half second, and the dominant term in the whole pin-to-console
-    # path. api/tests/test_latency.py derives its budget from these two numbers, so
-    # a magic 5 buried in a modulo would let the budget go stale in silence.
     LEAK_SAMPLE_DIVIDER = 5
 
-    # MS5837 commands. D1/D2 at OSR 8192 (the highest oversampling) take 17.2 ms
-    # each — the reason the depth read is a state machine rather than a sleep.
-    _MS_RESET = 0x1E
-    _MS_PROM = 0xA0
-    _MS_CONVERT_D1 = 0x4A
-    _MS_CONVERT_D2 = 0x5A
-    _MS_ADC_READ = 0x00
+    # How long __init__ listens for the brainstem's first frame before calling
+    # the port junk. The firmware streams at 10 Hz unprompted, so 2.5 s is
+    # twenty-five missed frames — an absent board, never a slow one.
+    HELLO_WAIT_S = 2.5
 
-    def __init__(self) -> None:
-        # Until the wiring exists this backend cannot read anything, and it must
-        # say so LOUDLY rather than return zeros. Reporting mock=False while every
-        # sensor returns a constant is the worst of both worlds: the dashboard
-        # drops the SIM badge and presents "0.0 V / heading 0 / at the surface" as
-        # genuine instrument readings. Raising here lets get_hardware()'s "auto"
-        # mode fall back to the honest bench simulator, which at least flags itself.
-        if not self._gpio_available():
+    def __init__(self, link=None) -> None:
+        # A human still has to say the harness exists; nothing here can see a
+        # connector. With the flag off, both halves are refused and auto lands
+        # on the honest bench simulator.
+        if not settings.hardware_wired:
             raise RuntimeError(
-                "RealHardware: no GPIO/I2C backend wired up yet "
-                "(flip `wired` in RealHardware._gpio_available once the harness "
-                "is built). Set NEPTUNE_HW=mock to silence this, or wire the sensors."
+                "RealHardware: NEPTUNE_HW_WIRED=false — a human has said there is "
+                "no harness. Set NEPTUNE_HW=mock to silence this, or wire the vehicle."
             )
-        # EVERY hardware import is lazy and lives in here. This file is edited on
-        # a laptop with no GPIO; a module-scope `import gpiozero` would take the
-        # entire server down at import time on the bench, which is a far worse
-        # failure than the one it would be trying to report.
-        from gpiozero import DigitalInputDevice, DigitalOutputDevice, PWMOutputDevice
-
         self._armed = False
         self._lights: dict[str, tuple[bool, float]] = {"green": (False, 0.0), "white": (False, 0.0)}
         self._magnet = False
         self._faults: set[str] = set()
         self._fault_logged: dict[str, float] = {}
-        self._stop = threading.Event()
-
-        # --- ONE GROUP AT A TIME, AND A GROUP THAT IS NOT THERE IS NAMED -----
-        #
-        # This block used to be one straight run of constructors, so the FIRST pin
-        # that would not come up took the whole backend down with it and
-        # NEPTUNE_HW=auto fell all the way back to the bench simulator. On a
-        # finished vehicle that is defensible. On a vehicle being BUILT it is not:
-        # it means the only way to test the first sensor soldered is to have
-        # soldered all of them, and the failure it produces — a silent demotion to
-        # mock — is the one shape this file exists to prevent, because a simulator
-        # answers every question smoothly and truthfully answers none of them.
-        #
-        # So each group is brought up on its own. A group that raises leaves its
-        # devices as None, latches a fault under its own name, and the methods
-        # that would drive it refuse rather than crash. is_mock stays False,
-        # because the vehicle IS real — it is a real vehicle with three sensors
-        # fitted, and sensor_faults() says which three.
-        #
-        # THE ONE PLACE THIS IS NOT ALLOWED TO DEGRADE QUIETLY IS THE THRUSTERS.
-        # Everything else that is missing costs a reading; a missing thruster
-        # group costs control of a vehicle in water. set_armed() refuses to arm
-        # without it — see there.
         self._have: dict[str, bool] = {}
-
-        def _group(name: str, build, what: str) -> None:
-            """Bring up one group; on failure name it and carry on."""
-            try:
-                build()
-                self._have[name] = True
-            except Exception as exc:  # noqa: BLE001 — the whole point is not to raise
-                self._have[name] = False
-                self._fault(name, "%s did not come up (%s) — %s", name, exc, what)
-
-        # --- outputs first, and safe before anything else runs ---------------
-        # Order matters on a cold boot: the H-bridge inputs float until they are
-        # driven, and a floating IN pin with the motor rail already up is a prop
-        # that spins the moment the Pi powers on.
-        self._l_en = self._l_in1 = self._l_in2 = None
-        self._r_en = self._r_in1 = self._r_in2 = None
-
-        def _build_thrusters() -> None:
-            self._l_en = PWMOutputDevice(self.PIN_THRUST_L_EN, frequency=settings.thruster_pwm_hz)
-            self._l_in1 = DigitalOutputDevice(self.PIN_THRUST_L_IN1, initial_value=False)
-            self._l_in2 = DigitalOutputDevice(self.PIN_THRUST_L_IN2, initial_value=False)
-            self._r_en = PWMOutputDevice(self.PIN_THRUST_R_EN, frequency=settings.thruster_pwm_hz)
-            self._r_in1 = DigitalOutputDevice(self.PIN_THRUST_R_IN1, initial_value=False)
-            self._r_in2 = DigitalOutputDevice(self.PIN_THRUST_R_IN2, initial_value=False)
-            # Set BEFORE the zeroing call below, because set_thrusters() now checks
-            # it and would otherwise decline to do the one thing that must happen
-            # on every boot.
-            self._have["thrusters"] = True
-            self.set_thrusters(0.0, 0.0)
-
-        _group("thrusters", _build_thrusters, "the sub CANNOT BE ARMED and will not answer the sticks")
-
-        # Software PWM (see the channel-sharing note above). gpiozero's default
-        # pin factory drives PWMOutputDevice in software on every pin anyway;
-        # GPIO12/13 are still the right pins for the thrusters because they are
-        # the only two that CAN be promoted to hardware PWM later (pigpio pin
-        # factory or a dtoverlay) without moving any wires.
-        self._light_dev: dict[str, object] = {}
-
-        def _build_lights() -> None:
-            self._light_dev = {
-                "white": PWMOutputDevice(self.PIN_LIGHT_WHITE, frequency=settings.light_pwm_hz),
-                "green": PWMOutputDevice(self.PIN_LIGHT_GREEN, frequency=settings.light_pwm_hz),
-            }
-
-        _group("lights", _build_lights, "both lamp channels are dead on this vehicle")
-
-        # --- ballast axis ----------------------------------------------------
-        # The axis bookkeeping is plain Python and is built whatever the pins do,
-        # so the readbacks have something coherent to answer with.
-        self._axis = BallastAxis(settings.ballast_span_steps, settings.ballast_span_tolerance)
-        self._ballast_cmd: BallastDir = "hold"
-        self._homing = False
-        self._step_pin = self._dir_pin = self._en_pin = None
-        self._limit_empty = self._limit_full = None
-
-        def _build_ballast() -> None:
-            self._step_pin = DigitalOutputDevice(self.PIN_BALLAST_STEP, initial_value=False)
-            self._dir_pin = DigitalOutputDevice(self.PIN_BALLAST_DIR, initial_value=False)
-            # active_high=False makes .on() drive the pin LOW, so `.on()` reads as
-            # "driver enabled" instead of the double negative the A4988 datasheet
-            # leaves you with.
-            self._en_pin = DigitalOutputDevice(self.PIN_BALLAST_EN, active_high=False, initial_value=False)
-            self._limit_empty = DigitalInputDevice(self.PIN_LIMIT_EMPTY, pull_up=True)
-            self._limit_full = DigitalInputDevice(self.PIN_LIMIT_FULL, pull_up=True)
-
-        _group("ballast", _build_ballast, "the syringe cannot be driven and depth must be flown on thrust alone")
-
-        # --- leak probes ------------------------------------------------------
-        # The debouncers exist either way: read_leak() consults them, and a
-        # debouncer that has never been sampled reports the not-certified-dry
-        # answer, which is the correct one for probes that are not there.
-        self._leak_warn_in = self._leak_flood_in = None
-        self._warn_debounce = LeakDebouncer(settings.leak_debounce_samples)
-        self._flood_debounce = LeakDebouncer(settings.leak_debounce_samples)
-        self._warn_wet_at_boot = False
-        self._flood_wet_at_boot = False
-        # How many times an operator has re-armed the detector this run. On the
-        # wire so the console can say the reassurance it is showing was restored
-        # by hand rather than never having been in doubt.
+        # Leak latches, mirrored STICKY on this side of the cable: wet outranks
+        # cannot-tell, so a latch seen in any frame stands here even if the
+        # link then dies. Cleared only when a frame shows the vehicle's own
+        # latch cleared (leak_reset is the only thing that clears it there).
+        self._leak_latched: set[str] = set()
         self._leak_rearms = 0
 
-        def _build_leak() -> None:
-            self._leak_warn_in = DigitalInputDevice(self.PIN_LEAK_WARN, pull_up=True)
-            self._leak_flood_in = DigitalInputDevice(self.PIN_LEAK_FLOOD, pull_up=True)
-            # The hull is sealed dry and then powered up, so a probe already reading
-            # wet right now is shorted — or the sub is genuinely flooded before it has
-            # been launched. Either way it is a fault, and it is captured HERE because
-            # a second later it is indistinguishable from a leak that just started.
-            self._warn_wet_at_boot = self._is_wet(self._leak_warn_in)
-            self._flood_wet_at_boot = self._is_wet(self._leak_flood_in)
-            if self._warn_wet_at_boot or self._flood_wet_at_boot:
-                log.error(
-                    "leak probe(s) already WET at power-on (warn=%s flood=%s) — shorted "
-                    "probe, or the hull is flooded before launch. Do not dive on this.",
-                    self._warn_wet_at_boot,
-                    self._flood_wet_at_boot,
+        # ---- thrusters: the Pi half ---------------------------------------
+        # gpiozero is imported HERE, per group, so a machine with no GPIO
+        # stack still constructs the backend and simply names this group as
+        # not fitted — the breadboard-on-a-laptop case the split exists for.
+        self._l_in1 = self._l_in2 = self._r_in1 = self._r_in2 = None
+        if self._gpio_available():
+            try:
+                from gpiozero import PWMOutputDevice
+
+                # Outputs first and safe first: a floating DRV8871 input with
+                # the motor rail up is a prop that spins at power-on.
+                self._l_in1 = PWMOutputDevice(self.PIN_THRUST_L_IN1, frequency=settings.thruster_pwm_hz)
+                self._l_in2 = PWMOutputDevice(self.PIN_THRUST_L_IN2, frequency=settings.thruster_pwm_hz)
+                self._r_in1 = PWMOutputDevice(self.PIN_THRUST_R_IN1, frequency=settings.thruster_pwm_hz)
+                self._r_in2 = PWMOutputDevice(self.PIN_THRUST_R_IN2, frequency=settings.thruster_pwm_hz)
+                self._have["thrusters"] = True
+                self.set_thrusters(0.0, 0.0)
+            except Exception as exc:  # noqa: BLE001 — the whole point is not to raise
+                self._have["thrusters"] = False
+                self._fault(
+                    "thrusters",
+                    "thruster group did not come up (%s) — the sub CANNOT BE ARMED "
+                    "and will not answer the sticks",
+                    exc,
                 )
+        else:
+            self._have["thrusters"] = False
+            self._fault(
+                "thrusters",
+                "no GPIO stack on this machine — the sub CANNOT BE ARMED here. "
+                "Sensing continues over the brainstem if one is plugged in",
+            )
 
-        _group("leak", _build_leak, "hull integrity is UNKNOWN — not dry, unwatched. Do not dive on this")
+        # ---- brainstem: everything else -----------------------------------
+        # `link` is injectable for the bench (an in-memory transport), which is
+        # the only way these rules get exercised without a devkit on USB.
+        self._link = link
+        if self._link is None:
+            try:
+                from brainstem import open_link
 
-        # --- pulse inputs: interrupts, never polling --------------------------
-        # gpiozero calls these back on its own edge threads. A polling loop would
-        # either sit on the event loop (blocking the whole server) or miss pulses
-        # between polls, and a missed pulse is a sub that reads slower than it is.
-        self._paddle = PaddleWheel(nav_settings.m_per_pulse, nav_settings.paddle_window_s, nav_settings.paddle_stale_s)
-        self._spool = QuadratureDecoder()
-        self._paddle_in = None
-        self._spool_a = self._spool_b = None
+                self._link = open_link()
+            except Exception as exc:  # noqa: BLE001
+                self._link = None
+                log.warning("brainstem: link could not be opened (%s)", exc)
+        if self._link is not None and not self._link.wait_first_frame(self.HELLO_WAIT_S):
+            # A port that never says anything NEPTUNE-shaped is not a
+            # brainstem — a Bluetooth port, a different device, a dead cable.
+            # Close it rather than spend the dive polling junk.
+            log.warning("brainstem: port opened but nothing NEPTUNE-shaped arrived — not a brainstem")
+            try:
+                self._link.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._link = None
+        self._have["brainstem"] = self._link is not None
+        if self._link is None:
+            self._fault(
+                "brainstem",
+                "no brainstem answered — every sensor reading is cannot-tell "
+                "under this one name until the ESP32 is plugged in",
+            )
 
-        def _build_pulses() -> None:
-            # A3144 hall sensors are open-collector: a magnet pulls the line LOW, so
-            # with pull_up=True the ACTIVE state is that low, and when_activated is
-            # the falling edge.
-            self._paddle_in = DigitalInputDevice(self.PIN_PADDLE, pull_up=True)
-            self._paddle_in.when_activated = self._on_paddle_pulse
-            self._spool_a = DigitalInputDevice(self.PIN_SPOOL_A, pull_up=True)
-            self._spool_b = DigitalInputDevice(self.PIN_SPOOL_B, pull_up=True)
-            for dev in (self._spool_a, self._spool_b):
-                # BOTH edges of BOTH channels, or the decoder sees half the
-                # transitions and loses the direction information entirely.
-                dev.when_activated = self._on_spool_edge
-                dev.when_deactivated = self._on_spool_edge
+        if not (self._have.get("thrusters") or self._have.get("brainstem")):
+            raise RuntimeError(
+                "RealHardware: neither half exists — no GPIO stack for the thrusters "
+                "and no brainstem on serial. Set NEPTUNE_HW=mock, plug the ESP32 in, "
+                "or wire the Pi."
+            )
 
-        _group("pulses", _build_pulses, "water speed and tether payout both go to cannot-tell")
-
-        # --- sensor cache (written only by _sensor_loop) ----------------------
-        # EVERY ONE OF THESE IS A REMEMBERED VALUE, and a remembered value is only
-        # a reading while the chip that produced it is still answering. That is
-        # what _health below decides; the readbacks consult it before handing any
-        # of this out. Without that gate the cache is a liar with a good memory:
-        # the writer simply stops writing when the device dies and every reader
-        # keeps getting the last number at full telemetry rate.
-        self._c_heading = 0.0
-        self._c_gyro_z = 0.0
-        self._c_accel_fwd = 0.0
-        self._c_mag_cal = 0
-        self._c_pitch_roll = (0.0, 0.0)
-        self._c_pressure_psi: float | None = None
-        self._c_voltage = 0.0
-        self._c_current: float | None = None
-        self._c_speed = (0.0, False)
-        self._c_link = 4
-
-        # --- per-chip liveness ------------------------------------------------
-        # One DeviceHealth per I2C chip, and the windows are sized to how often
-        # the sensor thread ACTUALLY polls that chip — a window shorter than the
-        # poll interval blanks a healthy gauge between reads, and one much longer
-        # leaves a dead chip's last value on screen for exactly that long.
-        #
-        # Written by the sensor thread, read by the event loop, same single-writer
-        # rebinding discipline as the cache above: an int and a float per device,
-        # no lock, no blocking on the read path.
-        self._health = {
-            # BNO085: read every 50 Hz tick. Five raises in a row is 0.1 s, which
-            # no plausible transient survives, and a whole second with no good
-            # report is fifty missed ones — that is a dead driver, not jitter.
-            "bno085": DeviceHealth("bno085", fail_streak=5, silence_s=1.0),
-            # MS5837: ~10 Hz when healthy, but the failure path backs off to one
-            # retry a second, so the streak has to be SHORT or the backoff itself
-            # decides how long a dead depth sensor keeps showing its last depth.
-            # Two raises ≈ 2 s; the silence window catches the other shape, a
-            # conversion state machine that stops reaching its collect stage
-            # without ever raising.
-            "ms5837": DeviceHealth("ms5837", fail_streak=2, silence_s=2.5),
-            # INA219: polled at 2 Hz, so two raises is already a second and the
-            # silence window has to clear several poll intervals. Pack voltage
-            # moves slowly enough that a wider window costs nothing.
-            "ina219": DeviceHealth("ina219", fail_streak=2, silence_s=5.0),
-            # NOT A CHIP, and in this dict precisely because everything in this
-            # dict gets gated and named the same way. The leak probes are two GPIO
-            # pins sampled at 10 Hz; three raises in a row is 0.3 s of a pin that
-            # will not read, and a whole second of silence is ten missed samples —
-            # two entire debounce windows, i.e. long enough for water to have
-            # arrived and latched nothing. The window is deliberately TIGHTER than
-            # any of the chips': a stale depth is a wrong number, a stale "NORMAL"
-            # is a hull integrity guarantee nobody is checking.
-            "leak-probes": DeviceHealth("leak-probes", fail_streak=3, silence_s=1.0),
-            # THE SAMPLER ITSELF, which is the failure that hides all the others:
-            # _sensor_loop dying (or wedging in a driver that never returns) stops
-            # every cache below being written, and the readings that are not gated
-            # on a chip — water speed, link bars — would otherwise hand back their
-            # last value forever. Only the SILENCE half of the verdict applies:
-            # a loop does not raise, it stops, so fail_streak is 1 and unused and
-            # nothing ever calls _device_failed on this key. One second is fifty
-            # missed ticks, which no GIL hiccup on a 3B+ produces.
-            "sensor-thread": DeviceHealth("sensor-thread", fail_streak=1, silence_s=1.0),
-        }
-
-        # --- liveness EDGES, so no instrument changes state in silence ---------
-        #
-        # DeviceHealth answers "is this chip answering right now" and the readbacks
-        # ask it fifteen times a second. Nobody was watching it CHANGE, and that is
-        # the half an operator needs: the console blanks a gauge the instant a
-        # verdict flips, and until now the boat's log recorded that flip only when
-        # something happened to RAISE. The failure this whole file exists for — a
-        # sensor that goes SILENT — produces no exception at all, so the loudest
-        # event on the vehicle was the quietest line in the log. `_device_failed`
-        # cannot cover it either: it fires on a raise, not on the verdict, and it
-        # is rate-limited to one line a minute, so a chip that dies sixty seconds
-        # after a NAK dies without a word.
-        #
-        # False for every key, before anything has run: NEVER ANSWERED IS FAULTED
-        # (see DeviceHealth), so seeding these True would make the first sweep of
-        # every boot announce five sensors dying. Seeded False, a chip that was
-        # never fitted stays quiet — its absence is stated once by the boot line
-        # below, and an absence is not a transition — while the first good read of
-        # one that IS fitted is a real edge and says so.
-        self._live: dict[str, bool] = dict.fromkeys(self._health, False)
-        # Which keys have already had their FIRST GOOD READ announced. Separate
-        # from _live because answered_ever() stays true forever once it flips, so
-        # it cannot tell a first arrival from the third reseat of a bad connector —
-        # and those are different lines with different meanings.
-        self._first_seen: set[str] = set()
-        # --- leak probe raw edges (see _leak_tick) -----------------------------
-        # None = never sampled, which is not the same as "dry".
-        self._probe_wet: dict[str, bool | None] = {"warn": None, "flood": None}
-        self._probe_edge_at: dict[str, float] = {}
-        self._probe_edge_n: dict[str, int] = {}
-
-        # --- buses ------------------------------------------------------------
-        self._bus = None
-        self._imu = None
-        self._ms_prom: list[int] | None = None
-        self._ms_stage = 0
-        self._ms_next = 0.0
-        self._ms_d1 = 0
-        self._ms_d2 = 0
-        self._open_i2c()
-        self._open_imu()
-        self._open_depth()
-        self._open_power()
-
+        # Tether link sampling stays a Pi concern — the carrier file is the
+        # Pi's own NIC. Cached briefly so 15 Hz telemetry does not hammer sysfs.
         from sysinfo import TETHER_IFACE
 
         self._carrier_path = f"/sys/class/net/{TETHER_IFACE}/carrier"
+        self._carrier_cache: tuple[float, int] = (0.0, -1)
 
-        self._sensor_thread = threading.Thread(target=self._sensor_loop, name="neptune-sensors", daemon=True)
-        self._stepper_thread = threading.Thread(target=self._stepper_loop, name="neptune-ballast", daemon=True)
-        self._sensor_thread.start()
-        self._stepper_thread.start()
-        # sensor_faults(), not _faults: every chip is faulted at this instant
-        # because none of them has answered yet — the sensor thread has only just
-        # started. That is the honest line to print, and it is the same list the
-        # console will be shown, so a boot log and a screen can be compared.
-        # THE ROLL CALL, AND IT IS THE FIRST HALF OF EVERY SENSOR'S LIFE STORY.
-        # The list of what is NOT answering was already here; what was missing was
-        # what IS — and the two together are what makes the log readable forwards.
-        # Somebody fitting one instrument at a time needs to see their group appear
-        # on this line the first time they boot after soldering it, without having
-        # to infer its arrival from the absence of its name somewhere else.
         log.info(
-            "RealHardware active — GPIO groups fitted: %s; not fitted: %s; not answering yet: %s",
+            "RealHardware active — fitted: %s; not fitted: %s; brainstem: %s",
             ",".join(sorted(n for n, ok in self._have.items() if ok)) or "none",
             ",".join(sorted(n for n, ok in self._have.items() if not ok)) or "none",
-            ",".join(self.sensor_faults()) or "none",
+            (self._link.hello or {}).get("fw", "answering") if self._link else "absent",
         )
 
     @staticmethod
     def _gpio_available() -> bool:
-        """True once a real GPIO stack is importable AND the sensor code is wired.
+        """True once a real GPIO stack is importable AND a human says wired.
 
-        The import check alone is not enough, because gpiozero installs fine on a
-        Pi with nothing attached, and this class would then come up reporting
-        mock=False over a loom that does not exist. So there are two gates and
-        both must pass: a human saying the harness exists, and the GPIO stack
-        actually importing.
-
-        THE HUMAN HALF MOVED OUT OF THIS FUNCTION. It was a `wired = False`
-        literal here, which meant asserting "the wires are in the holes" required
-        editing this file on the vehicle — a source edit to state a fact about a
-        workbench. It is now settings.hardware_wired (NEPTUNE_HW_WIRED), which is
-        the same assertion made by the same human in a place that does not need a
-        commit. What has NOT changed is that something outside the software has to
-        make it: nothing here can see a connector.
-
-        WHAT THIS FLAG NO LONGER MEANS is "every sensor is fitted". It used to be
-        all-or-nothing — one flag for a whole vehicle — which made the first sensor
-        on the bench untestable, because turning it on claimed the other eleven
-        were there too. __init__ now brings up each group separately and names the
-        ones that did not come up, so this says only "there is a harness worth
-        talking to", and the console reports the rest per group.
+        Same two gates as always: the flag (NEPTUNE_HW_WIRED) is the human
+        asserting a harness exists, and gpiozero importing is the machine
+        being a machine that could drive one. This gate now covers ONLY the
+        thruster half — the brainstem has its own (a port that answers).
         """
         if not settings.hardware_wired:
             return False
         try:
             import gpiozero  # noqa: F401
+
+            return True
         except Exception:  # noqa: BLE001
             return False
-        return True
 
     # ---- actuators --------------------------------------------------------
     def set_armed(self, on: bool) -> None:
-        # There is no ESC to arm: these are brushed motors on H-bridges, so
-        # arming is a software gate and this is where it is enforced. Disarming
-        # zeroes the bridges immediately rather than waiting for the next control
-        # frame, because "the next control frame" may never come.
-        #
-        # ARMING IS REFUSED WITHOUT THE BRIDGES. Every other group in __init__ may
-        # be missing and the vehicle still flies, one reading poorer. This one is
-        # different in kind: arming a sub whose H-bridges never came up hands the
-        # operator a live console, a moving stick and a vehicle in water that
-        # cannot answer it — and the console would have no way to know, because
-        # "armed" would be true and the thrust command would be accepted and
-        # dropped. Refuse, say so, and stay disarmed.
+        # ARMING IS REFUSED WITHOUT THE BRIDGES — a live console over a vehicle
+        # that cannot answer it is the one failure this method exists to stop.
         if on and not self._have.get("thrusters"):
             self._fault(
                 "thrusters",
-                "REFUSING TO ARM: the H-bridges did not come up, so "
-                "the sticks would move nothing. Fix the thruster "
-                "wiring before arming this vehicle",
+                "REFUSING TO ARM: the thruster drivers did not come up, so the "
+                "sticks would move nothing. Fix the wiring before arming",
             )
             self._armed = False
             return
@@ -1933,612 +1694,322 @@ class RealHardware(HardwareBase):
             return
         if not self._armed:
             left = right = 0.0
-        self._drive_bridge(self._l_in1, self._l_in2, self._l_en, left)
-        self._drive_bridge(self._r_in1, self._r_in2, self._r_en, right)
+        self._drive_bridge(self._l_in1, self._l_in2, left)
+        self._drive_bridge(self._r_in1, self._r_in2, right)
 
     @staticmethod
-    def _drive_bridge(in1, in2, en, v: float) -> None:
-        a, b, duty = thruster_duty(v, settings.thruster_deadband)
-        # Duty goes to zero BEFORE the direction pins move and comes back after:
-        # flipping IN1/IN2 while the bridge is conducting is a shoot-through, and
-        # these H-bridge modules are only sometimes protected against it. The cost
-        # is a few microseconds of coast on every reversal, which no one can feel.
-        en.value = 0.0
-        in1.value = a
-        in2.value = b
-        en.value = duty
+    def _drive_bridge(in1, in2, v: float) -> None:
+        d1, d2 = drv8871_duty(v, settings.thruster_deadband)
+        # The falling side goes to zero BEFORE the rising side comes up:
+        # both inputs high is the DRV8871's brake, and commanding it during a
+        # reversal is a current spike the 3.6 A limiter has to eat for nothing.
+        if d1 == 0.0:
+            in1.value = 0.0
+            in2.value = d2
+        else:
+            in2.value = 0.0
+            in1.value = d1
 
     def set_camera(self, pan: float, tilt: float) -> None:
-        # v2 — DOCUMENTED NO-OP. No pan/tilt servos are fitted in v1. The
-        # protocol fields and the client control stay in place so that adding the
-        # servos later is a wiring job and not a protocol change; nothing here
-        # pretends the camera moved.
+        # v2 — DOCUMENTED NO-OP. No pan/tilt servos are fitted; the protocol
+        # fields stay so adding them later is a wiring job, not a contract change.
         return
 
     def ballast_pump(self, direction: BallastDir) -> None:
-        # Non-blocking: this only tells the stepper thread which way to walk.
+        # The loop closes on the brainstem: this only says which way. The pump
+        # meters its own millilitres and stops itself on fault (firmware).
         if direction not in ("fill", "empty", "hold"):
             log.warning("ballast_pump(%r): unknown direction, holding", direction)
             direction = "hold"
-        self._ballast_cmd = direction
-        if direction == "hold":
-            # "hold" also cancels an in-progress homing run. E-STOP calls this,
-            # and an E-STOP that leaves the syringe walking is not a stop.
-            self._homing = False
+        if self._link is not None:
+            self._link.send("pump", {"fill": 1, "empty": -1, "hold": 0}[direction])
 
     def ballast_home(self) -> None:
-        # Arms the homing run; the stepper thread drives toward the EMPTY switch
-        # and zeroes the counter when it closes. Returns immediately — a full
-        # stroke at 400 steps/s is ten seconds, and blocking the event loop for
-        # ten seconds would stop telemetry, the watchdog and the camera with it.
-        self._homing = True
-        self._ballast_cmd = "hold"
-        log.info("ballast: homing toward the EMPTY switch")
+        # Purge-home: the pump runs out against the empty bag until the flow
+        # goes silent, and THAT is the datum (docs/hardware.md §6). Returns
+        # immediately; `homed` arrives in telemetry when the vehicle says so.
+        if self._link is not None:
+            self._link.send("trim_home")
+            log.info("ballast: purge-homing against the empty bag")
 
     def set_magnet(self, on: bool) -> None:
-        # v2 — no electromagnet is fitted. The flag is deliberately NOT latched:
-        # get_magnet() must keep answering False, because a magnet indicator lit
-        # over a magnet that does not exist is a claim about the world, and an
-        # operator would try to pick something up with it.
-        log.warning("set_magnet(%s) ignored — the electromagnet is v2 hardware, " "nothing is fitted", on)
+        # v2 — no electromagnet was bought (the burn wire took its role).
+        log.warning("set_magnet(%s) ignored — no electromagnet is fitted", on)
 
-    # THE COMMANDED STATE IS RECORDED EVEN WITH NO LAMP ON THE PIN, and the pin is
-    # only written if there is one. get_light() answers from _lights, so with the
-    # lamps unwired the console shows what you asked for and "lights" sits in
-    # sensor_faults() saying it went nowhere. The alternative — dropping the
-    # command — would leave the switch flicking back on its own with no
-    # explanation anywhere.
+    # THE COMMANDED STATE IS RECORDED EVEN WITH NO LINK, and the command is
+    # only sent if there is one — same shape as the old unwired lamp pins: the
+    # console shows what you asked for, and "brainstem" in sensor_faults says
+    # it went nowhere.
+    #
+    # INTERIM MAPPING (docs/playbook.md §8 owns the real vocabulary): the
+    # console's "white" channel is the lamp; "green" drives the red locator
+    # BEACON, because the green ring does not exist on the bought vehicle and
+    # a dead control tells nobody anything.
     def set_light(self, which: Which, on: bool) -> None:
         _, lvl = self._lights[which]
         self._lights[which] = (on, lvl)
-        dev = self._light_dev.get(which)
-        if dev is not None:
-            dev.value = lvl if on else 0.0
+        self._send_light(which)
 
     def set_light_level(self, which: Which, level: float) -> None:
         on, _ = self._lights[which]
         lvl = max(0.0, min(1.0, level))
         self._lights[which] = (on, lvl)
-        dev = self._light_dev.get(which)
-        if dev is not None:
-            dev.value = lvl if on else 0.0
+        self._send_light(which)
+
+    def _send_light(self, which: Which) -> None:
+        if self._link is None:
+            return
+        on, lvl = self._lights[which]
+        if which == "white":
+            self._link.send("lamp", round(lvl if on else 0.0, 3))
+        else:
+            self._link.send("beacon", 1 if on else 0)
 
     def release_dropweight(self) -> None:
-        # v2 — LOUD NO-OP. There is no burn-wire and no drop-weight on the v1
-        # vehicle, so this cannot do anything, and the dangerous failure is an
-        # operator who believes it did. v1 recovery is: empty the ballast and
-        # pull the sub in on the tether. That is the procedure; this is not.
+        # The two-step interlock, driven in order: ARM, then FIRE. The firmware
+        # refuses FIRE unless its own armed state agrees, so no single spurious
+        # write on this cable can shed the weight. LOUD on both outcomes — an
+        # operator who believes a release happened when it did not is the
+        # dangerous half.
+        if self._link is None:
+            log.error("DROP-WEIGHT RELEASE COMMANDED WITH NO BRAINSTEM — nothing was released")
+            return
+        log.warning("DROP-WEIGHT RELEASE: arming the burn interlock")
+        self._link.send("arm_burn", 1)
+        self._link.send("fire_burn")
         log.warning(
-            "DROP-WEIGHT RELEASE COMMANDED BUT NOT FITTED IN V1 — nothing "
-            "was released. Recovery: empty the ballast and pull the tether in."
+            "DROP-WEIGHT RELEASE: fire commanded — watch telemetry burn_fired for "
+            "the vehicle's own confirmation; the bridle is a bench re-arm to replace"
         )
 
-    # ---- readbacks (all cache reads: no bus, no blocking) -----------------
+    # ---- readbacks (all snapshot reads: no bus, no blocking) --------------
+    def _val(self, key: str):
+        return None if self._link is None else self._link.value(key)
+
     def get_magnet(self) -> bool:
-        return self._magnet  # always False on v1; see set_magnet
+        return self._magnet  # always False; see set_magnet
 
     def get_light(self, which: Which) -> tuple[bool, float]:
         return self._lights[which]
 
     def get_ballast_level(self) -> float | None:
-        return self._axis.level()
+        # ballast_ml is null on the wire until the vehicle has purge-homed —
+        # the same unknown-until-homed honesty the syringe had. The capacity is
+        # config because it is the bag's working swing, not a property of code.
+        ml = self._val("ballast_ml")
+        if ml is None:
+            return None
+        return min(1.0, max(0.0, float(ml) / settings.ballast_capacity_ml))
 
     def ballast_homed(self) -> bool:
-        return self._axis.homed
+        return bool(self._val("ballast_homed"))
 
     def ballast_needs_rehome(self) -> bool:
-        return self._axis.needs_rehome
-
-    def _answering(self, key: str) -> bool:
-        """Is this chip still answering? Gate on the front of every cache read.
-
-        Cheap enough to sit on the event loop's path — one dict lookup, one
-        clock read, an int compare — which is the reason liveness is a verdict
-        computed here rather than a bus probe taken here. This method must never
-        touch I2C; the module header forbids it and a blocking read on the loop
-        stops telemetry, the watchdog and the camera together.
-        """
-        return not self._health[key].faulted(time.monotonic())
+        # The pump's skipped-step: it ran and the flow sensor stayed silent
+        # (worn tube, clog, dry inlet), so the millilitre count is not to be
+        # believed until a purge-home re-references it.
+        return bool(self._val("ballast_fault"))
 
     def read_pressure(self) -> float | None:
-        # THE FIX FOR THE FAILURE THAT STARTED ALL THIS. This used to hand back
-        # self._c_pressure_psi whenever it was not None — and it stays not-None
-        # forever once the sensor has answered even once. So an MS5837 that died
-        # at 4.33 m returned 20.85 psi for the rest of the dive, rov.py turned it
-        # into depth=4.33 in every frame at 15 Hz, the client stamped each
-        # arriving frame as fresh, and the console showed a confident, fully
-        # colour-banded 4.3 m while the sub went to 8. The cache was never the
-        # problem; treating "I remember a number" as "I can measure it" was.
-        #
-        # The old never-answered corner (a pinned 0.00 m, documented as an
-        # anomaly because the protocol had no cannot-tell for depth) is gone with
-        # it: Telemetry.depth is Optional now, so both flavours of absence — never
-        # wired, and wired then stopped — say the same honest nothing.
-        if self._c_pressure_psi is None or not self._answering("ms5837"):
-            return None
-        return self._c_pressure_psi
+        return self._val("press_psi")
 
     def read_heading(self) -> float | None:
-        # A frozen bearing is worse than no bearing: the radar is heading-up, so
-        # the whole map rotates with a number nothing is measuring and it keeps
-        # looking exactly as authoritative as it did a minute ago.
-        return self._c_heading if self._answering("bno085") else None
+        # The mounting offset is the Pi's calibration constant, applied here so
+        # the firmware stays a sensor and the calibration stays in nav config —
+        # same as it always was, one layer down.
+        h = self._val("heading")
+        if h is None:
+            return None
+        return (float(h) + nav_settings.imu_yaw_offset_deg) % 360.0
 
     def read_gyro_z_dps(self) -> float | None:
-        return self._c_gyro_z if self._answering("bno085") else None
+        return self._val("gyro_z")
 
     def read_accel_fwd_ms2(self) -> float | None:
-        return self._c_accel_fwd if self._answering("bno085") else None
+        return self._val("accel_fwd")
 
     def read_mag_cal(self) -> int | None:
-        # None whenever the BNO085 is not answering — never wired, or wired and
-        # stopped. This used to return the cached int unconditionally, and the
-        # two failures it hid are both bad in the same direction:
-        #   * never wired: _c_mag_cal sat at its initial 0, so a hull with no IMU
-        #     at all claimed "compass fitted, uncalibrated" and the client's NO
-        #     COMPASS flag was unreachable code on every real vehicle;
-        #   * died mid-dive: _c_mag_cal FROZE at whatever it last reported —
-        #     typically 3 — so a frozen heading shipped wearing the "calibrated
-        #     and in use" trust mark, which is the strongest claim this system
-        #     can make about a bearing, attached to a chip that had stopped.
-        return self._c_mag_cal if self._answering("bno085") else None
+        v = self._val("mag_cal")
+        return None if v is None else int(v)
 
     def read_pitch_roll(self) -> tuple[float | None, float | None]:
-        return self._c_pitch_roll if self._answering("bno085") else (None, None)
+        return (self._val("pitch"), self._val("roll"))
 
     def read_water_speed(self) -> tuple[float, bool]:
-        # PaddleWheel.read() has its own stale window, so a wheel that stops
-        # turning already reports not-fresh — but that window is only consulted
-        # when somebody CALLS it, and the caller is the sensor thread. Kill the
-        # thread and _c_speed keeps whatever it held: (0.83, True), fresh forever,
-        # on a sub that is stationary or snagged. The wheel's own freshness cannot
-        # answer for the loop that reads the wheel, so the loop answers here.
-        return self._c_speed if self._answering("sensor-thread") else (0.0, False)
+        # Flow-log pulses → m/s via the same calibration constant the
+        # paddlewheel used (a placeholder until the measured-run; the k-factor
+        # is nav's, docs/hardware.md §14). fresh=False when the link is down,
+        # the sensor is stale, or the vehicle says so — magnitude then
+        # meaningless, carried as cannot-tell by every caller already.
+        hz = self._val("speed_hz")
+        fresh = self._val("speed_fresh")
+        if hz is None or not fresh:
+            return (0.0, False)
+        return (float(hz) * nav_settings.m_per_pulse, True)
 
-    def read_payout_m(self) -> float:
-        # No monotonic max: rewinding the spool genuinely reduces how far away
-        # the sub can be. Negative ticks (the drum turned past its start, or A/B
-        # are swapped) clamp at zero rather than reporting negative tether.
-        return max(0.0, self._spool.ticks * nav_settings.m_per_spool_tick)
+    def read_speed_dir(self) -> int | None:
+        # The PAS ring's gift: -1 astern / +1 ahead / 0 unknown — the one thing
+        # the throttle sign could never measure. Not yet consumed by nav; it
+        # rides here so the estimator can take it when that work lands (§20).
+        v = self._val("speed_dir")
+        return None if v is None else int(v)
 
-    def read_leak(self) -> str:
-        # THE ONE READING THAT MUST NEVER FAIL QUIETLY, and until this round it
-        # was the only one with no liveness gate at all. _leak_tick() shared a
-        # try-block with the I2C ticks, so a single unexpected raise from a bus
-        # chip skipped the rest of the tick and the probes stopped being sampled
-        # ENTIRELY — while this method went on answering "NORMAL" at 15 Hz. Every
-        # other gauge on that console correctly blanked and named its chip; the
-        # hull integrity readout stayed green on evidence nobody was collecting.
-        #
-        # The latches are checked FIRST and are not gated: water that has already
-        # reached a probe is an established fact, and the sampler stopping
-        # afterwards does not un-establish it. Only the reassurance needs
-        # liveness — and a probe this vehicle has already named as broken cannot
-        # supply it either. See leak_state_from() for the full argument.
-        return leak_state_from(
-            self._warn_debounce.latched,
-            self._flood_debounce.latched,
-            self._answering("leak-probes"),
-            self.leak_probe_fault(),
-        )
-
-    def reset_leak_latches(self) -> dict:
-        """Clear the latches and the wet-at-boot verdict. REFUSED WHILE WET.
-
-        The live pins are read HERE rather than trusting the debouncers, and that
-        is the whole guard: the debouncer is a memory, and a memory is exactly
-        what this call is asking to erase. Asking the pin instead means the
-        refusal is based on the water, not on the bookkeeping about the water.
-
-        Clearing the boot verdict too is deliberate. _warn_wet_at_boot makes
-        read_leak() answer UNKNOWN for the life of the process — correctly, because
-        a probe wet in a hull sealed dry is a probe that cannot certify anything —
-        but it is precisely the state a human returns from having inspected. If
-        this cleared only the latches, a bench-wet boot would leave the console
-        stuck on UNKNOWN with no way back short of a restart, which is the problem
-        this method exists to remove.
-        """
-        if not self._have.get("leak"):
-            return {
-                "ok": False,
-                "cleared": [],
-                "why": (
-                    "there are no leak probes on this vehicle to re-arm — the " "leak group did not come up at boot"
-                ),
-            }
-        try:
-            wet_now = [
-                n for n, dev in (("warn", self._leak_warn_in), ("flood", self._leak_flood_in)) if self._is_wet(dev)
-            ]
-        except Exception as exc:  # noqa: BLE001
-            return {
-                "ok": False,
-                "cleared": [],
-                "why": f"the probes would not read ({exc}), so nothing can be vouched for",
-            }
-        if wet_now:
-            log.warning("leak re-arm REFUSED: %s probe(s) are wet right now", "+".join(wet_now))
-            return {
-                "ok": False,
-                "cleared": [],
-                "wet_now": wet_now,
-                "why": (
-                    f"the {' and '.join(wet_now)} probe is WET RIGHT NOW. This clears "
-                    f"the memory of water, never water that is present — dry the hull "
-                    f"and find out where it came from first"
-                ),
-            }
-        cleared = []
-        if self._warn_debounce.latched:
-            cleared.append("warn-latch")
-        if self._flood_debounce.latched:
-            cleared.append("flood-latch")
-        if self._warn_wet_at_boot:
-            cleared.append("warn-wet-at-boot")
-        if self._flood_wet_at_boot:
-            cleared.append("flood-wet-at-boot")
-        self._warn_debounce.reset()
-        self._flood_debounce.reset()
-        self._warn_wet_at_boot = False
-        self._flood_wet_at_boot = False
-        self._leak_rearms += 1
-        # WARNING, not INFO. Someone dismissed the strongest claim this vehicle
-        # makes, and the boat's own log is where that has to be findable later.
-        log.warning(
-            "leak detector RE-ARMED by operator (cleared: %s; re-arm #%d). Both " "probes read dry at this moment.",
-            ", ".join(cleared) or "nothing was latched",
-            self._leak_rearms,
-        )
-        return {
-            "ok": True,
-            "cleared": cleared,
-            "rearms": self._leak_rearms,
-            "why": (
-                "both probes read dry and the detector is re-armed"
-                if cleared
-                else "nothing was latched; both probes read dry and remain armed"
-            ),
-        }
-
-    def leak_probe_fault(self) -> str | None:
-        # The DEBOUNCED latches, not the live pins — the same evidence read_leak()
-        # answers from. These two used to read the same probes by different rules:
-        # a launch splash on the upper probe that the 5-sample debouncer correctly
-        # threw away still reached this raw pin read, so the sub said NORMAL and
-        # "probe wiring is broken" in the same frame and failed the pre-dive check
-        # over one wet frame. One droplet cannot be both nothing and a fault.
-        #
-        # The detection survives intact, because the failure it exists for is a
-        # probe that reads WRONG CONTINUOUSLY: a shorted flood pair sits wet and
-        # latches in ~0.5 s, and an open warn pair never latches no matter how
-        # deep the water gets — flood latched with warn never latched is still
-        # the impossibility, just held to the same half-second of evidence the
-        # leak alarm itself needs. Latching is one-way, so once real water has
-        # reached the lower probe first this correctly stops accusing anything.
-        return leak_probe_fault_from(
-            self._warn_debounce.latched, self._flood_debounce.latched, self._warn_wet_at_boot, self._flood_wet_at_boot
-        )
+    def read_water_c(self) -> float | None:
+        # MS5837 water temperature — sound-speed correction for the sonar tier,
+        # not on the telemetry wire yet.
+        return self._val("water_c")
 
     def read_voltage(self) -> float | None:
-        # None when the INA219 is not answering. It used to return _c_voltage
-        # regardless, which was 0.0 before the chip had ever spoken (defended as
-        # "bands critical, and a missing pack voltage should nag") — but the same
-        # line handed back a FROZEN 7.9 V once the chip had spoken and then
-        # stopped, and that does not nag, it reassures. A pack that stopped being
-        # measured has to be distinguishable from a pack that is fine.
-        return self._c_voltage if self._answering("ina219") else None
+        return self._val("pack_v")
 
     def read_current_a(self) -> float | None:
-        # Same chip as the voltage, so the same gate: amps and volts die
-        # together on a dead INA219 and reporting one live while the other is
-        # blank would describe a failure the hardware cannot have.
-        return self._c_current if self._answering("ina219") else None
+        return self._val("pack_a")
+
+    def read_rail_v(self) -> float | None:
+        # INA219 #2, the 8 V thruster rail. Pack-vs-rail divergence is the
+        # failing-motor signature (docs/hardware.md §13); not on the wire yet.
+        return self._val("rail_v")
+
+    def read_rail_a(self) -> float | None:
+        return self._val("rail_a")
+
+    def read_leak(self) -> str:
+        """Three zones → the four-stage ladder the console already speaks.
+
+        One zone latched is WARN (water somewhere — finish up and find out);
+        two or more agreeing is FLOOD (corroborated water — come up now), the
+        same 2-of-3 the vehicle's own reflex fires on. Latches are mirrored
+        sticky on this side, so WET OUTRANKS CANNOT-TELL across a link death:
+        a FLOOD seen in any frame stands until a frame shows the vehicle's own
+        latch cleared (leak_reset is the only thing that clears it there).
+        NORMAL still has to be earned — a live link, sampling healthy, no
+        boot-wet zone — because it is a positive claim about the hull.
+        """
+        latches = self._val("leak_latch")
+        if isinstance(latches, (list, tuple)) and len(latches) == 3:
+            for name, wet in zip(("fwd", "mid", "aft"), latches):
+                if wet:
+                    self._leak_latched.add(name)
+                else:
+                    self._leak_latched.discard(name)
+        if len(self._leak_latched) >= 2:
+            return "FLOOD"
+        if self._leak_latched:
+            return "WARN"
+        if self._link is None or not self._link.link_ok() or not self._val("leak_ok"):
+            return LEAK_UNKNOWN
+        if self.leak_probe_fault() is not None:
+            return LEAK_UNKNOWN
+        return "NORMAL"
+
+    def leak_probe_fault(self) -> str | None:
+        # A zone wet at power-on in a hull sealed dry is a shorted probe or a
+        # flooded hull — either way a probe that cannot certify anything. The
+        # firmware captures it at boot and carries it until a leak_reset; the
+        # string names the zones so the console names the seal to suspect.
+        boot = self._val("leak_boot")
+        if not isinstance(boot, (list, tuple)) or len(boot) != 3:
+            return None
+        wet = [name for name, b in zip(("fwd", "mid", "aft"), boot) if b]
+        return "+".join(wet) if wet else None
+
+    def reset_leak_latches(self) -> dict:
+        """Re-arm the leak detector — decided by the vehicle, relayed here.
+
+        The refusal-while-wet rule lives beside the pins it reads, which is the
+        firmware now. This waits (briefly — the one deliberate wait in this
+        class) for the ack because the caller must relay WHY a refusal
+        happened, and 'the button did nothing' teaches an operator that the
+        button is broken.
+        """
+        if self._link is None:
+            return {"ok": False, "cleared": [], "why": "no brainstem — there is nothing to re-arm"}
+        ack = self._link.request("leak_reset", timeout_s=0.6)
+        if ack is None:
+            return {"ok": False, "cleared": [], "why": "the brainstem did not answer — check the link"}
+        if not ack.get("ok"):
+            zone = ack.get("err") or "a probe"
+            return {
+                "ok": False,
+                "cleared": [],
+                "wet_now": [zone],
+                "why": (
+                    f"the {zone} zone is WET RIGHT NOW. This clears the memory of "
+                    f"water, never water that is present — dry the hull and find out "
+                    f"where it came from first"
+                ),
+            }
+        self._leak_latched.clear()
+        self._leak_rearms += 1
+        log.warning("leak detector RE-ARMED by operator (re-arm #%d)", self._leak_rearms)
+        return {"ok": True, "cleared": ["latches"], "rearms": self._leak_rearms, "why": "all three zones read dry"}
 
     def link_quality(self) -> int:
-        # -1 (tether down) when nothing is sampling the carrier file any more. The
-        # int has no null to spend, and of the values it can carry only -1 is not
-        # a claim that the link is up — a frozen 4 says "full bars" about a check
-        # that stopped running, and the operator reads bars as proof the vehicle
-        # is still talking. -1 is also exactly what _link_tick() itself reports
-        # when it cannot read the carrier, so an unreadable link and an unread one
-        # land on the same honest answer.
-        return self._c_link if self._answering("sensor-thread") else -1
+        # The TETHER, not the brainstem — the Pi's own NIC carrier, cached for
+        # half a second so telemetry rate does not hammer sysfs. -1 is the only
+        # value that is not a claim the link is up.
+        now = time.monotonic()
+        at, val = self._carrier_cache
+        if now - at < 0.5:
+            return val
+        try:
+            with open(self._carrier_path, "r") as fh:
+                val = 4 if fh.read().strip() == "1" else -1
+        except Exception:  # noqa: BLE001 — no such interface = no tether
+            val = -1
+        self._carrier_cache = (now, val)
+        return val
 
     def sensor_faults(self) -> tuple[str, ...]:
-        """What is not answering right now, e.g. ("ms5837", "ina219").
+        """Pi-side latched faults ∪ the vehicle's own, fronted by the link.
 
-        Two sources, unioned, and both are needed:
-          * `_health`, the per-device liveness verdict — this is what the readbacks
-            gate on, so a name here and a None on the corresponding gauge are the
-            SAME decision read twice. They cannot drift apart and contradict each
-            other on screen. Three I2C chips, plus the two things that are not
-            chips and can stop anyway: "leak-probes" (GPIO) and "sensor-thread"
-            (the loop that samples all of them).
-          * `_faults`, the latched subsystem faults that are not a device failing
-            to answer: the I2C bus that would not open at all, and the pair of
-            ballast limit switches that read impossibly.
-
-        It reaches telemetry now (Telemetry.sensor_faults), so a blank gauge
-        arrives with the name of the box to go and look at. It is still what a
-        pre-dive check should refuse to arm on.
+        Link down → the one name "brainstem" stands in front of every chip
+        behind it (naming them too would claim knowledge nobody has — the
+        i2c-front rule, one level up). Link up → the ESP32's per-chip verdicts
+        pass through verbatim, in the vocabulary the console already renders.
         """
-        now = time.monotonic()
-        dead = {key for key, h in self._health.items() if h.faulted(now)}
-        return tuple(sorted(self._faults | dead))
+        stem = self._link.faults() if self._link is not None else ("brainstem",)
+        return tuple(sorted(self._faults | set(stem)))
 
     def sensors_absent(self) -> tuple[str, ...]:
-        """Which of sensor_faults() have NEVER answered THIS POWER CYCLE.
+        # Leaf parts only, decided at the bus by the firmware. Empty when the
+        # link is down: "cannot tell them apart" stays the loud default.
+        return self._link.absent() if self._link is not None else ()
 
-        THE FACT THE VEHICLE ALREADY KNEW AND NEVER SAID. `DeviceHealth` has
-        carried `answered_ever()` since liveness was written — it is what keeps
-        the boot log from announcing a recovery on every first good read — and it
-        stopped at this class's edge, so the console had one undifferentiated null
-        for two different vehicles: the one whose compass died in the water, and
-        the one that has never had a compass screwed to it. The second is the
-        NORMAL condition of most of this boat for weeks at a time, and describing
-        it as a breakage is how a console teaches its operator to skip the rail.
+    @property
+    def is_mock(self) -> bool:  # type: ignore[override]
+        # ANNOUNCED SIMULATION PROPAGATES. The firmware's bench mode simulates
+        # every reading and says so in every frame; the console must show the
+        # SIM presentation for exactly as long as that is true. A real link
+        # sending real readings — or no link at all — is not a simulation.
+        return self._link is not None and self._link.bench_mode
 
-        ONE SOURCE, AND IT IS THE LEAF PARTS ONLY: a `_health` device with no good
-        read behind it. `faulted()` is already true for those (never answered is
-        faulted), so every name here is in sensor_faults() by construction.
-
-        THE LATCHED SUBSYSTEM FAULTS ARE DELIBERATELY NOT HERE, and each for its
-        own reason. Getting this wrong would be worse than not shipping the field
-        at all, because absence buys silence and silence about a fixable fault is
-        the failure this whole chain exists to prevent.
-
-          * `i2c` — THE BUS THAT WOULD NOT OPEN. On the vehicle this is written
-            against, /dev/i2c-1 does not exist because I2C is not enabled in
-            raspi-config, and that is an ERRAND with a clear fix — not a part
-            nobody has fitted. It also stands behind all three chips, so calling
-            it absent would silence the one name that explains three quiet gauges
-            at once. A bus that will not open stays loud.
-          * A GPIO GROUP THAT DID NOT COME UP (`_have[name] is False`). It reads
-            like the not-fitted case and is not: gpiozero constructs a device for
-            an unwired pin perfectly happily, so a group that RAISED did not raise
-            because nothing is soldered to it — it raised because of a pin factory
-            that would not load, a pin already in use, a bad pin number. That is a
-            bring-up failure with a cause, and it is the one thing the per-group
-            bring-up exists to name.
-          * `ballast-limits` — both limit switches reading triggered at once is an
-            impossible READING from switches that are wired and answering. An
-            absence is the lack of a reading, never a wrong one.
-
-        What this leaves is exactly the question the owner is asking week to week:
-        the bus is up, so is THIS chip on the end of it yet? A chip that has never
-        answered on a working bus is not fitted (or not working, which from here
-        is the same evidence and the same non-errand: nothing has been lost, and
-        it will fill in the moment the part answers). One that answered and went
-        quiet has an errand, and keeps it.
-
-        Intersected with sensor_faults() so the subset invariant is enforced here
-        rather than assumed by every reader: a name that is absent but somehow not
-        faulted would be a part the console is told to stay quiet about while
-        nothing else on screen accounts for it.
-        """
-        absent = {key for key, h in self._health.items() if not h.answered_ever()}
-        return tuple(sorted(absent & set(self.sensor_faults())))
-
-    # ---- interrupt handlers (gpiozero edge threads) -----------------------
-    def _on_paddle_pulse(self) -> None:
-        self._paddle.pulse(time.monotonic())
-
-    def _on_spool_edge(self) -> None:
-        # Read BOTH channels on every edge: the decoder needs the full A/B state,
-        # not the pin that happened to move. Note that pull_up=True inverts both
-        # `.value`s together, and complementing both bits of a Gray code maps the
-        # cycle onto itself — the phase shifts, the direction does not, so this
-        # is correct either way round.
-        # Belt and braces: with no pulse group there is nothing to have registered
-        # this callback, so reaching it should be impossible — but an edge thread
-        # already in flight when a group is torn down would find the pins gone,
-        # and a raise on a gpiozero callback thread is silent.
-        if self._spool_a is None or self._spool_b is None:
-            return
-        self._spool.update(bool(self._spool_a.value), bool(self._spool_b.value))
-
-    @staticmethod
-    def _is_wet(probe) -> bool:
-        # Internal pull-up, water bridges the interleaved wires to ground: WET is
-        # the pin pulled LOW. gpiozero's pull_up=True already reports that low as
-        # the ACTIVE state, so `.value` is 1 when wet.
-        return bool(probe.value)
-
-    @staticmethod
-    def _is_triggered(limit) -> bool:
-        # NC-to-ground: un-triggered the switch holds the pin low, so gpiozero
-        # (pull_up=True, active-low) reports it ACTIVE while everything is fine.
-        # Triggered — or cut, or unplugged — the pin floats high and the device
-        # goes INACTIVE. Hence the inversion: no switch reads as a stop.
-        return not bool(limit.value)
-
-    # ---- stepper thread ---------------------------------------------------
-    def _stepper_loop(self) -> None:
-        """Walk the ballast axis at a bounded step rate.
-
-        Python is a poor step generator, and 400 steps/s was chosen partly
-        because it is a rate a GIL-scheduled thread can hold without visibly
-        stuttering. If the syringe ever needs to move faster than this, the
-        answer is a hardware step generator (pigpio waveforms), not a tighter
-        loop — a Python loop that misses its deadline does not slow the plunger
-        down, it loses steps, and a lost step on an open-loop axis is the
-        reported level quietly drifting away from where the plunger actually is.
-        """
-        # NO AXIS, NO LOOP. The thread still exists and still exits cleanly on
-        # _stop; it simply never pretends to drive a driver that is not there. The
-        # "ballast" fault latched in __init__ is what the console shows, and
-        # get_ballast_level() answers from the axis, which stays where it was
-        # rather than reporting a plunger travelling on command.
-        if not self._have.get("ballast"):
-            log.warning(
-                "ballast axis not wired — the stepper thread is idle. The syringe "
-                "cannot be driven and its reported level will not move."
-            )
-            self._stop.wait()
-            return
-        period = 1.0 / max(1.0, settings.ballast_step_rate)
-        while not self._stop.is_set():
-            direction = -1 if self._homing else {"fill": +1, "empty": -1}.get(self._ballast_cmd, 0)
-            if direction == 0:
-                self._stop.wait(0.02)  # nothing to do; do not spin the CPU
-                continue
-            # The limit switches are read HERE, once per step, in the same thread
-            # that owns the counter. That is why the hard rule holds mid-command:
-            # there is no window in which a step is taken and its bookkeeping is
-            # not, and no interrupt can zero the count between the two.
-            at_empty = self._is_triggered(self._limit_empty)
-            at_full = self._is_triggered(self._limit_full)
-            if at_empty and at_full:
-                # Physically impossible: the plunger cannot be at both ends of
-                # its own stroke. So this is a wiring fault — an unplugged
-                # connector carrying both leads, or a lost common ground, both of
-                # which read as "triggered" by design. Refuse to move AND refuse
-                # to treat either switch as a position fix: homing on a phantom
-                # switch would zero the counter wherever the plunger happens to
-                # be, which is worse than not homing at all.
-                self._fault(
-                    "ballast-limits",
-                    "BOTH ballast limit switches read triggered "
-                    "— they cannot both be true. Check the switch wiring; the axis "
-                    "is held and will not home until this clears.",
-                )
-                self._end_move()
-                continue
-            self._clear_fault("ballast-limits")
-            if at_empty and direction < 0:
-                self._axis.mark_empty_limit()
-                self._end_move()
-                continue
-            if at_full and direction > 0:
-                self._axis.mark_full_limit()
-                self._end_move()
-                continue
-            self._en_pin.on()  # /EN low = driver enabled
-            self._dir_pin.value = 1 if direction > 0 else 0
-            if self._axis.try_step(direction, at_empty, at_full):
-                self._step_pin.on()
-                # The A4988 only needs a 1 µs pulse; a Python sleep overshoots
-                # that by an order of magnitude and the driver does not care.
-                time.sleep(2e-6)
-                self._step_pin.off()
-            self._stop.wait(period)
-
-    def _end_move(self) -> None:
-        """Stop stepping. The driver stays ENABLED, deliberately.
-
-        Cutting /EN would let the motor freewheel, and a syringe plunger with
-        water pressure behind it can back-drive a de-energised stepper. The
-        counter would not know, and the level would be wrong with nothing to
-        indicate it. Holding current costs the pack a few hundred mA; a silently
-        invalid ballast reading costs the sub.
-        """
-        self._homing = False
-        self._ballast_cmd = "hold"
-
-    # ---- sensor thread ----------------------------------------------------
-    def _sensor_loop(self) -> None:
-        """The ONLY place I2C is touched, and the only writer of the _c_* cache.
-
-        One thread, not three: the BNO085, MS5837 and INA219 share a bus, and
-        interleaving repeated-start transactions from separate threads is how
-        that bus starts returning coherent-looking rubbish. Rates are divided
-        down from one 50 Hz tick.
-
-        THE ORDER AND THE TRY-BLOCKS BELOW ARE A SAFETY PROPERTY, not tidiness.
-        There used to be ONE try around the whole tick, so anything that raised
-        early — and the maths after _imu_tick's own guard can raise on a driver
-        that returns a None quaternion — skipped everything after it. The leak
-        probes were last but one. That is unrelated hardware on an unrelated bus
-        (two GPIO pins) being silenced by an I2C fault, and it silenced them
-        WITHOUT A TRACE: read_leak() kept answering "NORMAL" from debouncers
-        nobody was sampling. So the GPIO work is sampled FIRST, in its OWN
-        try-block, and a bus failure cannot reach it.
-        """
-        period = 1.0 / self.SENSOR_HZ
-        next_t = time.monotonic()
-        tick = 0
-        while not self._stop.is_set():
-            now = time.monotonic()
-            # HEARTBEAT, taken first and unconditionally, because it answers one
-            # question only: is this loop still going round. It is what
-            # read_water_speed() and link_quality() gate on — neither has a chip
-            # of its own to blame, and both hand back a cache this loop is the
-            # only writer of. A tick that fails is NOT a loop that stopped, so
-            # this is deliberately outside every try below; the failures inside
-            # them are reported by their own device's health.
-            self._device_ok("sensor-thread", now)
-            # --- GPIO, on no bus at all, and therefore isolated from the bus ---
+    # ---- lifecycle --------------------------------------------------------
+    def close(self) -> None:
+        try:
+            self.set_armed(False)
+        except Exception:  # noqa: BLE001
+            pass
+        for dev in (self._l_in1, self._l_in2, self._r_in1, self._r_in2):
             try:
-                if tick % self.LEAK_SAMPLE_DIVIDER == 0:
-                    self._leak_tick(now)  # 10 Hz, per the debounce spec
-            except Exception as exc:  # noqa: BLE001
-                # A probe pin that will not read is a fault of ITS OWN — named, and
-                # after fail_streak in a row read_leak() says UNKNOWN instead of
-                # claiming a dry hull it has no evidence for.
-                self._device_failed(
-                    "leak-probes",
-                    "leak probe sampling failed (%s) — the "
-                    "hull state goes to cannot-tell rather "
-                    "than holding NORMAL, which is a claim "
-                    "nobody is checking",
-                    exc,
-                )
+                if dev is not None:
+                    dev.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if self._link is not None:
             try:
-                # The paddlewheel is counted on gpiozero's edge threads and merely
-                # totted up here. Its own try, above the bus work: an I2C fault has
-                # no business freezing the speed the hull is making, and a failure
-                # here must not be charged to the leak probes — blanking the hull
-                # state for a reason that has nothing to do with it is how a
-                # cannot-tell starts flickering, and a flickering cannot-tell is
-                # one the operator learns to ignore.
-                self._c_speed = self._paddle.read(now)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("paddlewheel window failed: %s", exc)
-            # --- I2C: one bad tick must not end the thread ---
-            try:
-                self._imu_tick(now)  # 50 Hz
-                self._pressure_tick(now)  # state machine → ~10 Hz
-                if tick % 25 == 0:
-                    self._power_tick(now)  # 2 Hz
-                    self._link_tick()
-            except Exception as exc:  # noqa: BLE001
-                log.warning("sensor tick failed: %s", exc)
-            # LAST, AND IN ITS OWN TRY, for the same reason everything above is:
-            # this is the loop that keeps the vehicle's instruments alive, and an
-            # exception raised by the code that WATCHES them must never be the thing
-            # that stops them. Last, because it reads the verdicts the ticks above
-            # have just written — a sweep taken before them would report every edge
-            # one tick late, which on a 50 Hz loop is nothing, and would report the
-            # first good read of the boot as happening before the read.
-            try:
-                self._note_liveness_edges(time.monotonic())
-            except Exception as exc:  # noqa: BLE001
-                log.warning("liveness edge sweep failed: %s", exc)
-            tick += 1
-            next_t += period
-            self._stop.wait(max(0.0, next_t - time.monotonic()))
+                self._link.close()
+            except Exception:  # noqa: BLE001
+                pass
 
+    # ---- fault bookkeeping (unchanged rules) ------------------------------
     def _log_fault(self, key: str, msg: str, *args) -> None:
-        """Say a subsystem is broken, at most once a minute.
-
-        Rate-limited because a dead device on a 50 Hz thread produces three
-        thousand identical lines a minute and buries everything that mattered.
-        """
         now = time.monotonic()
         if now - self._fault_logged.get(key, -1e9) > 60.0:
             self._fault_logged[key] = now
             log.error(msg, *args)
 
     def _fault(self, key: str, msg: str, *args) -> None:
-        """Latch a SUBSYSTEM fault — the bus, the limit switches — and log it.
-
-        For anything with LIVENESS — the three I2C chips, the leak probes, the
-        sensor loop — use _device_failed/_device_ok instead. Those keys live in
-        `_health` and nowhere else, deliberately: liveness has to be ONE verdict,
-        or sensor_faults() can name a device the readbacks are still happily
-        answering for and the operator gets a warning next to a number that looks
-        fine.
-        """
         self._faults.add(key)
         self._log_fault(key, msg, *args)
 
@@ -2546,568 +2017,6 @@ class RealHardware(HardwareBase):
         if key in self._faults:
             self._faults.discard(key)
             log.info("%s is answering again", key)
-
-    def _device_ok(self, key: str, now: float) -> None:
-        """This chip just answered: the streak resets and the window restarts.
-
-        DELIBERATELY SILENT. It used to log the recovery from here, which covered
-        exactly one of the four transitions a sensor makes and covered it in the
-        one place that cannot see the other three: a death by SILENCE never calls
-        this method at all, so the log said "answering again" about a chip it had
-        never said anything else about. Every transition is now taken from the same
-        verdict, once a tick, by _note_liveness_edges() — one reader, one rule, and
-        a revival that cannot appear without the death that preceded it.
-        """
-        self._health[key].ok(now)
-
-    def _note_liveness_edges(self, now: float) -> None:
-        """Write down every change in "is this instrument answering". Only changes.
-
-        THE EDGE IS THE EVENT. `faulted()` is a LEVEL: it is true on every one of
-        the fifty ticks a second that follow a chip dropping off the bus, and a line
-        per tick is not a record of a fault, it is a denial-of-service on the log
-        the fault has to be read out of. So the verdict is compared against the last
-        one and only the flip is written down.
-
-        The DECISION is liveness_edge() at module scope, pure and clock-injected;
-        this is the bookkeeping around it — which keys have flipped and which have
-        already been introduced. Split that way for the reason §24.4 gives about
-        DeviceHealth itself: the rule has to be exercisable on a bench, and nothing
-        that can only be reached by owning a Pi with a dying sensor on it is.
-
-        Runs on the sensor thread and is arithmetic on two dicts — no bus traffic,
-        nothing that can block, in keeping with the rest of this loop.
-        """
-        for key, h in self._health.items():
-            edge = liveness_edge(key, h, self._live[key], key in self._first_seen, now)
-            self._live[key] = not h.faulted(now)
-            if edge is None:
-                continue
-            level, sentence = edge
-            if self._live[key]:
-                self._first_seen.add(key)
-            getattr(log, level)("%s", sentence)
-
-    def _device_failed(self, key: str, msg: str, *args) -> None:
-        """One attempt on this chip raised.
-
-        The LOG line goes out on the first raise — a bus that NAKs once an hour
-        is worth knowing about, and the rate limiter keeps it from becoming
-        noise. The FAULT is a separate question, answered by DeviceHealth: a
-        single transient must not blank a working gauge, because a cannot-tell
-        that flickers is a cannot-tell the operator learns to ignore.
-        """
-        self._health[key].failed()
-        self._log_fault(key, msg, *args)
-
-    # ---- BNO085 -----------------------------------------------------------
-    def _open_imu(self) -> None:
-        """BNO085 on 0x4A: fused yaw, gyro, linear acceleration, mag cal status.
-
-        This one needs a driver rather than smbus2 register pokes: the BNO085
-        speaks SHTP, a framed protocol with multi-hundred-byte sensor reports,
-        not a register map. Reimplementing that here would be writing a driver,
-        not wiring one up. See requirements.txt — the packages are Pi-only.
-        """
-        try:
-            import board
-            import busio
-            from adafruit_bno08x import (
-                BNO_REPORT_GYROSCOPE,
-                BNO_REPORT_LINEAR_ACCELERATION,
-                BNO_REPORT_ROTATION_VECTOR,
-            )
-            from adafruit_bno08x.i2c import BNO08X_I2C
-
-            # Two libraries, one bus: Blinka opens /dev/i2c-1 for the IMU and
-            # smbus2 opens it for the other two chips. That is safe ONLY because
-            # every transaction on both handles is issued from the single sensor
-            # thread — the kernel serialises individual messages, but a
-            # repeated-start sequence interleaved from two threads would not
-            # survive, and the symptom would be plausible wrong numbers.
-            i2c = busio.I2C(board.SCL, board.SDA)
-            imu = BNO08X_I2C(i2c, address=self.ADDR_BNO085)
-            imu.enable_feature(BNO_REPORT_ROTATION_VECTOR)  # mag-fused quaternion
-            imu.enable_feature(BNO_REPORT_GYROSCOPE)  # immune to thruster fields
-            imu.enable_feature(BNO_REPORT_LINEAR_ACCELERATION)  # gravity already removed
-            self._imu = imu
-            log.info("BNO085 online at 0x%02X", self.ADDR_BNO085)
-        except Exception as exc:  # noqa: BLE001
-            # No _fault() call: the chip has simply never answered, which
-            # DeviceHealth already treats as faulted, so sensor_faults() names it
-            # and heading / gyro / accel / mag_cal / attitude all read
-            # cannot-tell. This only has to say so out loud.
-            self._device_failed(
-                "bno085",
-                "BNO085 not responding (%s) — heading, gyro and "
-                "attitude all read cannot-tell, and mag_cal ships "
-                "as null (no compass), not as 0 (compass fitted "
-                "and uncalibrated)",
-                exc,
-            )
-
-    def _imu_tick(self, now: float) -> None:
-        if self._imu is None:
-            return
-        try:
-            qi, qj, qk, qr = self._imu.quaternion
-            _gx, _gy, gz = self._imu.gyro
-            ax, _ay, _az = self._imu.linear_acceleration
-            cal = int(self._imu.calibration_status)
-        except Exception as exc:  # noqa: BLE001
-            # "Holding the last heading" is what this used to do and what it must
-            # never do again: the cache below keeps its values, but _health now
-            # decides whether anyone is allowed to read them, and after five
-            # consecutive raises (0.1 s at 50 Hz) nobody is.
-            self._device_failed(
-                "bno085", "BNO085 read failed (%s) — the last heading is " "held in the cache but no longer served", exc
-            )
-            return
-        self._device_ok("bno085", now)
-
-        # ENU yaw counts COUNTER-CLOCKWISE from EAST; a compass counts CLOCKWISE
-        # from NORTH. Two different zeros AND two different directions, so the
-        # conversion is an offset *and* a flip: heading = (90 - yaw_enu) mod 360.
-        # Getting only the offset right (yaw + 90) yields a heading that is
-        # correct at north and mirrored everywhere else — the sub turns right, the
-        # map turns left, and the track folds back on itself.
-        yaw_enu = math.degrees(math.atan2(2.0 * (qr * qk + qi * qj), 1.0 - 2.0 * (qj * qj + qk * qk)))
-        heading = (90.0 - yaw_enu) % 360.0
-        # The mounting offset is applied AFTER the frame flip because it describes
-        # how the board is rotated inside the hull, measured in compass degrees.
-        self._c_heading = (heading + nav_settings.imu_yaw_offset_deg) % 360.0
-
-        # Same handedness argument for the rate: the gyro's +Z is up and its
-        # positive sense is counter-clockwise, the compass convention is
-        # clockwise, so the sign flips. A gyro that disagrees in sign with the
-        # heading it is meant to explain makes the complementary filter fight
-        # itself — it looks like drift, and no amount of tuning fixes it.
-        self._c_gyro_z = -math.degrees(gz)
-        # Board +X points ahead. If the BNO ends up bolted in at 90°, this axis
-        # must be re-picked here — NAV_IMU_YAW_OFFSET_DEG corrects the HEADING
-        # only and cannot rotate an acceleration.
-        self._c_accel_fwd = float(ax)
-        # 0..3, the accuracy the BNO085 attaches to its own reports. It only
-        # reaches 3 after the figure-of-eight dance (docs/hardware.md). If the
-        # driver ever stops updating it, this stays 0 and everything downstream
-        # treats the heading as suspect — the safe direction.
-        self._c_mag_cal = max(0, min(3, cal))
-
-        # ZYX Euler from the same quaternion. Sign discipline: with the board's
-        # +X forward, +Y to port and +Z up, the Euler pitch about +Y is positive
-        # NOSE DOWN, so it is negated to match the protocol's "+ = nose up".
-        # Attitude is advisory (nothing safety-critical branches on it) — verify
-        # by tipping the sub on the bench before believing the number.
-        sin_p = max(-1.0, min(1.0, 2.0 * (qr * qj - qk * qi)))
-        pitch = -math.degrees(math.asin(sin_p))
-        roll = math.degrees(math.atan2(2.0 * (qr * qi + qj * qk), 1.0 - 2.0 * (qi * qi + qj * qj)))
-        self._c_pitch_roll = (pitch, roll)
-
-    # ---- MS5837-30BA ------------------------------------------------------
-    def _open_i2c(self) -> None:
-        try:
-            import smbus2
-
-            self._bus = smbus2.SMBus(self.I2C_BUS)
-        except Exception as exc:  # noqa: BLE001
-            self._fault(
-                "i2c",
-                "I2C bus %d would not open (%s) — depth and pack " "voltage are both unavailable",
-                self.I2C_BUS,
-                exc,
-            )
-
-    def _open_depth(self) -> None:
-        if self._bus is None:
-            return
-        try:
-            self._bus.write_byte(self.ADDR_MS5837, self._MS_RESET)
-            time.sleep(0.02)  # the reset reloads the PROM
-            prom = []
-            for i in range(7):
-                msb, lsb = self._bus.read_i2c_block_data(self.ADDR_MS5837, self._MS_PROM + 2 * i, 2)
-                prom.append((msb << 8) | lsb)
-            # The PROM CRC catches the failure a bus check does not: a mis-wired
-            # or noisy I2C answers 0xFFFF to everything, and 0xFFFF coefficients
-            # produce a smooth, plausible, completely wrong depth. It is not
-            # sufficient on its own though — the nibble is read over the same bus
-            # as the words it vouches for, and one whole class of dead bus forges
-            # a match. _ms5837_prom_valid() is the CRC plus that gap closed.
-            if not _ms5837_prom_valid(prom):
-                raise OSError(
-                    "PROM [%s] is not a factory calibration — the "
-                    "coefficients are not trustworthy" % " ".join("%04X" % w for w in prom)
-                )
-            self._ms_prom = prom
-            log.info("MS5837 online at 0x%02X (PROM accepted)", self.ADDR_MS5837)
-        except Exception as exc:  # noqa: BLE001
-            # _ms_prom stays None, so _pressure_tick() returns early forever and
-            # the chip never records a successful read: DeviceHealth holds it
-            # faulted, sensor_faults() keeps reporting "ms5837", and
-            # read_pressure() answers None. A rejected PROM lands on exactly the
-            # same path as a sensor that stopped mid-dive, which is right — the
-            # coefficients are not trustworthy, so there is no depth here either.
-            self._device_failed(
-                "ms5837",
-                "MS5837 depth sensor unusable (%s) — depth and "
-                "pressure ship as null (cannot tell), never as a "
-                "surface reading; see sensor_faults()",
-                exc,
-            )
-
-    def _pressure_tick(self, now: float) -> None:
-        """Advance the depth conversion state machine.
-
-        At OSR 8192 each of the two conversions takes 17.2 ms, and sleeping
-        through 40 ms of that in this thread would stall the IMU to under 25 Hz.
-        So the conversion is a state machine: kick one off, come back a tick
-        later (20 ms > 17.2 ms) and collect it. The full cycle lands at ~10 Hz,
-        which is faster than the sub can change depth.
-        """
-        if self._bus is None or self._ms_prom is None or now < self._ms_next:
-            return
-        try:
-            if self._ms_stage == 0:
-                self._bus.write_byte(self.ADDR_MS5837, self._MS_CONVERT_D1)
-                self._ms_stage, self._ms_next = 1, now + 0.020
-            elif self._ms_stage == 1:
-                self._ms_d1 = self._read_adc24()
-                self._bus.write_byte(self.ADDR_MS5837, self._MS_CONVERT_D2)
-                self._ms_stage, self._ms_next = 2, now + 0.020
-            else:
-                self._ms_d2 = self._read_adc24()
-                mbar = _ms5837_mbar(self._ms_prom, self._ms_d1, self._ms_d2)
-                # Stay on the PSI path: surface zeroing and psi_per_meter are
-                # already configured in those units and the whole depth pipeline
-                # (telemetry, nav, the dive log) is calibrated against them.
-                self._c_pressure_psi = mbar * 0.0145037738
-                self._ms_stage, self._ms_next = 0, now + 0.060
-                # Only the COLLECT stage counts as the device answering. Stages 0
-                # and 1 merely kick off conversions; a chip that accepts a
-                # convert command and then never returns an ADC word is precisely
-                # the silent freeze the window exists to catch, and marking it
-                # healthy for starting a conversion would defeat that.
-                self._device_ok("ms5837", now)
-        except Exception as exc:  # noqa: BLE001
-            self._device_failed(
-                "ms5837",
-                "MS5837 read failed (%s) — depth goes to " "cannot-tell rather than holding its last " "metres",
-                exc,
-            )
-            self._ms_stage, self._ms_next = 0, now + 1.0
-
-    def _read_adc24(self) -> int:
-        b = self._bus.read_i2c_block_data(self.ADDR_MS5837, self._MS_ADC_READ, 3)
-        return (b[0] << 16) | (b[1] << 8) | b[2]
-
-    # ---- INA219 -----------------------------------------------------------
-    def _open_power(self) -> None:
-        if self._bus is None:
-            return
-        try:
-            # 32 V bus range, 320 mV shunt gain, 12-bit continuous on both
-            # channels. Only the bus and shunt voltage registers are used, so the
-            # calibration register is deliberately left alone (see _power_tick).
-            self._bus.write_i2c_block_data(self.ADDR_INA219, 0x00, [0x39, 0x9F])
-            log.info("INA219 online at 0x%02X", self.ADDR_INA219)
-        except Exception as exc:  # noqa: BLE001
-            self._device_failed(
-                "ina219",
-                "INA219 not responding (%s) — pack voltage and "
-                "current both ship as null; the console shows no "
-                "pack reading rather than a number nobody took",
-                exc,
-            )
-
-    def _power_tick(self, now: float) -> None:
-        if self._bus is None:
-            return
-        try:
-            raw_bus = self._read_reg16(self.ADDR_INA219, 0x02)
-            raw_shunt = self._read_reg16(self.ADDR_INA219, 0x01)
-        except Exception as exc:  # noqa: BLE001
-            self._device_failed(
-                "ina219",
-                "INA219 read failed (%s) — pack voltage goes to "
-                "cannot-tell rather than holding the last volts "
-                "it managed to measure",
-                exc,
-            )
-            return
-        self._device_ok("ina219", now)
-        # Bus voltage register: 13 bits, 4 mV/LSB, left-aligned above the flags.
-        # With the shunt high-side (between the fuse and everything else) this is
-        # the pack voltage less the few millivolts across the shunt.
-        self._c_voltage = (raw_bus >> 3) * 0.004
-        # Current from the SHUNT VOLTAGE (10 µV/LSB, signed) over the shunt
-        # resistance, not from the chip's current register. That register needs a
-        # calibration word written to it, and if the word is ever lost — a
-        # brown-out, a reset nobody noticed — the chip returns 0 A forever, which
-        # reads as "nothing is drawing power" on a vehicle that is very much
-        # drawing power. This path has no state to lose.
-        shunt_v = _twos16(raw_shunt) * 1e-5
-        self._c_current = round(shunt_v / self.INA219_SHUNT_OHMS, 3)
-
-    def _read_reg16(self, addr: int, reg: int) -> int:
-        msb, lsb = self._bus.read_i2c_block_data(addr, reg, 2)
-        return (msb << 8) | lsb
-
-    # ---- leak + link ------------------------------------------------------
-    def _leak_tick(self, now: float) -> None:
-        # NO PROBES, NO REASSURANCE — and specifically, no _device_ok below. That
-        # omission is the whole mechanism: "leak-probes" stays faulted, read_leak()
-        # returns UNKNOWN rather than NORMAL, and the console shows a hull nobody
-        # is watching instead of a hull certified dry. Returning early WITH a
-        # _device_ok would be this file's oldest bug rebuilt on purpose — a
-        # sampler that certifies itself for work it did not do.
-        if not self._have.get("leak"):
-            return
-        # Called from its OWN try-block at the top of the sensor tick, ahead of
-        # every bus operation — these are two GPIO pins and the chips are on I2C,
-        # unrelated hardware that has to be able to fail independently. Sampling
-        # them last, inside the bus's try, is what let one I2C raise stop leak
-        # detection dead while read_leak() kept answering NORMAL.
-        #
-        # Sampled at 10 Hz so that the configured debounce count is the ~0.5 s the
-        # config comment claims. WARN and FLOOD debounce INDEPENDENTLY: they are
-        # two probes at two heights answering two different questions, and
-        # chaining them would make a flood conditional on the warn probe still
-        # working — which is exactly the probe most likely to be underwater and
-        # corroded.
-        warn_wet = self._is_wet(self._leak_warn_in)
-        flood_wet = self._is_wet(self._leak_flood_in)
-        # Read BEFORE the sample, because sample() is what changes them: a dry
-        # sample zeroes wet_run, so asking afterwards how many wet samples the run
-        # had reached always answers zero — the number the line exists to carry.
-        warn_before = (self._warn_debounce.latched, self._warn_debounce.wet_run)
-        flood_before = (self._flood_debounce.latched, self._flood_debounce.wet_run)
-        self._warn_debounce.sample(warn_wet)
-        self._flood_debounce.sample(flood_wet)
-        # THE PIN ITSELF, WHICH IS THE ONE THING THE FIRST BRING-UP COULD NOT SEE.
-        # The console was correct at every layer and the probe still did nothing,
-        # and the only way anyone found out was `pinctrl get 17` over ssh — a tool
-        # that is not on the boat, not in the LOGS overlay, and not available to
-        # somebody standing on a towpath. The debounce is deliberate and half a
-        # second long, so between the water arriving and the alarm there is a window
-        # in which the vehicle knows something the operator does not. These lines
-        # are that window, written down.
-        self._note_probe_edge("warn", warn_wet, self._warn_debounce, warn_before, now)
-        self._note_probe_edge("flood", flood_wet, self._flood_debounce, flood_before, now)
-        # HERE, not at the call site, and for the same reason _pressure_tick marks
-        # itself only on the COLLECT stage: the liveness has to be attached to the
-        # work, not to the call. Marked from the loop, a _leak_tick that returned
-        # without reading anything — the third shape DeviceHealth names, a driver
-        # that returns without writing — would keep certifying itself healthy and
-        # read_leak() would go on saying NORMAL. Both probes are sampled above
-        # before this line is reached, so reaching it IS the evidence.
-        self._device_ok("leak-probes", now)
-
-    # Minimum gap between two RAW probe lines for the same probe. A corroded probe
-    # can chatter at the sample rate, and twenty lines a second would bury the
-    # latch line that matters. Flips inside the gap are COUNTED and reported on the
-    # next line that gets through — dmesg's "repeated N times", for the same reason
-    # the client's LOG bus coalesces its high-rate categories. The latch itself is
-    # never gated: it is one-way and fires once.
-    PROBE_EDGE_GAP_S = 1.0
-
-    def _note_probe_edge(self, name: str, wet: bool, deb: LeakDebouncer, before: tuple[bool, int], now: float) -> None:
-        """One probe's raw pin, and its debounce, as EVENTS rather than as a level.
-
-        Three things happen to a leak probe and all three were silent:
-
-          * IT GOES WET. Not an alarm yet — that is what the debounce is for — but
-            it is the first evidence of water and it is exactly what somebody
-            testing a freshly soldered probe with a wet comb is waiting to see.
-            Logged with the count so far, so a probe that reads wet for two samples
-            and dries is visibly different from one that latches.
-          * IT LATCHES. `leak_debounce_samples` sustained wet samples. This is the
-            transition the alarm is built on, and rov.py/main.py announce the STAGE
-            that results; this says which PROBE produced it and after how long.
-          * IT GOES DRY AGAIN BEFORE LATCHING. The one an operator most needs and
-            the one nothing anywhere recorded: a probe that flickers wet and dry is
-            a wiring fault, not weather, and under the old silence it left no trace
-            at all — the console simply never alarmed and nobody could say why.
-        """
-        was_latched, run_before = before
-        prev = self._probe_wet.get(name)
-        self._probe_wet[name] = wet
-        if deb.latched and not was_latched:
-            log.warning(
-                "leak probe %s LATCHED — %d consecutive wet samples at %.0f Hz. This is water, not a splash",
-                name.upper(),
-                deb.samples,
-                self.SENSOR_HZ / self.LEAK_SAMPLE_DIVIDER,
-            )
-            return
-        if prev is None or wet == prev:
-            return
-        # Rate-limited, and it says how many it swallowed rather than swallowing
-        # them quietly: a count of suppressed flips IS the diagnosis for a probe
-        # that is chattering.
-        self._probe_edge_n[name] = self._probe_edge_n.get(name, 0) + 1
-        if now - self._probe_edge_at.get(name, -1e9) < self.PROBE_EDGE_GAP_S:
-            return
-        flips = self._probe_edge_n.pop(name, 1)
-        self._probe_edge_at[name] = now
-        extra = f" (+{flips - 1} more change(s) since the last line)" if flips > 1 else ""
-        if wet:
-            log.info(
-                "leak probe %s reads WET — %d of %d samples toward a latch%s",
-                name.upper(),
-                deb.wet_run,
-                deb.samples,
-                extra,
-            )
-        elif deb.latched:
-            # The latch is one-way on purpose (see LeakDebouncer): water that has
-            # reached a probe has reached it. Say the pin went dry anyway, or the
-            # log implies the alarm is still being fed by live water.
-            log.info(
-                "leak probe %s reads dry again, but its latch STANDS — only a re-arm clears it%s",
-                name.upper(),
-                extra,
-            )
-        else:
-            log.info(
-                "leak probe %s went dry again after %d wet sample(s) — no latch%s",
-                name.upper(),
-                run_before,
-                extra,
-            )
-
-    def _link_tick(self) -> None:
-        # An Ethernet tether has no signal strength — it is a wire. Rather than
-        # invent bars, this reports full while the carrier is up and -1 (tether
-        # down) when it is not; the client already draws -1 distinctly.
-        try:
-            with open(self._carrier_path, "r") as fh:
-                self._c_link = 4 if fh.read().strip() == "1" else -1
-        except Exception:  # noqa: BLE001 — no such interface = no tether
-            self._c_link = -1
-
-    # ---- lifecycle --------------------------------------------------------
-    def close(self) -> None:
-        self._stop.set()
-        for t in (getattr(self, "_sensor_thread", None), getattr(self, "_stepper_thread", None)):
-            if t is not None:
-                t.join(timeout=1.0)
-        try:
-            self.set_armed(False)
-            for dev in self._light_dev.values():
-                dev.value = 0.0
-            # Only now is it safe to release the stepper: nothing is going to ask
-            # it to move again, and a de-energised driver on a shut-down vehicle
-            # is one less thing drawing from the pack.
-            #
-            # Absent on a part-built vehicle, and absent is not a failure to quiet
-            # it. Without this test the warning below fires on every clean shutdown
-            # saying the outputs may still be live, which is both false and exactly
-            # the kind of routine alarm that gets read past on the day it is real.
-            if self._en_pin is not None:
-                self._en_pin.off()
-        except Exception as exc:  # noqa: BLE001
-            log.warning("shutdown: could not fully quiet the outputs (%s)", exc)
-        for dev in (
-            getattr(self, "_paddle_in", None),
-            getattr(self, "_spool_a", None),
-            getattr(self, "_spool_b", None),
-            getattr(self, "_limit_empty", None),
-            getattr(self, "_limit_full", None),
-            getattr(self, "_leak_warn_in", None),
-            getattr(self, "_leak_flood_in", None),
-        ):
-            try:
-                if dev is not None:
-                    dev.close()
-            except Exception:  # noqa: BLE001
-                pass
-        if self._bus is not None:
-            try:
-                self._bus.close()
-            except Exception:  # noqa: BLE001
-                pass
-
-
-# ---------------------------------------------------------------------------
-# MS5837 maths — module level so the compensation can be tested against the
-# datasheet's worked example without a sensor, which is the only way anyone is
-# ever going to notice a transcription error in it.
-# ---------------------------------------------------------------------------
-def _ms5837_crc4(prom: list[int]) -> int:
-    """The 4-bit CRC the MS5837 stores in the top nibble of PROM word 0."""
-    words = list(prom) + [0] * (8 - len(prom))
-    words[0] &= 0x0FFF  # the CRC nibble itself is not covered
-    rem = 0
-    for i in range(16):
-        rem ^= (words[i >> 1] & 0x00FF) if i % 2 else (words[i >> 1] >> 8)
-        for _ in range(8):
-            rem = ((rem << 1) ^ 0x3000) if rem & 0x8000 else (rem << 1)
-            rem &= 0xFFFF
-    return (rem >> 12) & 0x0F
-
-
-def _ms5837_prom_valid(prom: list[int]) -> bool:
-    """Is this a factory calibration, or a bus that is not really answering?
-
-    The CRC nibble cannot settle that by itself, because the nibble is read over
-    the very bus it is being used to vouch for. An I2C line held low — a shorted
-    SDA, a connector with no pull-ups, a part with no power — reads 0x0000 for
-    every register, and an all-zeros PROM CRCs to 0x0, which MATCHES the 0x0
-    nibble sitting in word 0. The sensor then came up "online", recorded no
-    fault, and zero coefficients compensated to 0 mbar, which rov.py clamps to a
-    depth of exactly 0.00 m. A sub reporting "at the surface" all the way to the
-    bottom of a canal, on a vehicle flagged mock:false, is the single most
-    dangerous wrong reading this system can produce — so the shapes a dead bus
-    makes are rejected BEFORE the CRC gets a vote, whatever the nibble says.
-    """
-    if len(prom) != 7:
-        return False
-    # Every word identical is one value on a wire, not seven coefficients from a
-    # part. Covers 0x0000 (held low), 0xFFFF (nothing driving it) and any other
-    # single byte a stuck bus happens to repeat — none of which is a sensor.
-    if all(w == prom[0] for w in prom):
-        return False
-    # C1..C6 are mid-scale factory constants (the datasheet's worked example has
-    # every one in the tens of thousands) and _ms5837_mbar multiplies all six
-    # into the pressure. A rail value in any of them is a partially stuck bus,
-    # not a part that shipped that way.
-    if any(w in (0x0000, 0xFFFF) for w in prom[1:7]):
-        return False
-    return _ms5837_crc4(prom) == (prom[0] >> 12)
-
-
-def _ms5837_mbar(prom: list[int], d1: int, d2: int) -> float:
-    """Datasheet compensation for the MS5837-30BA, including 2nd order terms.
-
-    The second-order block is not optional decoration: without it the reading
-    drifts by tens of millibars across the temperature range a canal gives you
-    between a sunlit surface and the bottom, which is centimetres of phantom
-    depth change appearing exactly when the sub descends.
-    """
-    c1, c2, c3, c4, c5, c6 = prom[1], prom[2], prom[3], prom[4], prom[5], prom[6]
-    dt = d2 - c5 * 256
-    temp = 2000 + dt * c6 / 8388608
-    off = c2 * 65536 + (c4 * dt) / 128
-    sens = c1 * 32768 + (c3 * dt) / 256
-    if temp < 2000:  # cold water
-        ti = 3 * dt * dt / 8589934592
-        offi = 3 * (temp - 2000) ** 2 / 2
-        sensi = 5 * (temp - 2000) ** 2 / 8
-        if temp < -1500:
-            offi += 7 * (temp + 1500) ** 2
-            sensi += 4 * (temp + 1500) ** 2
-    else:
-        ti = 2 * dt * dt / 137438953472
-        offi = (temp - 2000) ** 2 / 16
-        sensi = 0.0
-    off -= offi
-    sens -= sensi
-    _ = (temp - ti) / 100.0  # water temperature, °C — not plumbed anywhere yet
-    return ((d1 * sens / 2097152 - off) / 8192) / 10.0
-
-
-def _twos16(v: int) -> int:
-    return v - 65536 if v & 0x8000 else v
 
 
 def get_hardware() -> HardwareBase:

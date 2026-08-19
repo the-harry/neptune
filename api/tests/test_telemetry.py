@@ -108,7 +108,7 @@ MINIMUM_FRAME = dict(
     light_white_level=0.0,
     leak=False,
     leak_state="NORMAL",
-    battery_v=8.3,
+    battery_v=12.4,
     signal=4,
     mock=True,
 )
@@ -343,7 +343,7 @@ class NewFieldTest(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# The pack is 2S and the 24 V scale is dead
+# The pack is 3S and both dead scales stay dead (24 V once, 2S now — R7.4.1)
 # ---------------------------------------------------------------------------
 def load_battery_band():
     """Compile just `battery_band` out of api/main.py.
@@ -363,7 +363,7 @@ def load_battery_band():
             exec(compile(ast.Module(body=[node], type_ignores=[]), str(_API_DIR / "main.py"), "exec"), ns)  # noqa: S102
             return ns["battery_band"]
     raise AssertionError(
-        "api/main.py no longer defines battery_band() — the 2S banding rule has "
+        "api/main.py no longer defines battery_band() — the banding rule has "
         "moved and this test must follow it rather than quietly stop checking."
     )
 
@@ -372,33 +372,36 @@ class BatteryBandTest(unittest.TestCase):
     def setUp(self):
         self.band = load_battery_band()
 
-    def test_the_thresholds_are_the_2s_packs(self):
-        self.assertEqual(settings.battery_full_v, 8.4)
-        self.assertEqual(settings.battery_warn_v, 7.0)
-        self.assertEqual(settings.battery_crit_v, 6.6)
-        self.assertEqual(settings.battery_floor_v, 6.0)
+    def test_the_thresholds_are_the_3s_packs(self):
+        # The pack actually fitted (2026-08-18): 3S3P INR18650. Same per-cell
+        # judgements the 2S bands carried — 4.2 / 3.5 / 3.3 / 3.0 V/cell —
+        # three cells now (docs/hardware.md §7).
+        self.assertEqual(settings.battery_full_v, 12.6)
+        self.assertEqual(settings.battery_warn_v, 10.5)
+        self.assertEqual(settings.battery_crit_v, 9.9)
+        self.assertEqual(settings.battery_floor_v, 9.0)
 
     def test_a_full_pack_is_green(self):
-        self.assertEqual(self.band(8.4), "ok")
-        self.assertEqual(self.band(7.4), "ok")
+        self.assertEqual(self.band(12.6), "ok")
+        self.assertEqual(self.band(11.1), "ok")
 
-    def test_exactly_seven_volts_is_still_green(self):
-        # "green >= 7.0" — the boundary belongs to the good band. A `<=` here
+    def test_exactly_the_warn_threshold_is_still_green(self):
+        # "green >= 10.5" — the boundary belongs to the good band. A `<=` here
         # turns a healthy pack amber and teaches the operator to ignore amber.
-        self.assertEqual(self.band(7.0), "ok")
+        self.assertEqual(self.band(10.5), "ok")
 
-    def test_just_under_seven_volts_is_amber(self):
-        self.assertEqual(self.band(6.99), "warn")
+    def test_just_under_the_warn_threshold_is_amber(self):
+        self.assertEqual(self.band(10.49), "warn")
 
     def test_exactly_the_critical_threshold_is_still_amber(self):
-        # "red < 6.6": 6.6 itself has not crossed.
-        self.assertEqual(self.band(6.6), "warn")
+        # "red < 9.9": 9.9 itself has not crossed.
+        self.assertEqual(self.band(9.9), "warn")
 
-    def test_under_six_point_six_is_red(self):
-        self.assertEqual(self.band(6.59), "critical")
+    def test_under_the_critical_threshold_is_red(self):
+        self.assertEqual(self.band(9.89), "critical")
 
     def test_the_hard_floor_is_deep_inside_the_red_band(self):
-        # 6.0 V is 3.0 V/cell — below it the cells are damaged, not merely flat.
+        # 9.0 V is 3.0 V/cell — below it the cells are damaged, not merely flat.
         # Nothing enforces it in software, so it had better be shouting long
         # before the operator arrives there.
         self.assertEqual(self.band(settings.battery_floor_v), "critical")
@@ -408,32 +411,48 @@ class BatteryBandTest(unittest.TestCase):
         self.assertEqual(
             self.band(24.8),
             "ok",
-            "24.8 V bands as a healthy 2S pack — which is exactly " "why leaving that number anywhere is dangerous",
+            "24.8 V bands as a healthy 3S pack — which is exactly " "why leaving that number anywhere is dangerous",
         )
 
-    def test_the_bench_vehicle_reports_a_2s_voltage(self):
+    def test_a_2s_reading_cannot_look_healthy_on_the_3s_bands(self):
+        # The other direction of the same trap: a full 2S pack (8.4 V) on the
+        # 3S scale is below the hard floor. If a stale 2S fixture or mock ever
+        # leaks back in, it must scream, not read as a slightly tired pack.
+        self.assertEqual(self.band(8.4), "critical")
+
+    def test_the_bench_vehicle_reports_a_3s_voltage(self):
         v = frame(MockHardware()).battery_v
         self.assertLessEqual(v, settings.battery_full_v)
         self.assertGreater(v, settings.battery_floor_v)
 
 
-class NoTwentyFourVoltScaleTest(unittest.TestCase):
-    """The brief: purge the 24 V scale everywhere — mock, config, tests, client."""
+class NoDeadVoltageScaleTest(unittest.TestCase):
+    """The brief, executed twice now: purge every dead pack scale — mock,
+    config, tests, client. The 24 V scale died when the 2S pack arrived; the 2S
+    scale died on 2026-08-18 when the 3S pack was bought (R7.4.1). A threshold
+    describing a different vehicle does not fail loudly — it reads "full"
+    forever (24 V) or "flat" forever (2S) — so both corridors are policed."""
 
     # Identifiers that name a PACK VOLTAGE, followed by a literal. Prose and
-    # comments about the old scale are deliberately not matched: the repo is full
-    # of writing that explains why 24.8 is gone, and that writing is the point.
+    # comments about the old scales are deliberately not matched: the repo is
+    # full of writing that explains why they are gone, and that writing is the
+    # point.
     _BATTERY_LITERAL = re.compile(
         r"\b(battery_v|batteryV|battery_volts|batt_v|_voltage|fullV|warnV|critV|floorV)"
         r"\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)\b"
     )
     _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".pytest_cache"}
     _EXTENSIONS = {".py", ".js", ".html", ".json", ".css", ".md"}
-    # A 2S pack is 8.4 V full. Nothing above this can be describing it, and every
-    # number from the old scale (24.8 start, 24.5 fixture, 20.0 floor) clears it.
-    _NOT_A_2S_PACK_V = 12.0
+    # A 3S pack lives between 9.0 (floor) and 12.6 (full). Above this is the
+    # 24 V scale's territory (24.8 start, 24.5 fixture, 20.0 floor all clear it).
+    _ABOVE_3S_V = 13.0
+    # ...and the 2S corridor sits wholly below the 3S floor: 8.4 full, 8.3/8.1
+    # fixtures, 7.0 warn, 6.6 crit, 6.0 floor. The lower bound keeps per-cell
+    # figures (3.x V) out of a pack-voltage police report.
+    _DEAD_2S_HI = 9.0
+    _DEAD_2S_LO = 4.0
 
-    def test_no_battery_voltage_literal_is_still_on_the_24v_scale(self):
+    def test_no_battery_voltage_literal_is_on_a_dead_scale(self):
         offenders = []
         for path in sorted(_REPO_ROOT.rglob("*")):
             if not path.is_file() or path.suffix.lower() not in self._EXTENSIONS:
@@ -444,14 +463,17 @@ class NoTwentyFourVoltScaleTest(unittest.TestCase):
             for lineno, line in enumerate(text.splitlines(), 1):
                 for match in self._BATTERY_LITERAL.finditer(line):
                     volts = float(match.group(2))
-                    if volts > self._NOT_A_2S_PACK_V:
+                    dead_24 = volts > self._ABOVE_3S_V
+                    dead_2s = self._DEAD_2S_LO < volts < self._DEAD_2S_HI
+                    if dead_24 or dead_2s:
                         rel = path.relative_to(_REPO_ROOT).as_posix()
-                        offenders.append(f"{rel}:{lineno}  {match.group(1)}={volts}  |  {line.strip()}")
+                        scale = "24V" if dead_24 else "2S"
+                        offenders.append(f"{rel}:{lineno}  {match.group(1)}={volts} [{scale}]  |  {line.strip()}")
         self.assertEqual(
             offenders,
             [],
             "\n".join(
-                ["battery voltages left on the dead 24 V scale " f"(a 2S pack is {settings.battery_full_v} V full):"]
+                ["battery voltage literals on a dead scale " f"(the 3S pack is {settings.battery_full_v} V full):"]
                 + offenders
             ),
         )

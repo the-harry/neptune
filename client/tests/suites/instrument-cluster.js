@@ -68,7 +68,7 @@
   // the moment two of the numbers match.
   const BASE = {type:'telemetry', mock:false, armed:false, seq:1,
     heading:284, heading_card:'NW', mag_cal:3,
-    depth:4.2, pressure:20.7, battery_v:8.1, current_a:3.1,
+    depth:4.2, pressure:20.7, battery_v:12.1, current_a:3.1,
     gyro_z_dps:12.0, accel_fwd_ms2:0.35, pitch_deg:-6.5, roll_deg:9.0,
     ballast_level:0.4, ballast_homed:true, ballast_needs_rehome:false, ballast_target:0.4,
     left:0, right:0, magnet:false, light_green:false, light_white:false,
@@ -229,7 +229,7 @@
       // the same picture.
       zero:{heading:0}, zeroHas:/0/});
     await cover({name:'Pack voltage', ids:['battery-v'], re:/pack voltage/i,
-      live:{battery_v:8.1}, has:/8\.1/, dead:{battery_v:null}});
+      live:{battery_v:12.1}, has:/12\.1/, dead:{battery_v:null}});
 
     await cover({name:'Pack current', re:/\bcurrent\b|\bamps?\b|\bamperes?\b/i,
       ids:['current-a','current-val','current','pack-a','pack-current','battery-a',

@@ -170,7 +170,7 @@
   const BASE = {type:'telemetry', mock:false, armed:false, seq:1,
     heading:284, heading_card:'NW', mag_cal:3,
     gyro_z_dps:12.0, accel_fwd_ms2:0.35, pitch_deg:-6.5, roll_deg:9.0,
-    depth:4.2, pressure:20.7, battery_v:8.1, current_a:1.2,
+    depth:4.2, pressure:20.7, battery_v:12.1, current_a:1.2,
     ballast_level:0.4, ballast_homed:true, ballast_needs_rehome:false, ballast_target:0.4,
     left:0, right:0, magnet:false, light_green:false, light_white:false,
     light_green_level:0, light_white_level:0,

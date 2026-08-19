@@ -89,10 +89,12 @@ adjustment-on-output, readiness checklist, offline area-extractor graceful failu
 - Install the **`pmtiles`** binary during bootstrap for area extraction (`NAV_PMTILES_SRC` =
   the world build URL). Not needed at dive time.
 - Wire `RealSensorSource` (BNO085 / MS5837 / spool encoder) — `TODO(hardware)` in `sensors.py`.
-  **SOFTWARE GAP (2026-08-18):** on the vehicle these readings arrive via the ESP32
-  brainstem's serial telemetry, not Pi I²C/GPIO (`docs/hardware.md` §8); speed is the
-  flow-sensor + PAS pulse pair, with direction from the PAS (§11). No spool encoder was
-  bought — payout stays the modelled bound.
+  **As of 2026-08-19** these readings arrive via the ESP32 brainstem's serial
+  telemetry (`docs/hardware.md` §8) and flow through the same hardware readbacks this
+  source already consumes — nothing here had to change. **SOFTWARE GAP** (§20 row 5):
+  the PAS ring's *direction* (`hw.read_speed_dir()`) is measured and not yet consumed,
+  so the speed's sign still comes from the throttle; per-sensor k-factors are still
+  owed. No spool encoder was bought — payout stays the modelled bound.
 
 ## Automatic navigation log (safety)
 

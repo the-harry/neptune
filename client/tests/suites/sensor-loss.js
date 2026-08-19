@@ -69,8 +69,8 @@
 
   // A HULL WITH NOTHING ELSE WRONG WITH IT. Every check below removes exactly one
   // reading, and a second alarm anywhere on the rail is noise that makes the finding
-  // harder to read. 8.1 V is a healthy 2S pack (8.4 full, amber under 7.0, red under
-  // 6.6); ballast_homed says the syringe has been on its empty stop, so 0.4 is a
+  // harder to read. 12.1 V is a healthy 3S pack (12.6 full, amber under 10.5, red
+  // under 9.9); ballast_homed says the syringe has been on its empty stop, so 0.4 is a
   // reading rather than an un-homed stepper's leftover count; mag_cal 3 is a compass
   // that is calibrated and in use, which is what makes the heading marks below mean
   // something when they appear. snagged and gyro_only are deliberately ABSENT from
@@ -85,7 +85,7 @@
   const BASE = {type:'telemetry', mock:false, armed:false, seq:1,
     heading:284, heading_card:'NW', mag_cal:3,
     gyro_z_dps:12.0, accel_fwd_ms2:0.35, pitch_deg:-6.5, roll_deg:9.0,
-    depth:4.2, pressure:20.7, battery_v:8.1, current_a:1.2,
+    depth:4.2, pressure:20.7, battery_v:12.1, current_a:1.2,
     ballast_level:0.4, ballast_homed:true, ballast_needs_rehome:false, ballast_target:0.4,
     left:0, right:0, magnet:false, light_green:false, light_white:false,
     light_green_level:0, light_white_level:0,
@@ -267,7 +267,7 @@
     await say({});
     const liveDepth=look('depth-val'), livePress=look('pressure-val'), liveBatt=look('battery-v');
     ok('a reporting hull shows the numbers (the control)',
-       liveDepth.text==='4.2 m' && livePress.text==='20.7 PSI' && liveBatt.text==='8.1V',
+       liveDepth.text==='4.2 m' && livePress.text==='20.7 PSI' && liveBatt.text==='12.1V',
        'depth="'+liveDepth.text+'" pressure="'+livePress.text+'" pack="'+liveBatt.text+'"');
 
     // The MS5837 and the INA219 stop. depth and pressure are one instrument so they go
@@ -370,7 +370,7 @@
     // pushed home is its own fault, and one nobody notices until a dive.
     await say({});
     ok('the readings return once the chips answer again',
-       txt('depth-val')==='4.2 m' && txt('battery-v')==='8.1V' &&
+       txt('depth-val')==='4.2 m' && txt('battery-v')==='12.1V' &&
        !/\bnosensor\b/.test(cls('depth-val')),
        'depth="'+txt('depth-val')+'" pack="'+txt('battery-v')+'" alerts="'+alertText()+'"');
 

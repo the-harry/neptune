@@ -1739,9 +1739,12 @@ class PackMonitorTest(PartCase, WireCase):
         self.assertIn("dead-battery", c.alert_ids())
         self.assertEqual("NO PACK VOLTAGE & CURRENT · PACK MONITOR STOPPED", c.alert_text("dead-battery"))
 
-    def test_the_pack_reads_as_a_2s_pack_when_it_is_back(self):
+    def test_the_pack_reads_as_a_3s_pack_when_it_is_back(self):
+        # The corridor is the 3S pack's own (9.0 floor .. 12.6 full, a whisker of
+        # headroom) — a revived monitor answering a 2S-era 8.x here would be a
+        # stale mock leaking through, and this is where it would first show.
         volts = self.mended[-1]["battery_v"]
-        self.assertTrue(6.0 <= volts <= 8.6, f"battery_v={volts} is not a 2S Li-ion pack")
+        self.assertTrue(9.0 <= volts <= 12.7, f"battery_v={volts} is not a 3S Li-ion pack")
 
 
 class LeakProbeTest(PartCase, WireCase):

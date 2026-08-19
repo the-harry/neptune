@@ -25,10 +25,11 @@ default route.
 ```
 neptune/
 ├── client/      topside dashboard (vanilla-JS PWA, zero deps)
-├── api/         FastAPI backend + rovlog analysis CLI
+├── api/         FastAPI backend + rovlog analysis CLI (+ brainstem.py, the ESP32 link)
+├── firmware/    the ESP32 brainstem — Arduino C++ (flash guide in firmware/README.md)
 ├── docs/        hardware, maths, playbook — and docs/handoff/, the bought vehicle's canon
 ├── .specs/      requirements, design rationale, changelog
-├── deploy/      nginx.conf, go2rtc.yaml, systemd units
+├── deploy/      nginx.conf, go2rtc.yaml, systemd units, udev rules
 └── install.sh   one-shot Pi installer / updater
 ```
 
@@ -87,11 +88,14 @@ brainstem over USB, burn-wire drop weight, TL88 sonar plan.
 maps, calibrations, bench checklist — with the campaign's drawings and design PDFs beside
 it in [`docs/handoff/`](docs/handoff/).
 
-**The code lags the vehicle:** `api/hardware.py` and `api/config.py` still implement the
-old bench vehicle (2S bands, syringe ballast, paddlewheel, Pi-GPIO sensing). The gap
-ledger is [`docs/hardware.md` §20](docs/hardware.md) — that list **is** the integration
-backlog, and integration is the next phase. Until it lands, `NEPTUNE_HW=auto` keeps
-falling back to the bench simulator, honestly.
+**The commander/brainstem split is written, both ends** (2026-08-19): the ESP32
+firmware ([`firmware/`](firmware/)), the Pi's serial client (`api/brainstem.py`), the
+3S battery bands, and `RealHardware` reduced to two DRV8871 pairs plus the link. **A
+bare ESP32 devkit on a breadboard, plugged into any machine running the API, lights
+the whole console** — honestly blank where nothing is fitted, per-instrument alive as
+connectors seat, fully animated in announced bench mode. The walk is
+[`firmware/README.md`](firmware/README.md) §2. What the code still owes the vehicle is
+the ledger at [`docs/hardware.md` §20](docs/hardware.md).
 
 ## Documentation
 

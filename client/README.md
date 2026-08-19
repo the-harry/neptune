@@ -244,16 +244,14 @@ so the pre-dive readiness check reports a probe whose state is physically imposs
 wet while the lower probe is dry cannot happen, since water reaching the upper probe passed
 the lower one.
 
-### The battery is 2S, and 24 V was somebody else's vehicle
+### The battery is 3S, and both dead scales stay dead
 
-> **The vehicle's pack is 3S — 12.6 V full, 9.0 V floor — as of 2026-08-18
-> (`docs/hardware.md` §7). SOFTWARE GAP: the console still enforces the 2S bands below;
-> they move at integration (`docs/hardware.md` §20), and this section's own rule is the
-> reason they must.**
-
-The pack is **8.4 V full, 7.4 V nominal**. A `24.8 V` reading and a `20.0 V` sag floor
-describe a different vehicle, and a threshold that describes a different vehicle does not
-fail loudly — it reads "full" forever.
+The pack is **12.6 V full, 11.1 V nominal, 9.0 V floor** — the 3S3P fitted on
+2026-08-18 (`docs/hardware.md` §7). A threshold that describes a different vehicle
+does not fail loudly: the old 24 V scale read "full" forever, and the 2S scale that
+replaced it would now read "flat" forever — same trap, opposite direction — which is
+why `api/tests/test_telemetry.py` polices every battery-named literal in the repo
+against both dead corridors.
 
 The four bands and their volts are [`.specs/design.md` §22](../.specs/design.md), which is
 where the thresholds live because they are vehicle configuration rather than a drawing

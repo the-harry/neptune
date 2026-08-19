@@ -17,7 +17,7 @@
     // ballast_homed says the syringe has been on its empty stop, which is what makes the
     // 0 mean "empty" rather than "an un-homed stepper's count happens to be zero".
     return {type:'telemetry', mock:mock, heading:heading, depth:0, pressure:14.7,
-            ballast_level:0, ballast_homed:true, ballast_target:0, battery_v:8.1,
+            ballast_level:0, ballast_homed:true, ballast_target:0, battery_v:12.1,
             left:0, right:0, armed:false,
             magnet:false, light_green:false, light_white:false, leak:false};
   }

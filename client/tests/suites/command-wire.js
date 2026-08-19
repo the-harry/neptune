@@ -117,7 +117,7 @@
   const TEL=extra=>Object.assign({
     type:'telemetry', mock:false, seq:1,
     heading:284, heading_card:'NW', mag_cal:3,
-    depth:1.2, pressure:16.4, battery_v:8.1, current_a:1.1,
+    depth:1.2, pressure:16.4, battery_v:12.1, current_a:1.1,
     ballast_level:0.4, ballast_homed:true, ballast_needs_rehome:false, ballast_target:0.4,
     left:0, right:0, armed:false, magnet:false,
     light_green:false, light_white:false, light_green_level:0, light_white_level:0,

@@ -39,22 +39,21 @@ from disk and point it at the host via `?host=…`.
 - **On a laptop** (no Pi hardware/camera): auto-selects `MockHardware` +
   synthetic camera, so telemetry animates and `/stream.mjpg` shows a test
   pattern. `mock: true` rides in telemetry.
-- **On the Pi**: install Picamera2 (`sudo apt install -y python3-picamera2`) and
-  fill in the `TODO(hardware)` methods in `hardware.py` (pins are mapped at the
-  top of `RealHardware`), then flip the `wired` flag in `RealHardware._gpio_available()`.
-  Until you do, `RealHardware.__init__` **raises on purpose** so `NEPTUNE_HW=auto`
-  falls back to the bench simulator. That is deliberate: a backend that reports
-  `mock: false` while every sensor returns a constant presents fabricated zeros
-  (`0.0 V`, `heading 0`, "at the surface") as genuine instrument readings, which is
+- **On the vehicle (or any machine with the ESP32 plugged in)**: `RealHardware` is
+  two halves — the DRV8871 thruster pairs on the Pi's own GPIO (23/24, 5/6), and
+  **everything else behind the ESP32 brainstem on USB serial** (`brainstem.py`;
+  firmware in `firmware/brainstem/`, flashing + breadboard walk in
+  `firmware/README.md`). Either half may be missing: it is named in
+  `sensor_faults`, arming is refused without the bridges, and a **laptop with only
+  the breadboard ESP32 lights the whole console** — which is the point of the
+  split. The port is found via `/dev/ttyESP` (deploy/udev), then USB-serial
+  patterns; pin it with `NEPTUNE_BRAINSTEM_PORT`. With *neither* half present,
+  `RealHardware.__init__` **raises on purpose** so `NEPTUNE_HW=auto` falls back
+  to the bench simulator: a backend that reports `mock: false` while every sensor
+  returns a constant presents fabricated zeros as instrument readings, which is
   strictly worse than an honest simulation. Set `NEPTUNE_HW=real` to require real
-  hardware and fail loudly instead.
-
-  > **SOFTWARE GAP (2026-08-18):** the vehicle (`docs/hardware.md`) puts all sensing on
-  > an ESP32 brainstem over USB serial; the Pi keeps only two DRV8871 pairs
-  > (GPIO 23/24, 5/6). `RealHardware`'s pin constants describe the retired bench
-  > vehicle — do **not** fill in the `TODO(hardware)` methods against Pi GPIO. The
-  > integration work is `RealHardware` as a serial client of the brainstem
-  > (`docs/hardware.md` §8; ledger §20).
+  hardware and fail loudly. On the Pi, also install Picamera2
+  (`sudo apt install -y python3-picamera2`).
 
   **Pi system health is always real**, regardless of the vehicle backend — see below.
 

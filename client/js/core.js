@@ -376,10 +376,11 @@ const state = {
   // From a hull any of them may arrive as null, and null means "the chip behind this
   // has stopped answering" - not zero, not the last one. See net.js.
   depth:1.28, pressure:14.7, heading:284,
-  // 2S Li-ion: 8.4 V charged, 7.4 V nominal, 6.0 V floor. The old 24.8 V start was
-  // a number from a pack this sub does not have, and it silently made every battery
+  // 3S Li-ion: 12.6 V charged, 11.1 V nominal, 9.0 V floor — the pack fitted on
+  // 2026-08-18. The 8.3 V start before it (and the 24.8 V before that) were numbers
+  // from packs this sub does not have, and each silently made every battery
   // threshold on the console wrong while looking entirely plausible.
-  batteryV:8.3,
+  batteryV:12.4,
   cpuC:null, ramPct:null, diskGb:null,   // Pi system metrics (from telemetry)
   // E-STOP LATCH. Set by eStop(), honoured in input.js where `ni` is built, cleared
   // when the controls return inside the deadzone. It exists because writing zero to
@@ -575,7 +576,7 @@ function leakStage(){
   return (LEAK_RANK[live] >= LEAK_RANK[latched]) ? live : latched;
 }
 
-/* THE PACK, IN BANDS (§5). 2S Li-ion, and the ONLY thing allowed to colour the
+/* THE PACK, IN BANDS (§5). 3S Li-ion, and the ONLY thing allowed to colour the
    voltage: one colour, one meaning. A missing voltage returns no colour at all
    rather than a healthy green - an absent sensor must never read as a good pack. */
 function batteryBand(v){
@@ -583,14 +584,14 @@ function batteryBand(v){
   if(v==null || !isFinite(v))
     return {key:'none', color:null,
             text:'no pack voltage is arriving, so this is NOT tracking the battery'};
-  if(v < (B.critV||6.6))
+  if(v < (B.critV||9.9))
     return {key:'crit', color:'var(--error)',
-            text:'CRITICAL - below '+(B.critV||6.6)+' V. Surface now; '+(B.floorV||6.0)+' V damages the cells'};
+            text:'CRITICAL - below '+(B.critV||9.9)+' V. Surface now; '+(B.floorV||9.0)+' V damages the cells'};
   if(v < (B.warnV||7.0))
     return {key:'warn', color:'var(--hazard)',
             text:'low - under '+(B.warnV||7.0)+' V. Plan the way home'};
   return {key:'ok', color:'var(--tertiary)',
-          text:'healthy - '+(B.warnV||7.0)+' V or better ('+(B.fullV||8.4)+' V is a full charge)'};
+          text:'healthy - '+(B.warnV||10.5)+' V or better ('+(B.fullV||12.6)+' V is a full charge)'};
 }
 
 /* DID A NUMBER ARRIVE RECENTLY for this reading?

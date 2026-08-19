@@ -27,6 +27,12 @@ uvicorn[standard]>=0.29     # includes the websockets + httptools extras
 pydantic>=2.6
 # system health needs NO dependency - api/sysinfo.py reads /proc and /sys directly.
 httpx>=0.27                 # WOLFANG CGI client, file offload, CLI, thumbnails
+pyserial>=3.5               # the brainstem link (api/brainstem.py) — the ESP32 on USB.
+                            # Pure python, tiny, wanted on BOTH machines: the Pi drives
+                            # the vehicle with it, and a bench laptop with the breadboard
+                            # ESP32 plugged in is the whole point of the split. Imported
+                            # lazily inside SerialTransport, so its absence costs the
+                            # brainstem and nothing else.
 
 # --- bench only (dev laptop) ---
 # Enables the synthetic MJPEG test pattern when there's no real camera. ALSO the
@@ -148,20 +154,18 @@ Pillow>=10.0
 # picamera2 provides the real CSI camera MJPEG feed.
 
 # --- Pi only (pip-installable, but DO NOT install on the bench) ---
-# RealHardware imports every one of these lazily, inside the class, so the bench
-# never needs them: NEPTUNE_HW=auto falls back to MockHardware and the server
-# runs untouched on a laptop with no GPIO. They are listed (and pinned) here
-# rather than installed by default because adafruit-blinka drags in a board
-# detection stack that is meaningless off a Pi, and on Windows it does not build
-# at all — installing it to satisfy a requirements file would break the one
-# machine this code is written on.
+# THE LIST SHRANK WITH THE BRAINSTEM SPLIT (docs/hardware.md §8). Every I2C chip
+# — BNO085, MS5837, INA219 ×2 — moved behind the ESP32, whose firmware
+# (firmware/brainstem/) carries their drivers now; the Pi reads JSON lines over
+# USB serial via pyserial, which lives in the CORE section above because the
+# bench wants it just as much. What survives here is the one thing still on the
+# Pi's own pins:
 #   sudo apt install -y python3-libgpiod        # gpiozero's pin backend on Pi OS
-#   pip install "gpiozero>=2.0" "smbus2>=0.4" \
-#               "adafruit-blinka>=8.20" "adafruit-circuitpython-bno08x>=1.2.4"
-# gpiozero                       GPIO: H-bridges, A4988 STEP/DIR, limit switches,
-#                                leak probes, paddlewheel + spool interrupts.
-# smbus2                         I2C: MS5837-30BA depth (0x76), INA219 (0x40).
-# adafruit-circuitpython-bno08x  BNO085 (0x4A). Not a register map — the part
-#                                speaks SHTP, a framed report protocol, so this
-#                                is a driver we use rather than one we write.
-# adafruit-blinka                board/busio shim the bno08x driver imports.
+#   pip install "gpiozero>=2.0"
+# gpiozero                       the two DRV8871 thruster pairs (GPIO 23/24, 5/6)
+#                                — the Pi's only remaining GPIO. Imported lazily
+#                                inside RealHardware, so the bench never needs it.
+# (smbus2 / adafruit-blinka / adafruit-circuitpython-bno08x are retired from
+#  this vehicle: the SHTP driver the BNO085 needs is now the Arduino library the
+#  firmware builds against, and installing the python stack on the Pi would be
+#  dressing a machine for a job it no longer has.)

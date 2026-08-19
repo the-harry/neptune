@@ -485,8 +485,10 @@ the gauge is capable of ever reading low.
 1. THE thresholds SHALL be those of the **3S pack actually fitted** (2026-08-18: 3S3P
    INR18650, 12.6 V full, 9.0 V floor at 3.0 V/cell — `docs/hardware.md` §7), AND obsolete
    scales SHALL NOT remain anywhere in the system, including mocks, tests and client
-   expectations — the 24 V scale once, the 2S scale now. *(SOFTWARE GAP: the shipped bands
-   are still the 2S pack's; `docs/hardware.md` §20.)*
+   expectations — the 24 V scale once, the 2S scale now. *(Landed 2026-08-19: bands
+   12.6/10.5/9.9/9.0 in `api/config.py`, the purge policed in both dead corridors by
+   `test_telemetry.py`; the warn margin is confirmed against the real pack at the
+   bathtub ceremony.)*
 2. THE console SHALL show the voltage as a number at all times.
 3. Colour SHALL come ONLY from the configured bands, AND that colour SHALL NOT be borrowed by
    anything else.
@@ -501,9 +503,11 @@ I do not dive on a number derived from a counter that was never zeroed.
 
 *(Mechanism as fitted, 2026-08-18: a peristaltic pump + collapsible bag with an inline flow
 sensor counting millilitres, closed-loop on the ESP32 — no stepper, no end stops.
-`docs/hardware.md` §6. The criteria below are written to that mechanism. SOFTWARE GAP: the
-shipped code still implements the retired syringe — `docs/hardware.md` §20 — and its old
-end-stop criteria live in this file's git history.)*
+`docs/hardware.md` §6. The criteria below are written to that mechanism, and the vehicle
+half landed 2026-08-19 (firmware purge-home, flow-metered `pump_ml`, the no-flow fault).
+SOFTWARE GAP, §20 row 4: the console's control still draws a syringe and MockHardware's
+internals still model the old axis; the retired end-stop criteria live in this file's
+git history.)*
 
 **Acceptance criteria**
 1. BEFORE the first homing, THE system SHALL report the ballast level as unknown, AND SHALL

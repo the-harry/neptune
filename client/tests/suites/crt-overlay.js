@@ -516,13 +516,13 @@
 
   /* ---- A REAL VEHICLE, THROUGH THE CONSOLE'S OWN DOORS ---------------------
      handleMessage() is the WebSocket message handler and MAP.navWs.onmessage is the
-     /ws/nav one: between them they are how a Pi arrives. A healthy 2S pack and a dry
+     /ws/nav one: between them they are how a Pi arrives. A healthy 3S pack and a dry
      hull, so nothing below is incidentally flying an alarm. mock:false is what makes
      this a hull with real sensors rather than the bench simulator wearing a tether. */
   const TEL = {type:'telemetry', mock:false, armed:false, seq:1,
     heading:0, heading_card:'N', mag_cal:3,
     gyro_z_dps:0.0, accel_fwd_ms2:0.0, pitch_deg:0.0, roll_deg:0.0,
-    depth:2.6, pressure:18.4, battery_v:8.1, current_a:1.2,
+    depth:2.6, pressure:18.4, battery_v:12.1, current_a:1.2,
     ballast_level:0.3, ballast_homed:true, ballast_needs_rehome:false, ballast_target:0.3,
     left:0, right:0, magnet:false, light_green:false, light_white:false,
     light_green_level:0, light_white_level:0,

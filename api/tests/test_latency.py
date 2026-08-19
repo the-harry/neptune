@@ -700,21 +700,36 @@ class BudgetTest(unittest.TestCase):
         )
 
     def test_the_debounce_derivation_cannot_go_stale(self):
-        """The leak sampling rate is SENSOR_HZ divided by a constant in the loop.
+        """The leak sampler moved to the brainstem; the derivation follows it.
 
-        A magic number in a modulo would let this derivation rot in silence: the
-        budget above would keep printing 500 ms while the vehicle sampled at some
-        other rate, which is precisely the kind of confidently wrong figure this
-        project treats as a defect. So the source is asked whether the divider is
-        still the thing the leak tick is gated on.
+        This file's budget is built from RealHardware.SENSOR_HZ / LEAK_SAMPLE_DIVIDER,
+        and the sampling itself now happens in the ESP32 firmware at LEAK_HZ — three
+        statements of one figure, in two languages, which is exactly the shape that
+        rots in silence. So all three are asked: the firmware source (is the rate
+        still what this budget assumes, and the debounce count still the one
+        api/config.py counts samples against), the brainstem module (its named
+        LEAK_SAMPLE_HZ), and the derived figure itself.
         """
-        src = (Path(__file__).resolve().parent.parent / "hardware.py").read_text(encoding="utf-8")
+        import brainstem
+
+        fw = (
+            Path(__file__).resolve().parent.parent.parent / "firmware" / "brainstem" / "brainstem.ino"
+        ).read_text(encoding="utf-8")
         self.assertIn(
-            "tick % self.LEAK_SAMPLE_DIVIDER == 0",
-            src,
-            "the leak probes are no longer sampled on LEAK_SAMPLE_DIVIDER, so the debounce budget "
-            "in this file is derived from a constant the vehicle has stopped using",
+            f"#define LEAK_HZ {LEAK_SAMPLE_HZ:.0f}",
+            fw,
+            "the firmware no longer samples the leak zones at the rate this file's "
+            "debounce budget is derived from — change RealHardware.SENSOR_HZ / "
+            "LEAK_SAMPLE_DIVIDER and the firmware's LEAK_HZ together",
         )
+        self.assertIn(
+            f"#define LEAK_DEBOUNCE_N {settings.leak_debounce_samples}",
+            fw,
+            "the firmware's latch count no longer matches leak_debounce_samples, so "
+            "api/config.py's half-second comment describes a vehicle that latches at "
+            "some other speed",
+        )
+        self.assertEqual(brainstem.LEAK_SAMPLE_HZ, LEAK_SAMPLE_HZ)
         self.assertEqual(
             10.0,
             LEAK_SAMPLE_HZ,

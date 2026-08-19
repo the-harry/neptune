@@ -274,9 +274,11 @@ factory-solved shaft seal; grease it and inspect seasonally like every other sea
 exceeds 3.6 A; the limit is what makes that survivable — it costs peak grunt at stall and
 protects the silicon, which for a canal boat with a 3–6 N drag budget is the right trade.
 The escalation, if real water disagrees, is BTS7960 ×2 (£6) with the same PWM interface.
-`SOFTWARE GAP:` the shipped pin constants drive the old six-pin H-bridge layout; the
-DRV8871 pair takes **GPIO 23/24 (L) and 5/6 (R)** — IN1/IN2 only, no EN pin — which
-becomes the Pi's *entire* GPIO footprint (§8).
+The DRV8871 pair takes **GPIO 23/24 (L) and 5/6 (R)** — IN1/IN2 only, no EN pin —
+which is the Pi's *entire* GPIO footprint (§8), and `RealHardware` drives exactly
+those four pins as of 2026-08-19 (`drv8871_duty()` is the pure mapping; reversal
+drops the falling side before raising the other, because both-inputs-high is the
+DRV8871's brake).
 
 **Props:** run the kit's own 3-blade pair first — the matched baseline. The **D50
 4-blade paddles** are the upgrade: high blade area, low pitch, the right shape for
@@ -335,10 +337,12 @@ millilitres**, so `ballast_ml` is a measurement, not a stopwatch guess.
 **Homing:** peristaltics don't mind running dry, so pre-flight is *purge-home* — run the
 pump against the empty bag ~10 s, call that zero, pump to mid-fill by count. `ballast_ml`
 is absolute at every power-up, the same honesty the syringe's end stop used to buy.
-`SOFTWARE GAP:` the shipped code homes a stepper against limit switches; the pump
-version of `get_ballast_level()` (still `None` until homed) is integration work, and the
-loop closes **on the ESP32** — `pump_ml: 50` goes down the wire, the brainstem PWMs the
-pump, counts pulses, stops, and acks the measured figure. The Pi never sees a pulse.
+This landed with the firmware (2026-08-19): the loop closes **on the ESP32** —
+`pump_ml: 50` goes down the wire, the brainstem PWMs the pump, counts pulses, stops,
+and acks the measured figure; the Pi never sees a pulse, and `get_ballast_level()` is
+`ballast_ml` over the configured capacity, still `None` until the vehicle has homed.
+`SOFTWARE GAP` (§20 row 4): the console's control still draws a syringe, and
+MockHardware's internals still model the old axis.
 
 **The diagnostic gift** worth wiring into the blackbox analysis: a **bag leak** reads as
 leak-FWD (the tray probe) plus `ballast_ml` drifting against pump commands **without
@@ -378,9 +382,10 @@ figure.
   double the air current to reach temperature locally — the 2 A class is chosen for
   exactly that headroom. Nichrome takes no solder: crimp or clamp, never iron.
   Firing is a **two-pin interlock on the ESP32 — ARM (GPIO14) + FIRE (GPIO33)** — and
-  the brainstem closes the final gate only if its own state agrees. `SOFTWARE GAP:`
-  `release_dropweight()` is still the loud "not fitted" stub; it becomes a two-step
-  serial command with its own blackbox correlation stage.
+  the brainstem closes the final gate only if its own state agrees. As of 2026-08-19
+  `release_dropweight()` drives the two steps in order over the link and the firmware
+  refuses FIRE unless its own armed state agrees. `SOFTWARE GAP` (§20 row 7): the
+  blackbox `c_id` stage and the console's four-state honesty are still owed.
 - **Trigger doctrine** (from the release design work): operator-explicit always — a
   console *offer* on ballast-fault + held E-SURFACE, a deliberate manual chord — and
   nothing automatic except, someday, a dead-vehicle countdown. An auto-release under a
@@ -464,10 +469,11 @@ pump/ESP32 final form; this table wins until the redraw).
 
 Boat standard is **mini** fuses — one spare tub fits every holder aboard. The INA219
 high-side rule survives from the old build: shunt before everything, or it reads a
-comfortable lie. `SOFTWARE GAP:` battery bands in `api/config.py` are still the 2S
-pack's. The 3S bands are **12.6 full / 10.5 warn / 9.9 critical / 9.0 hard floor**
-(same per-cell judgements — 4.2 / 3.5 / 3.3 / 3.0 V/cell), to be confirmed at the
-bathtub ceremony and then purged of the 2S scale everywhere, per R7.4's own rule. The
+comfortable lie. The bands are the 3S pack's as of 2026-08-19 — **12.6 full / 10.5 warn / 9.9
+critical / 9.0 hard floor** (4.2 / 3.5 / 3.3 / 3.0 V/cell) in `api/config.py`, the 2S
+scale purged everywhere per R7.4's own rule and policed by `test_telemetry.py` in both
+dead corridors; confirm the warn margin against the recovered pack's sag at the
+bathtub ceremony. The
 floor stays documented-not-enforced: safing a sub mid-canal trades a damaged pack for an
 unrecoverable vehicle.
 
@@ -498,35 +504,52 @@ It owns all sensing and slow actuation:
 
 | ESP32 pin | Function |
 |---|---|
-| 21 / 22 | I²C1 — BNO085, MS5837 (leads from the cap), INA219 ×2 |
-| 19 | BNO085 interrupt |
-| 34 / 35 / 39 | leak probes FWD / MID / AFT (input-only pins — exactly what probes want) |
-| 36 | NTC pack temperature (ADC1) |
-| 27 | YF-TM02 flow pulses (**PCNT** hardware counter) |
-| 25 / 26 | PAS quadrature A/B (PCNT — 48 counts/rev + direction) |
-| 18 | pump MOSFET (LEDC PWM) |
+| 21 / 22 | I²C1 — BNO085, MS5837 (leads from the cap), INA219 ×2 (0x40 pack, **0x41 rail — bridge A0**) |
+| 19 | BNO085 interrupt (wired; the driver polls for now) |
+| 34 / 35 / 39 | leak probes FWD / MID / AFT — input-only pins, **external 100 kΩ pull-ups to 3V3 REQUIRED** (these pins have none inside, and without them every zone reads permanently wet) |
+| 36 | NTC pack temperature (ADC1; 3V3 — NTC — pin — 10 k — GND) |
+| 27 | ballast flow, the YF-TM02 inline on the pump tube |
+| 16 | speed flow, YF-TM02 #2 — the speed log (firmware-assigned) |
+| 25 / 26 | PAS quadrature A/B — 48 counts/rev + **direction** |
+| 18 / 17 | pump **IN1 / IN2** — see the H-bridge note below (17 is firmware-assigned) |
 | 23 | white lamp (LEDC, **8 kHz** — above camera banding) |
 | 13 | red beacon |
 | **14 + 33** | **burn ARM + FIRE — the two-pin interlock** |
+| 32 | burn continuity sense divider (**optional**; `HAS_BURN_SENSE` in the firmware) |
 
-15 of ~24 usable pins; **Wi-Fi stays OFF** (the radio would elbow the camera AP inside
+18 of ~24 usable pins; **Wi-Fi stays OFF** (the radio would elbow the camera AP inside
 the hull). The input-only pins 34/35/39 soak up the leak probes — the pins nothing else
-wants, doing the one job they can.
+wants, doing the one job they can. Pulse counting is interrupt-based with microsecond
+timestamps rather than the PCNT peripheral, deliberately: PCNT's API changed
+incompatibly across Arduino-core versions, and at these rates ISR counting is exact —
+`firmware/README.md` §5 carries the argument.
 
-**Reflexes live on the brainstem**, so they work when the Pi is dead: leak agreement →
-beacon on + surface flag; pack undervolt → log + warn; the burn gate closes **only** on
-ARM + FIRE + local state agreeing. The ballast loop closes here too (§6). Decisions
-above, reflexes below — the biologically-correct split.
+> **THE PUMP NEEDS AN H-BRIDGE, and the handoff's power tree drew one MOSFET.** A
+> peristaltic pump reverses by reversing its motor; a single low-side IRLZ44N can only
+> ever FILL the bag — no purge-home, no pump-out, no reflex bag-empty. IN1/IN2 on
+> 18/17 map straight onto a DRV8871 (a third one, ~£2, is the natural part). The
+> firmware supports the single-MOSFET build (`PIN_PUMP_IN2 -1`) and refuses
+> empty-direction commands out loud rather than pretending. On the §19 watch list.
 
-**The protocol:** unprompted **10 Hz JSONL telemetry up**; a tiny command vocabulary
-down — `pump_ml`, `trim_home`, `lamp`, `beacon`, `arm_burn` / `fire_burn` — each with a
-sequence number, acked, and the acks join the blackbox `c_id` lifecycle as its own
-stage. The ESP32 keeps a ring buffer of its own: the two-sided blackbox gains a **third
-witness** that survives Pi death. Firmware version + SHA ride in `session_start`.
-`SOFTWARE GAP:` none of this protocol exists yet — it is the first integration work
-item, and `RealHardware` becomes a serial client of it. The liveness doctrine (§13)
-gains the serial link as a bus-like front: link down ⇒ every reading behind it
-cannot-tell, under one name.
+**Reflexes live on the brainstem**, so they work when the Pi is dead: 2-of-3 leak
+agreement → beacon + **bag-empty** + surface flag; pack undervolt (< 9.0 V sustained)
+→ flag; the burn gate closes **only** on ARM + FIRE + local state agreeing. The
+ballast loop closes here too (§6). Decisions above, reflexes below — the
+biologically-correct split.
+
+**The protocol — WRITTEN, both ends** (2026-08-19): unprompted **10 Hz JSONL telemetry
+up** (`hello` / `tlm` / `ack` / `evt`); the command vocabulary down — `pump` /
+`pump_ml` / `trim_home` / `lamp` / `beacon` / `arm_burn` / `fire_burn` / `leak_reset`
+/ `mock` / `kill` / `revive` / `info` / `ring` — each id'd and acked. The contract
+lives in `api/brainstem.py`'s docstring; the firmware is
+[`firmware/brainstem/brainstem.ino`](../firmware/brainstem/brainstem.ino) (flash +
+breadboard walk: [`firmware/README.md`](../firmware/README.md)). The ESP32 keeps a
+48-event ring buffer — the two-sided blackbox's **third witness** — and announces its
+firmware + reset reason in `hello`. The liveness doctrine (§13) gained the link as a
+bus-like front, `RealHardware` is its serial client, and the whole chain is exercised
+by `api/tests/test_brainstem.py` over an injected transport. Remaining
+`SOFTWARE GAP:` the acks are not yet folded into the blackbox `c_id` lifecycle, and
+`session_start` does not yet record the firmware version (§20 row 1).
 
 **ESP32 #2** is the flashed spare in the dive bag and the future **sonar front-end**
 (§12) — a second `/dev/ttyESP`. **The 8266 fleet and C3 SuperMinis are banned from
@@ -636,9 +659,11 @@ submersion-rated, until the grease ritual says otherwise.
   fusion (`v_est += (v_pulse − v_est)·α` on each pulse, decay to the throttle LUT
   between), stale timeout at 2× the expected interval. `v_meas` vs `v_est` divergence is
   the **current detector**; zero flow at high throttle is a **sensor-fault flag, not a
-  fact**. `SOFTWARE GAP:` ingest currently expects paddlewheel pulses on a Pi pin;
-  the flow/PAS pair arrives in serial telemetry, with direction — which retires "the
-  sign comes from the throttle".
+  fact**. The flow/PAS pair arrives in serial telemetry as of 2026-08-19 —
+  `read_water_speed()` (pulses × the shared k-factor, freshness honoured) and
+  `read_speed_dir()`. `SOFTWARE GAP` (§20 row 5): navigation does not yet consume the
+  direction — "the sign comes from the throttle" survives until it does — and the
+  per-sensor k-factors still shadow the single `NAV_M_PER_PULSE`.
 
 No spool encoder was bought: tether payout stays the modelled upper bound, and the
 provenance row in `.specs/tasks.md`'s pre-first-dive batch stands.
@@ -689,10 +714,11 @@ vocabulary); the mechanism record is `.specs/design.md` §24.
 - **The serial link is the new bus-front.** ESP32 link down ⇒ every reading behind it —
   IMU, depth, power, leak, flow, temperature — goes cannot-tell in one frame under one
   name, exactly as `I2C BUS DOWN` behaves today. A front is never "absent"; it is an
-  errand, standing in front of every part behind it. `SOFTWARE GAP:` the liveness chain
-  currently ends at Pi-I²C; extending it over the link (and into the firmware — a
-  seventh file on the null-preservation path, written to the same no-coercion rule) is
-  integration work.
+  errand, standing in front of every part behind it. Landed 2026-08-19: the link carries its own
+  DeviceHealth, the firmware runs the same streak-or-silence rule per chip at the bus
+  and nulls a dead chip's readings in the frame that names it — the seventh file on
+  the null-preservation path, written to the same no-coercion rule and held to it by
+  `api/tests/test_brainstem.py`.
 - **The leak ladder** keeps its four states (`NORMAL` / `WARN` / `FLOOD` / `UNKNOWN`),
   its five-sample 10 Hz debounce, its one-way latching with the audited `leak_reset`,
   and the rule that **wet outranks cannot-tell** — and gains zone identity (§11) plus
@@ -730,7 +756,8 @@ the blackbox `session_start`.
 
 1. **Battery bands** (§7.3): 12.6 / 10.5 / 9.9 / 9.0 provisional; confirm the sag
    behaviour on the recovered pack during the bathtub ceremony before trusting the warn
-   margin. `SOFTWARE GAP:` lands with the 3S config change.
+   margin. (The config change landed 2026-08-19; the bathtub confirmation is what
+   remains.)
 2. **Surface pressure zeroing:** float the boat, water still, read `pressure_psi` into
    `NEPTUNE_SURFACE_PSI` — it is today's atmosphere plus the sensor's float depth,
    never 14.7. `NEPTUNE_PSI_PER_M` stays 1.42 (fresh water). Tape-check at a measured
@@ -789,9 +816,10 @@ proven at the shafts, and the **cannot-tell pull test** for every sensing part: 
 it, watch only its gauges blank with its name raised, plug it back, watch it return.
 The Pi-side pin-fake tricks (`pinctrl`) survive only for the four thruster pins;
 everything behind the brainstem gets the same test from a firmware bench mode —
-`SOFTWARE GAP:` that mode ships with the firmware, or the per-instrument bring-up
-cards (to be rewritten against the new loom at integration; the old set is preserved
-in this file's git history) cannot be walked.
+That mode ships in the firmware — `mock` / `kill` / `revive` over the wire, and the
+simulation announces itself in every frame (`firmware/README.md` §2 is the walk). The
+per-instrument bring-up cards themselves are still to be rewritten against the new
+loom; the old set is preserved in this file's git history.
 
 ---
 
@@ -837,6 +865,11 @@ Mirrors handoff §19 — update both when one closes.
 - Coupler order: 2 pieces or 2 packs? (want 4)
 - Adaptive charger: exactly 12.6 V?
 - YF-TM02 floor + PAS gating results → which is the primary speed log.
+- **Pump direction needs an H-bridge** (§8): the handoff's tree drew one IRLZ44N,
+  which can only fill the bag. A third DRV8871 (~£2) on pins 18/17 is the natural
+  answer; the firmware refuses empty-direction commands on a single-MOSFET build
+  rather than pretending. Decide before the ballast plumbing is potted.
+- `PUMP_ML_PER_PULSE` (firmware, placeholder 0.2 ml/pulse) → bench trickle test.
 - DRV8871 3.6 A limit adequate for the 390s in practice? (else BTS7960)
 - Integration-doc FIG 4 / FIG 5 / GPIO-table redraw to the ESP32+pump architecture
   (offered, not yet done — §7.3's table and §8's pin map win meanwhile).
@@ -850,18 +883,20 @@ Mirrors handoff §19 — update both when one closes.
 The code half of everything marked `SOFTWARE GAP` above, in order of attack. Each row
 lands with its mirrored section here updated in the same change.
 
+Status legend: ✅ landed (date) · ◐ partly landed · ⚠ open.
+
 | # | Gap | Where it bites |
 |---|---|---|
-| 1 | **ESP32 serial protocol + firmware** (10 Hz JSONL up, acked commands down, ring-buffer witness, bench test mode) | §8, §16 — everything below depends on it |
-| 2 | **`RealHardware` as a serial client** of the brainstem; pin constants shrink to the two DRV8871 pairs (23/24, 5/6) | §5, §8 |
-| 3 | **3S battery bands** in `api/config.py` (12.6/10.5/9.9/9.0) + purge of the 2S scale from mocks, tests, client | §7.3 |
-| 4 | **Pump ballast**: `ballast_ml`, purge-homing, ESP32-closed loop; client control follows the mechanism (`playbook.md` §8) | §6 |
-| 5 | **Flow/PAS speed ingest** with direction; per-sensor k-factors replace `NAV_M_PER_PULSE` | §11 |
-| 6 | **Three leak zones** + 2-of-3 reflex gating; zone names in telemetry and the ladder | §11, §13 |
-| 7 | **Burn-wire ARM/FIRE** two-step command, its own `c_id` stage, four-state honesty (ARMED/DISARMED/FIRED/?) | §6.1 |
-| 8 | **Liveness over the serial link** — the link as bus-front; firmware joins the null-preservation chain | §13 |
-| 9 | **Soundings bottom-contact wording**: "syringe taking on water" → "`ballast_ml` still rising" (R10.6) | §12 |
-| 10 | **Sonar `{t, alt_m}` ingest** from ESP32 #2 (after the Tier-2 tap succeeds) | §12 |
+| 1 ◐ | **ESP32 serial protocol + firmware** — ✅ landed 2026-08-19: `firmware/brainstem/brainstem.ino` + `api/brainstem.py` (10 Hz JSONL, acked commands, ring-buffer witness, announced bench mode with per-chip kill/revive), guarded by `api/tests/test_brainstem.py`. **Still open:** acks into the blackbox `c_id` lifecycle; firmware version + SHA into `session_start`; the firmware has never met a real chip — first-contact bench walk is `firmware/README.md` §2 | §8, §16 |
+| 2 ✅ | **`RealHardware` as a serial client** — landed 2026-08-19. Pi pins shrink to the two DRV8871 pairs (23/24, 5/6); either half (GPIO, brainstem) may be absent and is named; a laptop with only the breadboard ESP32 lights the console | §5, §8 |
+| 3 ✅ | **3S battery bands** — landed 2026-08-19: `api/config.py` 12.6/10.5/9.9/9.0, the 2S scale purged from mock, client config, fixtures and suites, and the dead-scale police in `test_telemetry.py` now hunts BOTH dead corridors | §7.3 |
+| 4 ◐ | **Pump ballast** — the vehicle side landed with the firmware (`ballast_ml`, purge-homing, no-flow fault, ESP32-closed loop; `ballast_level`/homed/needs-rehome map through). **Still open:** the client control's shape and wording still draw a syringe (`playbook.md` §8), and MockHardware's internals still model the axis | §6 |
+| 5 ◐ | **Flow/PAS speed ingest** — pulses, freshness and **direction** arrive (`read_water_speed`, `read_speed_dir`). **Still open:** nav consuming direction (retiring sign-from-throttle) and per-sensor k-factors replacing the shared `NAV_M_PER_PULSE` | §11 |
+| 6 ◐ | **Three leak zones** — zones, latches, boot-wet and 2-of-3 land on the existing ladder (1 zone = WARN, ≥2 = FLOOD; zone names in the probe-fault string and the logs). **Still open:** zone identity on the telemetry wire and in the console's leak vocabulary (`playbook.md` §8) | §11, §13 |
+| 7 ◐ | **Burn-wire ARM/FIRE** — the interlock is real: two pins, two commands, FIRE refused unless armed, `release_dropweight()` drives them in order. **Still open:** its own `c_id` stage and the console's four-state honesty (ARMED/DISARMED/FIRED/?) | §6.1 |
+| 8 ✅ | **Liveness over the serial link** — landed 2026-08-19: the link is a bus-front with its own DeviceHealth (silence ⇒ one name fronts everything), per-chip verdicts computed at the bus by the firmware, wet-outranks-cannot-tell held across a link death | §13 |
+| 9 ⚠ | **Soundings bottom-contact wording**: "syringe taking on water" → "`ballast_ml` still rising" (R10.6) | §12 |
+| 10 ⚠ | **Sonar `{t, alt_m}` ingest** from ESP32 #2 (after the Tier-2 tap succeeds) | §12 |
 
 ---
 

@@ -43,11 +43,14 @@ OK, WARN, BAD = "  ok  ", " note ", " MISS "
 # what to install, what stops working without it). They are absent on a dev box by
 # design - this file is developed on a machine with no GPIO - which is why the probe
 # is find_spec and never an import: importing gpiozero off a Pi is slow at best.
-# Keep this list in step with api/requirements.txt and docs/hardware.md §1.3.
+# Keep this list in step with api/requirements.txt and docs/hardware.md §8.
 HW_DEPS = (
-    ("gpiozero", "gpiozero", "thrusters, stepper, limit switches, leak probes, pulse counting"),
-    ("smbus2", "smbus2", "I2C bus: MS5837 depth, INA219 pack voltage/current"),
-    ("adafruit_bno08x", "adafruit-circuitpython-bno08x", "BNO085: heading, mag-cal status, gyro rate, linear accel"),
+    # The list shrank with the brainstem split (docs/hardware.md §8): every I2C
+    # chip and its driver stack moved into the ESP32 firmware, so smbus2 and the
+    # BNO08x driver are no longer the Pi's to import — the Pi speaks JSON lines
+    # over USB serial (pyserial, which is CORE: the bench wants it too, because
+    # a laptop with the breadboard ESP32 plugged in is a real vehicle).
+    ("gpiozero", "gpiozero", "the two DRV8871 thruster pairs — the Pi's only remaining GPIO"),
 )
 
 # The api's CORE libraries: the first section of api/requirements.txt, the ones BOTH
@@ -60,6 +63,7 @@ CORE_DEPS = (
     ("uvicorn", "the ASGI server that app is served by"),
     ("pydantic", "protocol.py and nav/models.py - the client/server wire contract"),
     ("httpx", "WOLFANG CGI client, file offload, thumbnails"),
+    ("serial", "pyserial - the brainstem link (api/brainstem.py), on the Pi AND the bench"),
 )
 
 # The map-processing libraries, which belong to the HANDHELD and to nothing else:

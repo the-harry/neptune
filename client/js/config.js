@@ -47,8 +47,9 @@ const CONFIG = {
   piProbeIdleMs:  10000,     // while it is up: just re-check whether to start again
   piProbeMaxAgeMs:15000,     // older than this is not evidence of anything
 
-  /* ---- BATTERY — 2S Li-ion, and the ONLY source of the pack colour ---------
-     The hull carries a 2-cell lithium pack: 8.4 V charged, 7.4 V nominal, 6.0 V
+  /* ---- BATTERY — 3S Li-ion, and the ONLY source of the pack colour ---------
+     The hull carries a 3-cell lithium pack (3S3P, fitted 2026-08-18): 12.6 V
+     charged, 11.1 V nominal, 9.0 V
      the hard floor below which the cells are damaged. The console used to be
      written for a 24 V pack that does not exist and never did — every threshold
      in it (mock voltage, sag floor, the tooltip) was a number from another
@@ -56,10 +57,10 @@ const CONFIG = {
      limit. These four values are the only thing that may colour the readout, so
      one colour keeps meaning one thing.                                       */
   battery: {
-    fullV:  8.4,      // freshly charged
-    warnV:  7.0,      // at/above this = green; below = amber
-    critV:  6.6,      // below this = red AND a SURFACE prompt
-    floorV: 6.0       // documented hard floor (the sim sags to here and stops)
+    fullV:  12.6,     // freshly charged (4.2 V/cell)
+    warnV:  10.5,     // at/above this = green; below = amber (3.5 V/cell)
+    critV:  9.9,      // below this = red AND a SURFACE prompt (3.3 V/cell)
+    floorV: 9.0       // documented hard floor, 3.0 V/cell (the sim sags to here and stops)
   },
 
   /* ---- MAP / NAVIGATION (dive track + position over a basemap) ----------- */
@@ -265,11 +266,11 @@ const CONFIG = {
     headingRatePerS:40,        // heading change per unit of steer input (deg/sec)
     surfaceDrainMs: 4000,      // after SURFACE, force-drain the tank for this long
     depthLerp:      0.8,       // depth easing toward target (per second, 0..1-ish)
-    // Cosmetic battery sag. Halved with the move to 2S: the old 0.0004 V/s was
-    // paced for a 24.8 -> 20.0 V scale (4.8 V of travel). The 2S pack only has
-    // 2.4 V between full and the floor, so the same number drained the whole
-    // bar in half the time and walked a bench session into a false SURFACE
-    // prompt. Same wall-clock pace as before, on the real scale.
-    batteryDrainVPerS: 0.0002
+    // Cosmetic battery sag, paced to the pack's own travel. The 3S pack has
+    // 3.6 V between full (12.6) and the floor (9.0) — 1.5× the 2S span — so
+    // the rate scales with it and a bench session drains the bar at the same
+    // wall-clock pace it always did, without walking into a false SURFACE
+    // prompt.
+    batteryDrainVPerS: 0.0003
   }
 };

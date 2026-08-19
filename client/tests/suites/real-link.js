@@ -7,19 +7,19 @@
    the stick in every mode, on the keyboard and gamepad paths alike.
    And the pack's colour, for the same reason: a band is a claim made in a colour that
    the operator acts on without reading the number, so it has to come from the VEHICLE's
-   2S voltage and from nothing else. */
+   3S voltage and from nothing else. */
 (function(){
   const R=[]; const errs=[];
   window.addEventListener('error', e=>errs.push(String(e.message)));
   const ok=(name,pass,detail)=>R.push({name, pass:!!pass, detail:String(detail)});
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
-  // A HEALTHY 2S PACK. 8.4 V is a full charge, 7.0 V is the amber line and 6.6 V the red
-  // one, so 8.1 V is a vehicle with plenty in it — no check below is incidentally flying
-  // an alarm. The 24.5 V this used to send belonged to a pack that was never built, and
-  // on the real bands it reads FULL forever, which is the worst kind of wrong: it looks
-  // like a threshold somebody checked.
-  const PACK_OK = 8.1;
+  // A HEALTHY 3S PACK. 12.6 V is a full charge, 10.5 V is the amber line and 9.9 V the
+  // red one, so 12.1 V is a vehicle with plenty in it — no check below is incidentally
+  // flying an alarm. The 8.1 V this used to send was the 2S pack's healthy figure, and
+  // on the 3S bands it reads below the hard floor — the same different-vehicle trap as
+  // the 24.5 V before it, pointing the other way.
+  const PACK_OK = 12.1;
   function tel(mock, heading, volts){
     return {type:'telemetry', mock:mock, heading:heading, depth:1.2, pressure:14.7,
             // ballast_homed says out loud what a bare 0.4 only implied: the syringe HAS
@@ -204,30 +204,30 @@
     const B=CONFIG.battery;
 
     await atVolts(PACK_OK);
-    ok('a healthy 2S pack is green, and shows the number beside the colour',
+    ok('a healthy 3S pack is green, and shows the number beside the colour',
        /\bbatt-ok\b/.test(battClass()) && battText()===PACK_OK.toFixed(1)+'V' && !/BATTERY/.test(alerts()),
        PACK_OK+' V -> class="'+battClass()+'" text="'+battText()+'" alerts="'+(alerts()||'none')+'"');
 
     await atVolts(B.warnV);
     ok('the amber line itself still counts as healthy', /\bbatt-ok\b/.test(battClass()),
        B.warnV.toFixed(1)+' V (CONFIG.battery.warnV) -> class="'+battClass()+
-       '" — "below 7.0" means 7.0 itself has not crossed');
+       '" — "below 10.5" means 10.5 itself has not crossed');
 
-    await atVolts(6.9);
-    ok('under 7.0 V the pack goes amber, and only amber',
+    await atVolts(10.4);
+    ok('under 10.5 V the pack goes amber, and only amber',
        /\bbatt-warn\b/.test(battClass()) && !/BATTERY/.test(alerts()),
-       '6.9 V -> class="'+battClass()+'" alerts="'+(alerts()||'none')+'" — plan the way home, do not surface yet');
+       '10.4 V -> class="'+battClass()+'" alerts="'+(alerts()||'none')+'" — plan the way home, do not surface yet');
 
     await atVolts(B.critV);
     ok('the red line itself is still only amber', /\bbatt-warn\b/.test(battClass()),
        B.critV.toFixed(1)+' V (CONFIG.battery.critV) -> class="'+battClass()+
        '" — the red band starts BELOW it, so this is still a "plan the way home"');
 
-    await atVolts(6.5);
-    ok('under 6.6 V the pack goes red', /\bbatt-crit\b/.test(battClass()),
-       '6.5 V -> class="'+battClass()+'"');
+    await atVolts(9.8);
+    ok('under 9.9 V the pack goes red', /\bbatt-crit\b/.test(battClass()),
+       '9.8 V -> class="'+battClass()+'"');
     ok('...and red SAYS what to do, carrying the voltage with it',
-       /BATTERY 6\.5V · SURFACE/.test(alerts()) && /surface now/i.test((battChip()||{}).title||''),
+       /BATTERY 9\.8V · SURFACE/.test(alerts()) && /surface now/i.test((battChip()||{}).title||''),
        'chip="'+alerts()+'"  title="'+(((battChip()||{}).title)||'no chip').slice(0,90)+'..."');
 
     await atVolts(PACK_OK);
