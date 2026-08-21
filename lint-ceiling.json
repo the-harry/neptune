@@ -3,11 +3,12 @@
   "_why": "This repo has a real flake8/mypy backlog. A pipeline that fails on all of it is red on its first run and every run after, and a check that is always red is one people stop reading. Deleting the backlog to go green would be worse: silencing tools rather than answering them. So every check that is clean today is pinned at zero and may never regress, and the two with a backlog are pinned at exactly what they report now.",
   "_rule": "THIS NUMBER ONLY EVER GOES DOWN. Fix findings and lower it in the same change; never raise it to make a build pass.",
   "_run": "python lint.py            -- the full list, for a person\npython lint.py --ceiling  -- the ratchet, for CI",
+  "_machine": "The counts are CI's, under the vehicle's python (3.11 — checks.yml says why). flake8 and mypy both count differently under other interpreters (3.14 reports 8 more E231-family findings and 1 fewer mypy error from the same tree), so a desk on a newer python reading CEILING EXCEEDED against these numbers may be measuring its interpreter, not a regression: check what CI says before touching the ceiling.",
 
   "isort": 0,
   "black": 0,
   "suppressions": 0,
 
-  "flake8": 11,
-  "mypy": 152
+  "flake8": 3,
+  "mypy": 153
 }

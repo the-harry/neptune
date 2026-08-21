@@ -61,11 +61,23 @@
     const dialCollapsed=rect('radar-dial'), readCollapsed=rect(document.querySelector('.sonar-readout'));
     // #radar is the 200 px circle; the dial is inset:0 INSIDE its 1.5 px ring, so 198.
     const radC=rect('radar');
+    // "Bottom-left" is asserted against the DESIGN CONSTANTS — the wrap's fixed
+    // 24 px edge margins and the scale bar sitting between circle and viewport
+    // edge — not against a magic total. The old form demanded a 44±2 px gap
+    // under the circle, and that 44 was 24 (margin) + 5 (flex gap) + one line of
+    // .radar-scale TEXT, whose height is a property of the machine's font stack:
+    // Linux Chrome draws that line 2 px shorter and the first browser to ever
+    // run this check on CI failed it with the layout pixel-perfect. A layout
+    // check may measure layout; the moment it measures a font it measures the
+    // machine.
+    const wrapC=rect('radar-wrap'), scaleC=rect(document.querySelector('.radar-scale'));
     ok('collapsed dial fills the 200 px circle, bottom-left',
        radC.w===200 && radC.h===200 && dialCollapsed.w===198 && radC.x===24 &&
-       Math.abs((innerHeight-(radC.y+radC.h))-44)<2,
+       Math.abs((innerHeight-(wrapC.y+wrapC.h))-24)<2 &&
+       scaleC.y>=radC.y+radC.h-1 && scaleC.y+scaleC.h<=innerHeight,
        'radar '+JSON.stringify(radC)+'  dial '+JSON.stringify(dialCollapsed)+
-       '  bottom gap '+(innerHeight-(radC.y+radC.h))+'px');
+       '  wrap bottom margin '+(innerHeight-(wrapC.y+wrapC.h))+'px (design: 24)'+
+       '  scale under the circle at y='+scaleC.y);
 
     CONFIG.map.blindNav=true;
     if(typeof enterBlindNav==='function') enterBlindNav();

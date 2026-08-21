@@ -392,11 +392,19 @@
     ok('scrolling back to the bottom resumes the tail',
        LOGVIEW.tail===true && $('lv-tail').textContent==='TAIL', 'tail='+LOGVIEW.tail);
     LOG.state('FILLER and the tail is following again');
-    await sleep(300);
+    // WAITED FOR, not slept at: the overlay appends on the log bus's own
+    // cadence, and a fixed 300 ms loses that race on a loaded machine — this
+    // check flickered green/red on the same tree, run to run. The FILLER is
+    // asserted PRESENT rather than as the final row for the same reason as the
+    // burst check above: the bus narrates live traffic, and a later line taking
+    // the last slot with the view still glued to the bottom is tail-follow
+    // WORKING. The property is the small bottom gap; the FILLER proves the
+    // append that should have moved it.
+    const gapNow=()=>lvBody().scrollHeight - lvBody().scrollTop - lvBody().clientHeight;
+    await waitFor(()=>lvHas(/following again/) && gapNow()<24, 4000);
     ok('...and the next line scrolls itself into view',
-       (lvBody().scrollHeight - lvBody().scrollTop - lvBody().clientHeight) < 24
-       && lvTexts()[lvTexts().length-1].indexOf('following again')>=0,
-       'bottom gap '+Math.round(lvBody().scrollHeight-lvBody().scrollTop-lvBody().clientHeight)
+       gapNow()<24 && lvHas(/following again/),
+       'bottom gap '+Math.round(gapNow())
        +'px, last row "'+lvTexts()[lvTexts().length-1].slice(0,40)+'"');
 
     /* ======================================================================
@@ -465,10 +473,20 @@
     ok('a burst of lines cannot grow the overlay without limit',
        shown()<=max && shown()>max-40 && LOG.ring().length > shown(),
        shown()+' rows kept of a '+LOG.ring().length+'-line ring (cap '+max+')');
+    // PRESENCE at the tail and ABSENCE at the head — deliberately NOT "the burst's
+    // last line is the final row painted". The log bus is live while this suite
+    // runs: wire.js narrates its own traffic, and on a slower machine a
+    // control/camera line legitimately lands in the 500 ms after the burst and
+    // takes the final-row slot. The first CI run ever to reach this check failed
+    // it exactly that way, with eviction working perfectly. The property under
+    // test is the RING's behaviour — oldest evicted, newest retained — not which
+    // unrelated line happened to arrive last.
     ok('...and it is the OLDEST rows that go, so the newest are the ones on screen',
-       lvTexts()[lvTexts().length-1].indexOf('FLOOD line '+(max+119))>=0
+       lvHas(new RegExp('FLOOD line '+(max+119)+'\\b'))
        && !lvHas(/FLOOD line 0 /),
-       'last row "'+lvTexts()[lvTexts().length-1].slice(0,40)+'", '+before+' rows before the burst');
+       'newest burst line '+(lvHas(new RegExp('FLOOD line '+(max+119)+'\\b'))?'on screen':'MISSING')+
+       ', oldest '+(lvHas(/FLOOD line 0 /)?'STILL SHOWN':'evicted')+
+       ', last row "'+lvTexts()[lvTexts().length-1].slice(0,40)+'", '+before+' rows before the burst');
 
     /* ======================================================================
        9. THE VEHICLE'S OWN LOG, PULLED ONTO THIS BUS

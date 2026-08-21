@@ -47,12 +47,45 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
   zero findings in a report full of them, printing RAN BUT DID NOT REPORT.
 
   *Verified by running, macOS bench, 2026-08-21.* `python lint.py --ceiling` exits 0
-  (isort/black/suppressions clean, flake8 at its ceiling, mypy 152 under the lowered
-  152). The browser fall-through is proven end to end with a scripted corpse that
+  locally. The browser fall-through is proven end to end with a scripted corpse that
   mimics the runner's shim (`--version` answered, exit 134 on launch): the skip line
   names it and the real Chrome is picked; the tether suite then runs green through
-  the probed path. The CI verdict itself lands with the next push — this entry is
-  written before it, and the push is the test.
+  the probed path.
+
+  **What the first fixed run then revealed — three findings a dead browser had been
+  sitting on, plus one about the ceilings themselves.** The probe worked on CI
+  (`skipping /usr/bin/chromium: exited -6 … trying the next browser` →
+  google-chrome-stable), the gate ran for the first time in weeks, and 838/840 told
+  the truth the crash had been hiding:
+
+  - **`input-dial` demanded a 44±2 px gap under the radar circle** — and that 44 was
+    24 (the design margin) + 5 (flex gap) + one line of `.radar-scale` TEXT, whose
+    height belongs to the machine's font stack. Linux Chrome draws it 2 px shorter
+    and failed the check with the layout pixel-perfect. The check now asserts the
+    design facts — the wrap's fixed 24 px bottom margin, the scale bar between
+    circle and viewport edge — because a layout check that measures a font is
+    measuring the machine.
+  - **`log-store-video` demanded the burst's last line be the final row painted.**
+    The log bus narrates live traffic, so on a slower machine a control line
+    legitimately lands in the post-burst window and takes that slot — with eviction
+    working perfectly. Presence at the tail and absence at the head is the ring's
+    actual contract, and is what is asserted now.
+  - **The suite's tail-follow check flickered green/red on the same tree locally** —
+    a fixed 300 ms sleep against the bus's own append cadence, plus the same
+    final-row over-specification. Now waited-for and presence-based; three
+    consecutive local runs green where run-to-run alternation was reproducible
+    before.
+  - **The ceilings are interpreter-shaped, and the ceiling file now says whose they
+    are.** CI's 3.11 (the vehicle's python) counts 3 flake8 findings and 153 mypy
+    errors from the exact tree where 3.14 counts 11 and 152 — lowering the mypy
+    ceiling from a 3.14 desk broke the 3.11 gate by one. The numbers are now CI's
+    (flake8 3 — ratcheted down 8 as the run itself instructed — mypy 153), with a
+    `_machine` note in `lint-ceiling.json` so the next desk that reads CEILING
+    EXCEEDED checks which interpreter is talking before touching anything.
+
+  The green run itself lands with the next push; the Pages demo redeployed
+  successfully on every one of these commits and served the current client
+  throughout.
 
 ## The brainstem exists on both ends of its cable
 
