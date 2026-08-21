@@ -7,6 +7,53 @@ Legend: ✅ done and verified on hardware · 🧪 verified in test only · ⚠�
 
 ---
 
+## The client gate was red with zero checks failing, and it was measuring the browser
+
+- 🧪 **Two reds on the pipeline, one of them weeks old — and the demo was never down.**
+  Reported as "the deployment failed and Pages is down"; the Pages half was a red
+  herring worth recording: the Demo workflow succeeded on every recent push, the site
+  serves the current client (the 3S config is live on it), and the red X that read as
+  an outage belonged to the **Checks** workflow next door.
+
+  **The old red: every client suite reported NONE — `the browser exited (-6) before
+  the suite reported` — since 3aef128.** The runner image carries a
+  `/usr/bin/chromium` that answers `--version` politely and SIGABRTs the moment it is
+  asked to render (a snap-style shim the host confines), and it sits FIRST in the
+  Linux candidate list because on a Raspberry Pi chromium-first is correct. The
+  workflow's own guard step (`google-chrome --version`) passed, because it checked
+  the browser the suite then didn't use — a gate that measured the wrong browser's
+  pulse. `find_chrome()` now launch-probes every auto-detected candidate
+  (`_survives_launch`: headless, about:blank, dump-DOM, exit — under the same
+  headless-mode and sandbox decisions the suites use, because a probe launched
+  differently certifies a browser the suites cannot start) and skips a corpse OUT
+  LOUD before trying the next. Explicit choices (`--chrome`, `NEPTUNE_CHROME`) stay
+  unprobed on purpose: an operator's browser that cannot start must fail the run on
+  that fact, not be silently substituted. Deliberately NOT "fixed" by adding the
+  runner's AppArmor userns knob to `_no_sandbox_reason()` — that would have flipped
+  CI onto the dev-build chromium with the sandbox off, when the intended browser was
+  three entries further down the list the whole time.
+
+  **The new red: this repo's own gate caught the brainstem round.** black wanted
+  three of the split's files, flake8 had three new findings (two imports the old
+  backend used and the rewrite orphaned; an `is_mock` attr/property duplicate), and
+  the one `type: ignore[override]` carried no written reason. All fixed; and the
+  rewrite had quietly RETIRED four mypy findings, so the mypy ceiling ratchets
+  156 → 152 per the ceiling's own rule. Two tidy-ups the fixes surfaced:
+  `warn_unused_configs` did exactly its documented job the moment the I2C driver
+  stack left the Pi (the stale mypy overrides for smbus2/bno08x/board/busio are
+  pruned; `serial` joins `gpiozero` as the backend's real imports), and lint.py's
+  verdict parser is now colour-proof (`NO_COLOR`/`TERM=dumb` on the tool
+  subprocesses) — on a pty, mypy dressed `error:` in ANSI and the parser counted
+  zero findings in a report full of them, printing RAN BUT DID NOT REPORT.
+
+  *Verified by running, macOS bench, 2026-08-21.* `python lint.py --ceiling` exits 0
+  (isort/black/suppressions clean, flake8 at its ceiling, mypy 152 under the lowered
+  152). The browser fall-through is proven end to end with a scripted corpse that
+  mimics the runner's shim (`--version` answered, exit 134 on launch): the skip line
+  names it and the real Chrome is picked; the tether suite then runs green through
+  the probed path. The CI verdict itself lands with the next push — this entry is
+  written before it, and the push is the test.
+
 ## The brainstem exists on both ends of its cable
 
 - 🧪 **The commander/brainstem split is written — ESP32 firmware, Pi serial client, and

@@ -189,12 +189,52 @@ def chrome_candidates() -> list[str]:
     return [p for p in _CANDIDATES[key] if p]
 
 
+def _survives_launch(path: str) -> tuple[bool, str]:
+    """Can this binary actually RENDER A PAGE, not merely print a version?
+
+    (ok, "") or (False, why). THE FAILURE THIS EXISTS FOR: the GitHub runner
+    ships a /usr/bin/chromium that answers --version politely and then dies
+    with SIGABRT the moment it is asked to start — a snap-style shim whose
+    sandbox the host confines — while a perfectly good google-chrome sits
+    three entries further down the candidate list. Without this probe the
+    runner picked the corpse, every suite reported NONE with the same register
+    dump, and the client gate was red for weeks with zero checks failing.
+
+    The probe is the cheapest real launch there is: headless, about:blank,
+    dump the DOM, exit — under the SAME headless-mode and sandbox decisions
+    the suites use, because a probe launched differently would certify a
+    browser the suites cannot start. ~0.5 s per candidate on the happy path,
+    once per run, and a skipped candidate is named on stderr rather than
+    silently stepped over: which browser judged the product is part of the
+    verdict.
+    """
+    version = browser_version(path)
+    mode = "--headless" if (_major(version) or 999) < 109 else "--headless=new"
+    cmd = [path, mode, "--disable-gpu", "--no-first-run", "--dump-dom", "about:blank"]
+    if _no_sandbox_reason():
+        cmd.insert(1, "--no-sandbox")
+    try:
+        done = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return False, "hung for 30 s rendering about:blank"
+    except OSError as exc:
+        return False, f"would not execute ({exc.__class__.__name__}: {exc})"
+    if done.returncode != 0:
+        return False, f"exited {done.returncode} rendering about:blank"
+    return True, ""
+
+
 def find_chrome(explicit: str | None) -> str | None:
-    """The browser to drive, or None if this machine has none.
+    """The browser to drive, or None if this machine has none THAT CAN START.
 
     None, and not sys.exit: a missing browser is the same class of thing as a missing
     pydantic in api/tests/run.py — an environment that cannot run the checks, which has
     to be REPORTED as such per suite and end in exit 2, not vanish the run.
+
+    Auto-detected candidates are launch-probed (_survives_launch) and a dead one is
+    skipped OUT LOUD; an EXPLICIT choice (--chrome, NEPTUNE_CHROME) is deliberately not
+    probed — the operator chose it, and if it cannot start, the run must fail on that
+    fact rather than quietly judge the product with a browser they did not pick.
     """
     if explicit:
         if not Path(explicit).exists():
@@ -222,12 +262,24 @@ def find_chrome(explicit: str | None) -> str | None:
             file=sys.stderr,
         )
         raise SystemExit(2)
+    seen: set[str] = set()
+
+    def viable(p: str) -> bool:
+        real = str(Path(p).resolve())
+        if real in seen:  # a PATH name resolving to an already-rejected install
+            return False
+        seen.add(real)
+        ok, why = _survives_launch(p)
+        if not ok:
+            print(f"skipping {p}: {why} — trying the next browser", file=sys.stderr)
+        return ok
+
     for p in chrome_candidates():
-        if Path(p).exists():
+        if Path(p).exists() and viable(p):
             return p
     for name in _ON_PATH:
         found = shutil.which(name)
-        if found:
+        if found and viable(found):
             return found
     return None
 

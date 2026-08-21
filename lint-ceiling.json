@@ -9,5 +9,5 @@
   "suppressions": 0,
 
   "flake8": 11,
-  "mypy": 156
+  "mypy": 152
 }

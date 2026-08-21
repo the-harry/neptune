@@ -294,8 +294,15 @@ def run_tool(py: Path, check, fix: bool) -> tuple[str, int, str]:
     count would make an unusable tool look like a tool with an opinion.
     """
     cmd = [str(py), "-m", check["module"]] + list(check["fix"] if fix and check["fix"] else check["check"])
+    # THE VERDICT PARSER MUST NOT DEPEND ON WHO IS WATCHING. Run in a pty-ish
+    # environment (some terminals hand these tools one) and mypy colours its
+    # output — ": error: " becomes ":\x1b[31merror:" and the pattern below counts
+    # zero findings from a report full of them, which this file then prints as
+    # RAN BUT DID NOT REPORT. The findings are the same either way; only the
+    # dress changes, so the dress is forbidden for the run being parsed.
+    env = {**os.environ, "NO_COLOR": "1", "FORCE_COLOR": "0", "MYPY_FORCE_COLOR": "0", "TERM": "dumb"}
     try:
-        done = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT), timeout=1800)
+        done = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT), timeout=1800, env=env)
     except (OSError, subprocess.SubprocessError) as exc:
         # A tool that will not start has not judged anything, so it is reported as a tool
         # that will not start - never folded into a finding count.

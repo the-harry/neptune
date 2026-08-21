@@ -54,8 +54,6 @@ locked inside it is logic no bench test can ever run. Both backends share it.
 from __future__ import annotations
 
 import logging
-import math
-import threading
 import time
 from abc import ABC, abstractmethod
 from collections import deque
@@ -1521,9 +1519,10 @@ class RealHardware(HardwareBase):
     reset_leak_latches() is the one deliberate exception — it waits up to half
     a second for the vehicle's verdict, because its caller must relay WHY a
     re-arm was refused, and a human pressed that button.
-    """
 
-    is_mock = False
+    is_mock is a PROPERTY here (bottom of the class), not the ABC's plain
+    attribute: the firmware's announced bench mode makes it a live answer.
+    """
 
     # ---- pin map (BCM) — mirrored exactly in docs/hardware.md §8 ----------
     # DRV8871: IN1/IN2 only, no EN. PWM rides the direction pin itself
@@ -1592,8 +1591,7 @@ class RealHardware(HardwareBase):
                 self._have["thrusters"] = False
                 self._fault(
                     "thrusters",
-                    "thruster group did not come up (%s) — the sub CANNOT BE ARMED "
-                    "and will not answer the sticks",
+                    "thruster group did not come up (%s) — the sub CANNOT BE ARMED " "and will not answer the sticks",
                     exc,
                 )
         else:
@@ -1977,7 +1975,7 @@ class RealHardware(HardwareBase):
         return self._link.absent() if self._link is not None else ()
 
     @property
-    def is_mock(self) -> bool:  # type: ignore[override]
+    def is_mock(self) -> bool:  # type: ignore[override] — live property (announced bench mode) over the ABC's bool
         # ANNOUNCED SIMULATION PROPAGATES. The firmware's bench mode simulates
         # every reading and says so in every frame; the console must show the
         # SIM presentation for exactly as long as that is true. A real link

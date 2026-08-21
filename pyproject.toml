@@ -130,10 +130,13 @@ enable_error_code = ["ignore-without-code"]
 # never has them; that is the designed state, not a gap. There are no stubs for any of
 # them and writing some would be inventing a contract for silicon we do not control.
 [[tool.mypy.overrides]]
-# Each name here is one that hardware.py actually imports, and no more: warn_unused_configs
-# above turns a pattern nothing matches into a note, so a stale entry cannot sit here
-# looking like it is doing something.
-module = ["gpiozero", "smbus2", "adafruit_bno08x", "adafruit_bno08x.*", "board", "busio"]
+# Each name here is one the vehicle backend actually imports, and no more:
+# warn_unused_configs above turns a pattern nothing matches into a note, so a stale
+# entry cannot sit here looking like it is doing something — which is exactly how the
+# I2C driver stack (smbus2, adafruit_bno08x, board, busio) left this list when the
+# brainstem split moved those chips into the ESP32 firmware. What remains is the Pi's
+# one GPIO library and the serial link to the brainstem (pyserial ships no py.typed).
+module = ["gpiozero", "serial"]
 ignore_missing_imports = true
 
 # --- desk-only map libraries, imported inside the functions that need them so the api

@@ -712,9 +712,9 @@ class BudgetTest(unittest.TestCase):
         """
         import brainstem
 
-        fw = (
-            Path(__file__).resolve().parent.parent.parent / "firmware" / "brainstem" / "brainstem.ino"
-        ).read_text(encoding="utf-8")
+        fw = (Path(__file__).resolve().parent.parent.parent / "firmware" / "brainstem" / "brainstem.ino").read_text(
+            encoding="utf-8"
+        )
         self.assertIn(
             f"#define LEAK_HZ {LEAK_SAMPLE_HZ:.0f}",
             fw,

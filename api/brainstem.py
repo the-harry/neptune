@@ -388,7 +388,9 @@ class BrainstemLink:
             self.events.append(msg)
             # Events are the discrete things a dive log wants: say them in the
             # vehicle's log too, where the blackbox interleaves them.
-            log.info("brainstem event: %s %s", msg.get("name"), {k: v for k, v in msg.items() if k not in ("t", "name")})
+            log.info(
+                "brainstem event: %s %s", msg.get("name"), {k: v for k, v in msg.items() if k not in ("t", "name")}
+            )
         elif kind == "hello":
             self.hello = msg
             self.health.ok(now)
